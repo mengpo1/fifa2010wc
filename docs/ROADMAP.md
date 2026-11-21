@@ -97,13 +97,15 @@ sur la base du SDK qu'il fixe.
 
 | Option | Contenu | Avantages | Inconvénients |
 |---|---|---|---|
-| **1 — J1 sur ReXGlue v0.11.0** (recommandée) | `flake.nix`, dérivation du SDK v0.11.0, tests du SDK, squelette du projet | Compilation sous Nix **déjà vérifiée** ; API actuelle (modules de pilotes) ; CI Linux et ARM64 en amont | Correctifs du projet A à réécrire pour v0.11.0 avant J2 (0003 et 0002 au minimum) |
+| **1 — J1 sur ReXGlue v0.11.0** (retenue) | `flake.nix`, dérivation du SDK v0.11.0, tests du SDK, squelette du projet | Compilation sous Nix **déjà vérifiée** ; API actuelle (modules de pilotes) ; CI Linux et ARM64 en amont | Correctifs du projet A à réécrire pour v0.11.0 avant J2 (0003 et 0002 au minimum) |
 | 2 — J1 sur `bd833a2` + correctifs du projet A | Reproduire la base exacte du port Windows qui fonctionne | Écart minimal avec une configuration connue pour faire tourner le jeu | Compilation Linux ou Nix de ce commit non vérifiée ; ancienne API ; migration vers v0.11 inévitable plus tard |
 | 3 — J0 seul | Attendre D-008 et l'identification de l'ISO | Aucun travail perdu si l'ISO est d'une autre version | Le chemin critique ne progresse pas |
 
 Recommandation : **option 1, menée en parallèle de J0.** J1 ne touche aucune donnée du
 jeu et n'engage aucun déchiffrement. Il réduit les risques R-08 et R-15, et son résultat
 reste valable quelle que soit la version de l'ISO.
+
+**Décision** : l'orchestrateur a retenu l'option 1 (D-011, mission 002).
 
 ## 4. Critères de validation objectifs
 

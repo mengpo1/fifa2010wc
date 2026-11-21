@@ -26,7 +26,7 @@ des XEX (`ISO_REQUIREMENTS.md` §5).
 
 ### 1.1 ReXGlue
 
-**Faits vérifiés sur le dépôt (v0.11.0, `ebac1cf`, 2026-11-14)**
+**Faits vérifiés sur le dépôt (v0.11.0, `ebac1cf`, même arbre que l'étiquette `v0.11.0` = `a3e1d82`, 2026-11-14)**
 
 - **[V]** CI de publication `linux-amd64` (Ubuntu 24.04) et `linux-arm64`, en plus de
   Windows et macOS (`.github/workflows/_build-platform.yaml`).
@@ -140,7 +140,7 @@ Produits de l'essai 3 (inspection statique) :
   n'est à prévoir.
 - **[V]** Exports de la caméra USB (Xbox Live Vision) importés.
 - **[I]** Liste complète des bibliothèques importées : elle s'obtient à J0 en lisant
-  l'en-tête *import libraries*, en clair (`ISO_REQUIREMENTS.md` §3.5).
+  l'en-tête *import libraries*, en clair (`ISO_REQUIREMENTS.md` §3, étape 5).
 
 ## 3. Faisabilité du backend Vulkan
 

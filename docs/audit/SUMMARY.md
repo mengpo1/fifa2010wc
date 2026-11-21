@@ -47,7 +47,7 @@
 | Décision | Question | Recommandation de l'audit | Bloque |
 |---|---|---|---|
 | **D-008** | Comment traiter le déchiffrement des XEX ? | Attendre un avis juridique (O1) ; aucune clé ni code de déchiffrement dans le projet | J2 et suivants |
-| **D-011** | Quelle base de SDK ? | ReXGlue v0.11.0, épinglé, avec correctifs transposés depuis le projet A | J1 |
+| **D-011** | Quelle base de SDK ? | Tranchée par l'orchestrateur : ReXGlue v0.11.0 | — |
 | — | Qui fournit l'identification de l'ISO (J0) ? | L'utilisateur, avec la procédure sans déchiffrement | J2 |
 
 ## 4. Premier jalon recommandé : **J1 — chaîne de compilation Linux et NixOS, sans le jeu**
@@ -68,8 +68,9 @@ servira quelle que soit la suite.
 3. Squelette du projet portable : CMake et préréglages `linux-amd64-*`, couches `app/`,
    `hooks/` et `platform/{common,linux,macos}` (macOS en bouchons), sans code généré.
 4. `.gitignore` strict et script de contrôle des données propriétaires (`ROADMAP.md` §4.5).
-5. Transposition vers v0.11.0 des correctifs 0002 et 0003 du projet A, en série de
-   correctifs, compilée mais pas encore exercée avec le jeu.
+
+La transposition vers v0.11.0 des correctifs 0002 et 0003 du projet A relève de J2
+(`ROADMAP.md` §2, J2), comme le prévoit la feuille de route.
 
 **Critères d'acceptation** : C1.1 à C1.5 de `ROADMAP.md` §4. En bref : compilation en une
 commande Nix, tests du SDK verts sous NixOS, `rexglue --help` exécutable sans `nix-ld`,

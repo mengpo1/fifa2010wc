@@ -24,7 +24,7 @@ statique seulement).
 |---|---|---|
 | `CalinGraphics/fifa-world-cup-2010-recompiled` | `498d18a` | 2026-10-26 |
 | `RamiChaaben8/Fifa_World_Cup_2010_PC_Port` | `7ca2bea` (« Prepare v0.8 release ») | 2026-11-04 |
-| `rexglue/rexglue-sdk` (outil commun aux deux) | `ebac1cf` (v0.11.0) | 2026-11-14 |
+| `rexglue/rexglue-sdk` (outil commun aux deux) | `ebac1cf` (fusion « Release v0.11.0 », même arbre que l'étiquette `v0.11.0` = `a3e1d82`) | 2026-11-14 |
 | `hedge-dev/XenonRecomp` | `ddd128b` | 2025-08-04 |
 
 ## Synthèse

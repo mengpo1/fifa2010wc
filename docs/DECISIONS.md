@@ -18,7 +18,7 @@
 | D-008 | Déchiffrement des XEX et protections techniques | **Ouverte, bloquante pour J2** |
 | D-009 | Intégration NixOS (flake, SDK pur, jeu impur) | Proposée |
 | D-010 | Politique de réutilisation des projets existants | Proposée |
-| D-011 | Épinglage du SDK et série de correctifs | Ouverte (recommandation : v0.11.0) |
+| D-011 | Épinglage du SDK et série de correctifs | Acceptée (v0.11.0) |
 | D-012 | Hébergement du projet | Acceptée |
 | D-013 | Pas de lanceur graphique avant J5 | Proposée |
 | D-014 | Xenia seulement comme oracle de développement | Proposée |
@@ -148,8 +148,12 @@
 
 ## D-011 — Épinglage du SDK et série de correctifs
 
-- **Statut** : Ouverte. Recommandation : **ReXGlue v0.11.0** (`ebac1cf`).
-- **Options** :
+- **Statut** : Acceptée par l'orchestrateur (mission 002) : **ReXGlue v0.11.0**, épinglé
+  sur `a3e1d82678ca20d68d4837a8e9ee4652ff073745`, le commit désigné par l'étiquette
+  `v0.11.0` [V]. Le commit de fusion « Release v0.11.0 » de `main`
+  (`ebac1cf0d04bab0042a5dd6148b34ab3953e9c0d`), lu pendant l'audit, a exactement le même
+  arbre source (`bd12f1aa8e972f0f4c608a7d23a6971acfaf6c35`) [V].
+- **Options examinées** :
   - v0.11.0 : compilation sous Nix vérifiée [V], API actuelle ; correctifs du projet A à
     transposer (0003 et 0002 au minimum ; 0001 et 0006 semblent déjà en amont [V]) ;
   - `bd833a2` avec les correctifs du projet A : base Windows connue, mais compilation

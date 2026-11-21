@@ -174,7 +174,7 @@ $WC2010_PRIVATE_DIR            # hors dépôt, par défaut ~/.local/share/wc2010
 ## 7. Inconnues à lever
 
 1. **[I]** Région, version et empreintes de l'ISO de l'utilisateur (§3).
-2. **[I]** Chiffrement effectif des deux XEX (en-tête, §3.5).
+2. **[I]** Chiffrement effectif des deux XEX (en-tête, §3, étape 5).
 3. **[I]** Existence d'une mise à jour du titre et pertinence de l'appliquer.
 4. **[I]** Statut juridique du déchiffrement dans le pays de l'utilisateur (§5).
 5. **[I]** Acceptation par ReXGlue d'un XEX non chiffré, pour l'option O2.
