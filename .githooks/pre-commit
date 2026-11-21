@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuse a commit that stages proprietary game data (D-007).
+# Enable once per clone with: git config core.hooksPath .githooks
+exec python3 -I "$(git rev-parse --show-toplevel)/tools/check_proprietary_data.py" staged

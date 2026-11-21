@@ -1,0 +1,15 @@
+{
+  "comment": "Files that match a signature rule but are not game data. An entry applies only when both the path suffix and the SHA-256 of the content match.",
+  "entries": [
+    {
+      "path": "tests/fixtures/filesystem/gdfx.iso",
+      "sha256": "7049307d036f3ed99ee5daab6ba03c1afdc74d3dd0aa4b57b5607cca0173d427",
+      "reason": "ReXGlue v0.11.0 unit test fixture (BSD-3-Clause, upstream source tree): an 80 KiB synthetic disc image holding a.txt, big.bin and folder/c.txt with ASCII test patterns. Not game content. Inspected during J1."
+    },
+    {
+      "path": "tests/fixtures/filesystem/stfs_con.bin",
+      "sha256": "14313e477eb811043a897853036f7ba6f1eda7abb7b79b1c704157f012459774",
+      "reason": "ReXGlue v0.11.0 unit test fixture (BSD-3-Clause, upstream source tree): a 64 KiB synthetic STFS package with the same test files. Not game content. Inspected during J1."
+    }
+  ]
+}

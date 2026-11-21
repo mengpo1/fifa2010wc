@@ -1,0 +1,46 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1795137884,
+        "narHash": "sha256-xVwloUjz7paCDnvN5dkrasmAGV+O6uyRUPFHxv2w3VA=",
+        "rev": "ab5c18fdedfc8f9bbc9d773f10a540790e2787a7",
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/26.05/nixos-26.05.14894.ab5c18fdedfc/nixexprs.tar.xz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/26.05/nixos-26.05.14894.ab5c18fdedfc/nixexprs.tar.xz"
+      }
+    },
+    "rexglue-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794684878,
+        "narHash": "sha256-uSyEi0ou+ixZCd7pjOrvfkVy8mSly1ys5Tev6xjdCQ0=",
+        "ref": "refs/tags/v0.11.0",
+        "rev": "a3e1d82678ca20d68d4837a8e9ee4652ff073745",
+        "shallow": true,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/rexglue/rexglue-sdk"
+      },
+      "original": {
+        "ref": "refs/tags/v0.11.0",
+        "rev": "a3e1d82678ca20d68d4837a8e9ee4652ff073745",
+        "shallow": true,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/rexglue/rexglue-sdk"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "rexglue-src": "rexglue-src"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
