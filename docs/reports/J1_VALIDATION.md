@@ -21,7 +21,7 @@ Commande de synthèse, rejouée sur l'arbre final de la branche : `nix flake che
 « all checks passed! », code de sortie 0. Les 6 contrôles sont `rexglue-sdk`,
 `rexglue-sdk-debug-tests`, `rexglue-cli-runs`, `cmake-skeleton`,
 `proprietary-data-source` et `proprietary-data-closure` ; les paquets et l'environnement
-`devShells.default` sont évalués. Les résultats des tests sont installés avec chaque SDK
+`devShells.default` sont évalués. La même suite a réussi en CI GitHub (§4.9). Les résultats des tests sont installés avec chaque SDK
 (`share/rexglue-sdk/test-results/`), et les rapports de contrôle sont dans les sorties
 des dérivations de contrôle.
 
@@ -215,8 +215,24 @@ exécutable n'est construit avant J2.
 `.github/workflows/ci.yml` : contrôle des données sur les fichiers suivis, installation de
 Nix 2.34.6, `nix flake metadata --no-update-lock-file`, `nix flake check -L`, collecte
 des preuves (rapports des tests, des contrôles et de la sonde) publiées en artefact.
-Le workflow passe `actionlint` 1.7.12. Son exécution sur GitHub n'a pas encore eu lieu
-au moment de la rédaction : voir §7.
+Le workflow passe `actionlint` 1.7.12.
+
+Première exécution sur GitHub, sur la PR #2, commit `f9d8d46` : job `linux-x86_64`
+(exécution 44956145051), du 2026-11-21 22:19:31 au 22:37:17 UTC, soit 17 min 46 s,
+conclusion **success**. Extraits du journal du job :
+
+| Élément | Ligne du journal |
+|---|---|
+| Tests du SDK Release | « rexglue-sdk> 100% tests passed, 0 tests failed out of 2223 », « Total Test time (real) = 66.22 sec » |
+| Clôture Nix | « proprietary-data-closure> OK: 46121 files checked, no proprietary data found » |
+| Synthèse | « all checks passed! » |
+| Sonde Vulkan (informative) | « vkCreateInstance: Found no drivers! », « probe exit status: 4 » : les machines hébergées par GitHub n'ont pas de GPU |
+| Preuves | Artefact `j1-evidence` publié (302 853 octets) |
+
+Le point d'accès utilisé pour lire le journal ne renvoie que ses 5 000 dernières lignes ;
+les lignes des tests Debug et de la première étape sont plus anciennes. Leur réussite
+reste établie : « all checks passed! » exige celle du contrôle
+`rexglue-sdk-debug-tests`, et la conclusion **success** du job celle de chaque étape.
 
 ## 5. Problèmes constatés
 
@@ -254,7 +270,6 @@ au moment de la rédaction : voir §7.
 | C1.2 et C1.3 sur un hôte **NixOS** réel | L'environnement est Ubuntu avec Nix, pas NixOS | Exécution dans le bac à sable Nix, sans aucun dossier FHS (contrôlé) | Sur NixOS 26.05 : `nix flake check -L`, puis `nix run .#rexglue-sdk -- --help` |
 | Test de machine virtuelle NixOS (`nixosTest`) | Pas de `/dev/kvm` | — | Sur une machine avec KVM |
 | Pilote Vulkan Xenos de ReXGlue sur un vrai périphérique | Aucun test du SDK ne crée de périphérique Vulkan, et aucune application ne le fait avant J2 | Présence et RUNPATH du module vérifiés (C1.3) | À J3, avec le jeu |
-| CI GitHub Actions | Le workflow ne peut s'exécuter qu'après l'envoi de la branche sur GitHub | Même suite (`nix flake check -L`) exécutée localement avec succès ; workflow validé par `actionlint` | Résultat du premier passage, visible sur la PR |
 
 ## 8. Arrêt
 
