@@ -25,7 +25,7 @@
 
 | N° | Prérequis | État | Responsable |
 |---|---|---|---|
-| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules | **Ouverte** | Orchestrateur ou utilisateur, après avis juridique |
+| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Ouverte** | Orchestrateur ou utilisateur, après avis juridique |
 | PJ2-2 | J0 clos : C0.5 atteint (`J0_IDENTIFICATION.md` §5) | C0.1 à C0.4 validés le 2026-11-22 ; C0.5 en attente, c'est-à-dire D-008 (PJ2-1) | Orchestrateur ou utilisateur |
 | PJ2-3 | Autorisation explicite de commencer J2 | Non donnée | Orchestrateur |
 

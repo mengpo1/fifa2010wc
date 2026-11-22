@@ -158,10 +158,15 @@ qualification de mesure technique.
 | Option | Description | Conséquence pour le projet |
 |---|---|---|
 | O1 — Attente | Aucun déchiffrement tant qu'un avis juridique n'est pas obtenu | Les jalons J0 (identification) et J1 (chaîne de compilation, sans jeu) restent possibles ; J2 et la suite sont bloqués |
-| O2 — Entrée fournie | L'utilisateur fournit lui-même, sous sa responsabilité, des XEX dont l'en-tête indique « non chiffré » ; le projet ne contient ni clé ni code de déchiffrement | Il faut vérifier que ReXGlue accepte un XEX non chiffré [H] ; le runtime recharge le XEX à chaque lancement (§2), il faut donc la même entrée à l'exécution ; la question juridique demeure pour l'utilisateur |
+| O2 — Entrée fournie | L'utilisateur fournit lui-même, sous sa responsabilité, des XEX dont l'en-tête indique « non chiffré », avec l'intention que le projet n'utilise ni n'embarque de clé. *Mise à jour du 2026-11-22 : ce n'est pas l'état actuel. Le SDK compilé contient les clés, et `Decode` dérive toujours une clé de session ; il faudrait un correctif du SDK, non réalisé (`docs/D-008_DECISION_NOTE.md` §3.3 et §3.4)* | Il faut vérifier que ReXGlue accepte un XEX non chiffré [H] ; le runtime recharge le XEX à chaque lancement (§2), il faut donc la même entrée à l'exécution ; la question juridique demeure pour l'utilisateur |
 | O3 — Dépendance | Utiliser ReXGlue tel quel ; le déchiffrement est fait par la dépendance, sur la machine de l'utilisateur, pour sa copie | C'est la pratique des projets A et B ; elle est contraire à la lettre de la contrainte de la mission, sauf si l'orchestrateur la requalifie |
 
 Recommandation de l'audit : **O1 jusqu'à décision**. J0 et J1 n'en dépendent pas.
+
+Analyse préalable à la décision (2026-11-22, ticket #8), sans décision :
+`docs/D-008_DECISION_NOTE.md`. Elle porte notamment sur la faisabilité d'O2, établie par
+lecture du code de ReXGlue seulement : le module non chiffré est accepté, mais une clé de
+session est toujours dérivée.
 
 ## 6. Organisation locale des fichiers privés
 
