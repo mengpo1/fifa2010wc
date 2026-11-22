@@ -5,6 +5,7 @@
   rexglue-src,
   rexglue-sdk,
   vulkan-probe,
+  iso-identify,
 }:
 
 let
@@ -160,6 +161,23 @@ in
       '';
     };
 
+  # J0: the disc identification tool, tested on synthetic disc images and XEX headers made
+  # at run time (no game data). The tests also check that the key and signature fields of
+  # an XEX never reach a report, and that a report passes the proprietary data check.
+  # It is also run on the synthetic GDFX fixture of the pinned ReXGlue source, against the
+  # file names and contents ReXGlue's own test expects (cross-check of the XDVDFS reader).
+  iso-identify-selftest = pkgs.runCommand "iso-identify-selftest" { REXGLUE_SRC = rexglue-src; } ''
+    set -euo pipefail
+    mkdir -p "$out"
+    ${python}/bin/python3 -I ${self}/tools/test_iso_identify.py > "$out/selftest.txt" 2>&1 \
+      || { cat "$out/selftest.txt"; exit 1; }
+    tail -n 3 "$out/selftest.txt"
+    grep -q '^test_rexglue_gdfx_fixture .* ok$' "$out/selftest.txt" \
+      || { echo "the ReXGlue fixture cross-check did not run"; exit 1; }
+    # The packaged command starts and prints its usage.
+    ${iso-identify}/bin/fifa2010wc-iso-identify --help > "$out/help.txt"
+  '';
+
   # D-007: no proprietary data among the tracked files of the repository.
   # The self-test needs git: the staged mode tests build a throwaway repository.
   proprietary-data-source = pkgs.runCommand "proprietary-data-source" { nativeBuildInputs = [ pkgs.git ]; } ''
@@ -173,13 +191,15 @@ in
   '';
 
   # D-007: no proprietary data in the store paths this flake builds or fetches: the runtime
-  # closure of the SDK and of the Vulkan probe, plus the ReXGlue source with its submodules.
+  # closure of the SDK, of the Vulkan probe and of the identification tool, plus the
+  # ReXGlue source with its submodules.
   proprietary-data-closure =
     let
       closure = pkgs.closureInfo {
         rootPaths = [
           rexglue-sdk
           vulkan-probe
+          iso-identify
         ];
       };
     in

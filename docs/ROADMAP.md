@@ -41,6 +41,9 @@
   bibliothèques importées).
 - Livrable : un rapport d'identification sans contenu propriétaire, avec le verdict
   « disque Europe du projet A, oui ou non ».
+- Outil et procédure (préparés le 2026-11-22) : `nix run .#iso-identify`, décrit dans
+  `docs/J0_ISO_IDENTIFICATION.md`. L'identification est faite par l'utilisateur, sur sa
+  machine, avec sa copie.
 
 ### J1 — Chaîne de compilation Linux et NixOS (sans le jeu)
 
@@ -112,6 +115,16 @@ reste valable quelle que soit la version de l'ISO.
 Chaque critère est vérifiable par une commande, un compteur ou une liste de contrôle.
 La machine de référence (processeur, GPU, pilote, NixOS 26.05) est consignée à chaque
 validation.
+
+### J0 — Identification de l'ISO (critères proposés le 2026-11-22, à valider)
+
+| ID | Critère | Mesure |
+|---|---|---|
+| C0.1 | Le format du disque est reconnu et l'arborescence est lue entièrement | Rapport `iso-identify` : format XDVDFS identifié, 0 fichier au-delà de la fin de l'image |
+| C0.2 | Les empreintes des deux modules sont comparées à celles du projet A | Rapport : SHA-256 de `default.xex` et de `fifadllzf.xex`, verdict « disque Europe du projet A » |
+| C0.3 | Les en-têtes en clair sont lus | Rapport : identifiant du titre (`454108E4` attendu), version, régions, type de chiffrement et de compression, bibliothèques importées |
+| C0.4 | Aucune donnée propriétaire n'est partagée ni copiée dans le magasin Nix | `check_proprietary_data.py tree` sur le rapport ; recherches `find` de `docs/J0_ISO_IDENTIFICATION.md` §6 sans résultat |
+| C0.5 | D-008 est tranchée | Statut de D-008 dans `docs/DECISIONS.md` (décision de l'orchestrateur ou de l'utilisateur) |
 
 ### J1 — Chaîne de compilation
 

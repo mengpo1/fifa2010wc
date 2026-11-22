@@ -6,15 +6,18 @@
 >
 > Règle de ce rapport : chaque résultat renvoie à une commande exécutée et à son journal.
 > Ce qui n'a pas pu être exécuté figure à part, au §7.
+>
+> Complément du 2026-11-22 : résultats obtenus par l'utilisateur sur son hôte NixOS
+> (§7.1), et fusion de la PR #2 sur `main` (§8).
 
 ## 1. Synthèse
 
 | Critère (`docs/ROADMAP.md` §4) | Statut | Preuve |
 |---|---|---|
 | C1.1 — Le SDK se compile depuis un dépôt propre par une seule commande Nix | **Validé** (environnement Nix sur Ubuntu) | §4.3 : `nix build .#rexglue-sdk`, code de sortie 0 |
-| C1.2 — Les tests unitaires du SDK passent | **Validé** en bac à sable Nix : Release 2 213 réussis, 0 échec, 10 sautés ; Debug 2 232 réussis, 0 échec, 2 sautés (raisons au §4.4) ; validation sur un hôte NixOS réel : **restante** (§7) | §4.4 : rapport JUnit installé avec le SDK |
-| C1.3 — `rexglue` s'exécute sans `nix-ld` ni `steam-run` | **Validé** dans le bac à sable Nix, sans aucun dossier de bibliothèques FHS, avec un contrôle ELF strict (§4.10) ; validation sur un hôte NixOS réel : **restante** (§7) | §4.5 : contrôles `rexglue-cli-runs` et `elf-deps-check-selftest` |
-| C1.4 — Le pilote Vulkan trouve le GPU | **Validation matérielle restante** : pas de GPU dans cet environnement ni sur les machines de la CI, ce qui n'est pas un défaut du développement (§7). La sonde est livrée et validée sur un périphérique logiciel | §4.7 |
+| C1.2 — Les tests unitaires du SDK passent | **Validé** en bac à sable Nix : Release 2 213 réussis, 0 échec, 10 sautés ; Debug 2 232 réussis, 0 échec, 2 sautés (raisons au §4.4) ; sur l'hôte NixOS de l'utilisateur : Debug 2 234 tests, 0 échec, 2 sautés (§7.1) | §4.4 : rapport JUnit installé avec le SDK ; §7.1 |
+| C1.3 — `rexglue` s'exécute sans `nix-ld` ni `steam-run` | **Validé** dans le bac à sable Nix, sans aucun dossier de bibliothèques FHS, avec un contrôle ELF strict (§4.10) ; sur l'hôte NixOS de l'utilisateur, `rexglue --help` affiche son aide ; le code de sortie n'est pas visible dans la sortie transmise (§7.1) | §4.5 : contrôles `rexglue-cli-runs` et `elf-deps-check-selftest` ; §7.1 |
+| C1.4 — Le pilote Vulkan trouve le GPU | **Validé sur l'hôte NixOS de l'utilisateur** : la sonde trouve une AMD Radeon 860M (RADV KRACKAN1, Mesa 26.1.8) avec les trois fonctions requises par ReXGlue (§7.1). Le journal d'initialisation du pilote Vulkan Xenos lui-même ne peut venir qu'avec le jeu, à J3 | §4.7 ; §7.1 |
 | C1.5 — Aucune donnée du jeu requise ni présente | **Validé**, avec un contrôle avant commit qui lit l'index (§4.10) | §4.6 : contrôles du dépôt, de la clôture Nix et du hook |
 
 Commande de synthèse, rejouée sur l'arbre final de la branche : `nix flake check -L` →
@@ -403,21 +406,55 @@ en amont (§6).
    prendre en compte dans le risque R-05 (maturité du runtime sous Linux) : un jeu sollicite
    ces mêmes primitives.
 
-## 7. Validations matérielles restantes (tests impossibles à exécuter faute de matériel ou d'environnement adapté)
+## 7. Validations matérielles (tests impossibles à exécuter dans le conteneur ou en CI)
 
-Ces validations restent à faire sur du matériel adapté. Leur absence ne révèle aucun
-défaut du développement : ni ce conteneur ni les machines hébergées de la CI n'ont de
-GPU ou de NixOS.
+Ni ce conteneur ni les machines hébergées de la CI n'ont de GPU ou de NixOS ; ce n'est
+pas un défaut du développement. Ces validations ont été faites, en partie, par
+l'utilisateur sur sa machine (§7.1). Le tableau qui suit le §7.1 liste ce qui reste.
+
+### 7.1 Résultats sur l'hôte NixOS de l'utilisateur (2026-11-22)
+
+Source : sortie de terminal collée par l'utilisateur dans la conversation. Elle a été
+relue ligne à ligne. Les extraits ci-dessous en sont recopiés tels quels.
+
+| Vérification | Résultat | Extrait |
+|---|---|---|
+| Même dérivation que la PR | **Oui** : le chemin de sortie Debug de l'hôte est celui que donne l'évaluation du flake de la PR (`nix eval .#checks.x86_64-linux.rexglue-sdk-debug-tests.outPath`). Les entrées sont donc identiques | `/nix/store/sdn1xyd79jjv2ibisi5npm2bj929kpv6-rexglue-sdk-debug-tests-0.11.0` |
+| C1.2 — tests Debug du SDK | **Réussi** : 0 échec ; 2 tests sautés, les mêmes qu'en CI (§4.4). Durée 33,87 s | `100% tests passed, 0 tests failed out of 2234` ; `742 - unit.A write to a watched host page … (Skipped)` ; `2003 - unit.HostStat names the entry as the folder holds it (Skipped)` |
+| C1.3 — `rexglue --help` | Aide affichée | `ReXGlue v0.11.0.0-dev.unknown Recompilation Toolkit` |
+| C1.4 — `vulkaninfo --summary` | Version d'instance 1.4.341, celle du `vulkan-loader` épinglé. GPU0 matériel, GPU1 logiciel | `deviceName = AMD Radeon 860M Graphics (RADV KRACKAN1)`, `deviceType = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`, `driverInfo = Mesa 26.1.8` ; GPU1 `llvmpipe (LLVM 21.1.8, 256 bits)` |
+| C1.4 — `nix run .#vulkan-probe` | **Réussi**. Cette ligne n'est écrite que sur le chemin qui rend 0 (`tools/vulkan_probe.py`) | `independentBlend = true`, `fragmentStoresAndAtomics = true`, `vertexPipelineStoresAndAtomics = true` ; `RESULT: a GPU with the features ReXGlue requires was found` |
+
+Réserves :
+
+- La sortie transmise commence au milieu de `nix flake check`, au test Debug 2 215. Le
+  code de sortie final de `nix flake check` sur l'hôte n'est donc pas visible ; la même
+  suite complète est verte en CI sur `134a2a6` (§4.9).
+- Ni la commande qui a lancé `rexglue --help` ni son code de sortie ne figurent dans la
+  sortie.
+- Deux avertissements, sans effet sur les résultats :
+  - `auto-patchelf ignoring missing libsteam_api.so` : comportement voulu
+    (`autoPatchelfIgnoreMissingDeps`, P-06). SDL3 déclare cette bibliothèque Steam,
+    facultative, dans ses notes `dlopen` ;
+  - `terminator_CreateInstance: Received return code -9 … libvulkan_dzn.so` : l'ICD
+    `dzn` de Mesa (Vulkan au-dessus de Direct3D 12, pour Windows et WSL) refuse de
+    démarrer sous Linux, et le chargeur l'ignore. Les pilotes RADV et llvmpipe sont
+    chargés.
+
+### 7.2 Ce qui reste
 
 | Test | Raison | Ce qui a été fait à la place | Pour le réaliser |
 |---|---|---|---|
-| C1.4 — détection d'un GPU Vulkan par la pile du SDK | Aucun GPU ni pilote Vulkan dans le conteneur (`/dev/dri` absent) | Sonde exécutée (aucun pilote, code 4) et validée avec lavapipe (code 3) | Sur une machine NixOS avec GPU et `hardware.graphics.enable = true` : `nix run .#vulkan-probe` doit rendre 0 |
-| C1.2 et C1.3 sur un hôte **NixOS** réel | L'environnement est Ubuntu avec Nix, pas NixOS | Exécution dans le bac à sable Nix, sans aucun dossier FHS (contrôlé) | Sur NixOS 26.05 : `nix flake check -L`, puis `nix run .#rexglue-sdk -- --help` |
+| Code de sortie de `nix flake check -L` sur NixOS | Absent de la sortie transmise (§7.1) | Suite complète verte en CI ; tests Debug réussis sur l'hôte | Relancer sur l'hôte et noter le code de sortie (`echo $?`) |
 | Test de machine virtuelle NixOS (`nixosTest`) | Pas de `/dev/kvm` | — | Sur une machine avec KVM |
 | Pilote Vulkan Xenos de ReXGlue sur un vrai périphérique | Aucun test du SDK ne crée de périphérique Vulkan, et aucune application ne le fait avant J2 | Présence et RUNPATH du module vérifiés (C1.3) | À J3, avec le jeu |
 
 ## 8. Arrêt
 
 J1 s'arrête ici. Rien de J2 n'est commencé : pas de manifeste, pas de génération de code,
-pas de correctif du SDK, pas de code dans `app/`, `hooks/` ou `platform/`. La PR de J1
-reste en brouillon, sans fusion, en attente de la validation de l'orchestrateur.
+pas de correctif du SDK, pas de code dans `app/`, `hooks/` ou `platform/`.
+
+La PR #2 a été fusionnée sur `main` le 2026-11-22 (commit de fusion `1fd73d8`), après la
+décision de l'orchestrateur (revue du 2026-11-22 : « J1 validé ; fusion de la PR #2
+autorisée ») et l'accord de l'utilisateur, avec une CI verte sur le dernier commit
+`134a2a6`.
