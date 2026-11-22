@@ -10,7 +10,7 @@
 
 | ID | Risque | P | Im | Bloquant pour |
 |---|---|---|---|---|
-| R-01 | Déchiffrement des XEX et protections techniques | É | É | J2 et suivants |
+| R-01 | Déchiffrement des XEX et protections techniques (risque juridique résiduel, accepté par le porteur du projet ; décision D-008 prise) | É | É | J2 et suivants. Ne bloque plus au plan de la gouvernance ; le risque demeure |
 | R-02 | Disque différent de celui du projet A : configuration d'analyse à revalider, ou à refaire (mis à jour après J0) | É | É | J2 |
 | R-03 | Rendu du jeu défectueux sur le backend Vulkan | M | É | J3, J4 |
 | R-04 | Instabilité de l'API ReXGlue, coût de transposition des correctifs | É | M | J2 |
@@ -46,13 +46,31 @@
   chiffré.
 - **[I]** Qualification juridique dans le pays de l'utilisateur. Pays : France, selon la
   déclaration de l'utilisateur du 2026-11-22.
-- **Mitigation** : décision D-008 avant toute génération de code. Les jalons J0 et J1
-  n'en dépendent pas. Le projet ne contient jamais de clé. Détails :
-  `ISO_REQUIREMENTS.md` §5.
-- **État (2026-11-22)** : l'utilisateur a choisi la voie technique O3 : ReXGlue tel
-  quel, qui déchiffre à la génération de code et à chaque lancement. Ce choix **ne réduit
-  pas le risque**. La qualification juridique des actes et la décision sur la contrainte
-  de mission restent à obtenir avant toute exécution (`docs/DECISIONS.md`, D-008).
+- **Mitigation** :
+  - décision D-008 avant toute génération de code. Elle est prise (voir « État ») ;
+  - le projet n'écrit, ne versionne ni ne diffuse aucune clé ni aucun outil de
+    déchiffrement qui lui soit propre. Le SDK, qui contient des clés, reste déclaré
+    (D-008) ;
+  - D-007 ;
+  - aucune distribution.
+
+  Détails : `ISO_REQUIREMENTS.md` §5.
+- **État au moment du choix d'O3 (PR #10)** : l'utilisateur a choisi la voie technique
+  O3, c'est-à-dire ReXGlue tel quel, qui déchiffre à la génération de code et à chaque
+  lancement. Ce choix **ne réduisait pas le risque**. La qualification juridique et la
+  décision sur la contrainte de mission étaient alors des préalables à l'exécution.
+- **État après la clôture de D-008 (2026-11-22)** : D-008 est une décision de projet
+  clôturée, O3 retenue
+  ([ticket #8, commentaire 7086214621](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7086214621)).
+  - Le porteur du projet a levé le préalable interne de l'avis juridique formel. Il
+    accepte personnellement l'incertitude juridique résiduelle.
+  - **Le risque n'est ni réduit ni levé** : probabilité et impact restent élevés.
+    L'acceptation du risque ne modifie pas le droit applicable.
+  - Aucun avis juridique n'a qualifié trois actes : le déchiffrement des XEX par
+    ReXGlue, l'adaptation ou recompilation du jeu, et l'usage d'un SDK qui contient des
+    clés.
+  - La décision n'est pas une attestation de licéité. Le déchiffrement n'est pas
+    présenté comme « légalement validé ».
 
 ### R-02 — Disque différent de celui du projet A (mis à jour après J0, 2026-11-22)
 
@@ -88,12 +106,15 @@
 - **Mitigation** (`docs/J2_PREREQUISITES.md` §3) :
   - comparaison de la disposition en mémoire, sans déchiffrement : **faite**,
     concordante ;
-  - puis, seulement si D-008 le permet :
+  - puis, à la phase B du plan de J2 (`docs/J2_PLAN.md`), après PJ2-3 et les contrôles
+    préalables (`docs/J2_PREREQUISITES.md` §6) :
     - tests de compatibilité initiaux : C2.1 et contrôles ciblés. Ce n'est pas une
       preuve d'identité ;
     - validation spécifique avant toute réutilisation des adresses : régénérer avec les
       outils du projet A ses fichiers d'analyse et exiger qu'ils soient identiques ;
-      vérifier une à une les adresses écrites à la main ;
+      vérifier une à une les adresses écrites à la main. Les outils du projet A chargent
+      l'image par `xeximage.py`, qui est exclu : la source de l'image reste à décider
+      (`docs/J2_PREREQUISITES.md` §3.3) ;
   - ne jamais conclure sur le code à partir des seules empreintes des fichiers.
 
 ### R-07 — Fuite de ressources propriétaires
@@ -105,6 +126,8 @@
   généré reste local.
 - **Mitigation** : D-007. `.gitignore` strict, dossier privé hors dépôt, aucune entrée
   de jeu dans une dérivation Nix pure, CI sans jeu, relecture des journaux avant partage.
+  Avant de traiter des fichiers du jeu, les contrôles CP-1 à CP-7 sont exécutés, puis
+  répétés après chaque étape (`docs/J2_PREREQUISITES.md` §6).
 
 ### R-12 — Conformité des licences tierces
 

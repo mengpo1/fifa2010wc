@@ -18,7 +18,15 @@
 3. **Aucune ressource propriétaire en CI ni sur un service tiers.** La CI publique ne
    compile que ce qui ne dépend pas du jeu (SDK, outils, tests unitaires).
 4. **Aucun contournement de protection technique engagé par le projet** tant que la
-   décision D-008 n'est pas tranchée (§5).
+   décision D-008 n'est pas tranchée (§5). *2026-11-22 : D-008 est tranchée (O3), et ce
+   principe est reformulé :*
+   - *le projet n'écrit, ne versionne ni ne diffuse aucune clé, ni aucun code ou outil
+     de déchiffrement qui lui soit propre ;*
+   - *seul le SDK public amont ReXGlue v0.11.0 déchiffre, localement, sous réserve des
+     règles de droit applicables.*
+
+   *Le texte exact est dans `docs/DECISIONS.md`, D-008. Ce n'est pas un droit de
+   contourner.*
 5. **Ce qui peut être versionné** : notre code, la documentation, les empreintes SHA-256
    des fichiers attendus, les métadonnées d'en-tête (identifiant du titre, version), les
    fichiers de configuration d'analyse (adresses de fonctions, pointeurs). Ce sont des
@@ -116,7 +124,9 @@ Les empreintes des deux modules diffèrent de celles du projet A
 
 Usage recommandé : l'identification (§3) n'utilise que des outils qui **ne déchiffrent
 pas** (`sha256sum`, extract-xiso, `xexinfo.py`). Les outils marqués « Oui » ne servent
-qu'après la décision D-008.
+qu'après la décision D-008. *2026-11-22 : avec O3, seul `rexglue`, c'est-à-dire le SDK,
+est retenu. `xeximage.py`, XenonRecomp et tout autre outil de déchiffrement restent
+exclus (`docs/DECISIONS.md`, D-008).*
 
 ## 5. Chiffrement des XEX et protections techniques (point bloquant)
 
@@ -163,6 +173,7 @@ qualification de mesure technique.
 | O3 — Dépendance | Utiliser ReXGlue tel quel ; le déchiffrement est fait par la dépendance, sur la machine de l'utilisateur, pour sa copie | C'est la pratique des projets A et B ; elle est contraire à la lettre de la contrainte de la mission, sauf si l'orchestrateur la requalifie |
 
 Recommandation de l'audit : **O1 jusqu'à décision**. J0 et J1 n'en dépendent pas.
+*Recommandation historique, remplacée par la décision du 2026-11-22 (O3).*
 
 Analyse préalable à la décision (2026-11-22, ticket #8), sans décision :
 `docs/D-008_DECISION_NOTE.md`. Elle porte notamment sur la faisabilité d'O2, établie par
@@ -170,8 +181,15 @@ lecture du code de ReXGlue seulement : le module non chiffré est accepté, mais
 session est toujours dérivée.
 
 Choix de l'utilisateur (2026-11-22) : la voie technique **O3**. Ce n'est ni un avis
-juridique ni une autorisation de traiter les exécutables, et D-008 reste ouverte. Les
-conditions sont consignées dans `docs/DECISIONS.md`, D-008.
+juridique ni une autorisation de traiter les exécutables. Au moment de ce choix, D-008
+restait ouverte.
+
+Clôture (2026-11-22) : D-008 est une **décision de projet clôturée — O3 retenue**.
+- Le porteur du projet a levé le préalable interne de l'avis juridique formel.
+- La qualification juridique reste **[I]** : le risque résiduel est ouvert (R-01).
+- L'autorisation de commencer J2 (PJ2-3) n'est pas donnée.
+
+Détails : `docs/DECISIONS.md`, D-008.
 
 ## 6. Organisation locale des fichiers privés
 
@@ -205,8 +223,11 @@ $WC2010_PRIVATE_DIR            # hors dépôt, par défaut ~/.local/share/wc2010
 2. **[V]** (levée à J0) Chiffrement effectif des deux XEX : AES, avec compression LZX.
 3. **[I]** Existence d'une mise à jour du titre et pertinence de l'appliquer.
 4. **[I]** Statut juridique du déchiffrement dans le pays de l'utilisateur (§5). Pays :
-   France, selon la déclaration de l'utilisateur du 2026-11-22.
-5. **[H]** Acceptation par ReXGlue d'un XEX non chiffré, pour l'option O2. La source de
+   France, selon la déclaration de l'utilisateur du 2026-11-22. Le statut n'est toujours
+   pas qualifié. D-008 est tranchée malgré cette inconnue, qui reste un risque résiduel
+   (R-01).
+5. **[H]** Acceptation par ReXGlue d'un XEX non chiffré, pour l'option O2. *Sans objet
+   depuis le choix d'O3 ; le constat reste exact.* La source de
    v0.11.0 l'accepte (`XEXImage::DecodeWith`, lu sans exécution), après une dérivation
    de clé de session faite dans tous les cas (`XEXImage::Decode`). Ce n'est pas
    vérifié par une exécution.

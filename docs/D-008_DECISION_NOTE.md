@@ -1,13 +1,19 @@
 # Note de décision D-008 — Traitement des XEX chiffrés : O1, O2 ou O3
 
 > Préparée le 2026-11-22 pour le ticket [#8](https://github.com/mengpo1/fifa2010wc/issues/8).
-> **Ce n'est ni une décision, ni un avis juridique.** D-008 reste **ouverte et bloquante**
-> pour C0.5 et J2. Cette note réunit les éléments d'une décision explicite de
-> l'utilisateur.
+> **Ce n'est ni une décision, ni un avis juridique.** Quand elle a été rédigée, D-008
+> était **ouverte et bloquante** pour C0.5 et J2. La note réunissait les éléments d'une
+> décision explicite de l'utilisateur.
 >
-> Suite (2026-11-22) : l'utilisateur a retenu la voie technique **O3**, et a déclaré son
-> périmètre et l'origine de son exemplaire. Voir l'addendum (§9) et `docs/DECISIONS.md`
-> (D-008). L'analyse des §1 à §8, antérieure à ce choix, n'est pas modifiée.
+> Suites :
+> - l'utilisateur a retenu la voie technique **O3**, et a déclaré son périmètre et
+>   l'origine de son exemplaire (addendum du §9) ;
+> - **clôture** : D-008 est une **décision de projet clôturée — O3 retenue**. Le
+>   **risque juridique résiduel reste ouvert** (addendum du §10, `docs/DECISIONS.md`,
+>   D-008).
+>
+> Ces suites datent du 2026-11-22. L'analyse des §1 à §8 et l'addendum du §9 leur sont
+> antérieurs ; ils ne sont pas modifiés.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 >
 > Méthode :
@@ -311,9 +317,75 @@ sont pas tenus pour suffisants à eux seuls (§2). « Je l'autorise » est un ac
 personnel. Ce n'est ni une autorisation des titulaires de droits, ni un avis juridique,
 ni une levée de PJ2-3.
 
-**Statuts** :
+**Statuts à la date de cet addendum** (remplacés par ceux du §10) :
 
 - O3 est retenue comme voie technique ;
 - D-008 et C0.5 restent ouvertes, et J0 n'est pas clos ;
 - PJ2-1 et PJ2-3 ne sont pas atteints, et J2 n'est pas autorisé ;
 - aucun déchiffrement, aucune génération de code.
+
+## 10. Addendum du 2026-11-22 — clôture décisionnelle
+
+Cet addendum relate la décision du porteur du projet, consignée dans le ticket #8
+([commentaire 7086214621](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7086214621)).
+Il ne réécrit ni l'analyse des §1 à §8, ni l'addendum du §9. Leurs constats restent
+valables, en particulier les faits techniques et l'absence de qualification juridique.
+
+### 10.1 La décision
+
+- D-008 est une **décision de projet clôturée — O3 retenue** : ReXGlue v0.11.0 amont,
+  utilisé tel quel. O1 et O2 sont écartées.
+- Le **préalable interne** est **levé par décision du porteur du projet**. Ce préalable
+  était l'obligation d'obtenir un avis juridique formel avant de retenir O3. Il n'est pas
+  levé parce qu'une autorisation légale aurait été établie.
+- La contrainte de mission « ne pas engager de contournement des protections
+  techniques » est **reformulée** :
+  - le projet n'écrit ni ne diffuse aucune clé, ni aucun outil de déchiffrement ;
+  - seul le SDK public amont déchiffre, localement, sous réserve des règles de droit
+    applicables.
+
+  Le texte exact est dans `docs/DECISIONS.md`, D-008.
+
+### 10.2 Ce qui ne change pas
+
+- **La conclusion du §7 reste exacte sur le plan technique** : aucun élément technique
+  ne justifiait, à lui seul, de quitter O1. Le passage à O3 vient d'une décision du
+  porteur du projet, qui accepte l'incertitude juridique en connaissance de cause. Ce
+  n'est pas une conclusion de cette note.
+- **La qualification juridique manque toujours** (§9.3). Trois actes restent non
+  qualifiés :
+  1. le déchiffrement des XEX par ReXGlue ;
+  2. l'adaptation, c'est-à-dire la recompilation, du code du jeu ;
+  3. le SDK qui contient les clés.
+- **Le SDK compilé par le flake contient les clés et le code de déchiffrement** (§3.4).
+- **La décision n'est ni un avis juridique, ni une autorisation des titulaires de
+  droits, ni une démonstration de licéité.**
+
+### 10.3 Ce que la décision consigne, point par point (§8)
+
+| Point du §8 | Ce qui est consigné |
+|---|---|
+| 1. L'option choisie | **O3**. La contrainte de mission est reformulée ; l'orchestrateur a consigné la reformulation dans le ticket #8 |
+| 2. Pays, périmètre, fondement | France, usage personnel, aucune distribution, DVD acheté en magasin et ISO extraite par l'utilisateur. Ce sont des déclarations (§9.1) |
+| 3. L'avis juridique | **Non obtenu**. Aucun acte n'est qualifié. Le préalable est levé par décision du porteur du projet |
+| 4. Conditions, réserves, limites de diffusion | D-007 impérative. Aucune distribution. Ni clé ni outil de déchiffrement propres au projet. Le SDK contenant des clés reste déclaré |
+| 5. Point de contrôle avant J2 | Relecture de la décision par l'orchestrateur, puis revue de la mise à jour documentaire. Le test synthétique d'O2 est sans objet. PJ2-1 est levé au plan de la gouvernance. PJ2-2 suit la clôture de J0. **PJ2-3 n'est pas donné** (`docs/J2_PREREQUISITES.md` §2) |
+
+### 10.4 Repères juridiques
+
+Les sources du §9.2 restent les repères à examiner. Le commentaire de décision cite aussi
+le **CPI L.122-6**. D'après le ticket #11, cet article porte sur la reproduction et
+l'adaptation du logiciel. Claude Code n'a pas relu ces textes. Ce sont des éléments
+d'information, pas un avis juridique : l'achat d'un exemplaire et l'absence de
+distribution ne suffisent pas à démontrer la licéité du déchiffrement ou de la
+recompilation.
+
+**Statuts** :
+
+- D-008 : décision de projet clôturée, O3 retenue. Le risque juridique résiduel reste
+  ouvert (R-01).
+- C0.5 : atteint au sens de la gouvernance. Pour J0, voir
+  `docs/reports/J0_IDENTIFICATION.md` §5.
+- PJ2-1 : levé au même titre.
+- PJ2-3 : non donné, et J2 n'est pas commencé.
+- Aucun déchiffrement ni aucune génération de code n'ont eu lieu.

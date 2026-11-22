@@ -18,7 +18,8 @@ code propre à Windows des ports existants se limite à leur couche applicative 
 300 lignes pour le projet A, plus son lanceur.
 
 Le blocage principal n'est pas technique : c'est la décision D-008 sur le déchiffrement
-des XEX (`ISO_REQUIREMENTS.md` §5).
+des XEX (`ISO_REQUIREMENTS.md` §5). *2026-11-22 : la décision est prise (O3), et le
+risque juridique résiduel reste ouvert (`../DECISIONS.md`).*
 
 ---
 

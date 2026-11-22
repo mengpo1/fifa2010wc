@@ -7,9 +7,14 @@
 > Ce rapport ne s'appuie que sur les métadonnées du rapport J0 de l'utilisateur, telles
 > que l'orchestrateur les a transmises.
 >
-> Mise à jour du 2026-11-22 : C0.1 à C0.4 sont validés par l'utilisateur et
-> l'orchestrateur (§5). C0.5, c'est-à-dire D-008, reste ouvert et bloquant. Aucun fichier du jeu n'a été lu, demandé, transmis
-> ou déchiffré pour l'écrire. Aucun code n'a été généré. J2 n'est pas commencé.
+> Mises à jour du 2026-11-22 :
+> - C0.1 à C0.4 sont validés par l'utilisateur et l'orchestrateur (§5) ;
+> - C0.5 est atteint au sens de la gouvernance : D-008 est une décision de projet
+>   clôturée, O3 retenue. Le risque juridique résiduel reste ouvert ;
+> - J0 est clos, après la vérification du §5.2.
+>
+> Aucun fichier du jeu n'a été lu, demandé, transmis ou déchiffré pour écrire ce rapport.
+> Aucun code n'a été généré. J2 n'est pas commencé.
 
 ## 1. Source des résultats
 
@@ -110,7 +115,9 @@ identique ou non. **[I]** L'identité ou la différence du code machine reste do
 - le déchiffrement ne la prouverait pas non plus à lui seul. Il donnerait accès à
   l'image en clair, ce qui permettrait de comparer le code, par exemple à la
   configuration d'analyse publiée par le projet A ;
-- **le déchiffrement reste interdit** tant que D-008 est ouverte.
+- **aucun déchiffrement n'est engagé**. D-008 retient O3 : ReXGlue déchiffrera les
+  modules localement, mais seulement à la phase B du plan de J2, après l'autorisation
+  PJ2-3 (`docs/J2_PLAN.md`).
 
 Les méthodes de validation sont décrites dans `docs/J2_PREREQUISITES.md` §3.
 
@@ -211,13 +218,15 @@ Sources :
 | C0.2 — Empreintes des deux modules comparées au projet A | **Validé** (2026-11-22) | Les deux SHA-256 diffèrent de celles du projet A (§2.2) |
 | C0.3 — En-têtes en clair lus | **Validé** (2026-11-22) | Titre `454108E4`, média `6CCD3565`, version `0.0.0.3`, région PAL, chiffrement AES, compression LZX, bibliothèques importées `xam.xex` et `xboxkrnl.exe` (2.0.9328.0, minimale 2.0.8955.0), champs de chargement |
 | C0.4 — Rien de propriétaire partagé ni dans `/nix/store` | **Validé** (2026-11-22), avec la limite du §5.1 | Contrôle du rapport et recherches dans `/nix/store` exécutés sur NixOS par l'utilisateur (§5.1) |
-| C0.5 — D-008 tranchée | **En attente** | D-008 reste ouverte (§6) ; seule décision bloquante pour J2. L'utilisateur a choisi la voie technique O3 le 2026-11-22. Les conditions de D-008 restent ouvertes : qualification juridique, décision sur la contrainte de mission, accord de démarrage de J2 |
+| C0.5 — D-008 tranchée | **Atteint** (2026-11-22), au sens de la gouvernance | D-008 est une décision de projet clôturée, O3 retenue (§6). Ce n'est pas une attestation de conformité juridique : le risque juridique résiduel reste ouvert (R-01). L'autorisation de commencer J2 (PJ2-3) est une décision distincte |
 
 Les validations de C0.1 à C0.4 sont de l'utilisateur et de l'orchestrateur, consignées
 le 2026-11-22 dans la
 [discussion de la PR #4](https://github.com/mengpo1/fifa2010wc/pull/4#issuecomment-7081900363).
-**J0 n'est pas clos** : C0.5 reste en attente. La validation de C0.4 porte sur le
-contrôle des données ; elle n'autorise pas le déchiffrement des exécutables.
+C0.5 suit la décision D-008 du porteur du projet
+([ticket #8, commentaire 7086214621](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7086214621)).
+La validation de C0.4 porte sur le contrôle des données. Ni elle, ni C0.5 n'autorisent à
+traiter les exécutables : cela relève de PJ2-3.
 
 ### 5.1 Validation de C0.4 (2026-11-22)
 
@@ -239,6 +248,35 @@ Limites :
 - La validation est acceptée au regard des critères de contrôle de la feuille de route
   (`ROADMAP.md` §4), avec ces limites. L'utilisateur l'a confirmée explicitement.
 
+### 5.2 Vérification avant la clôture de J0 (2026-11-22)
+
+La décision de D-008 demande de ne marquer J0 terminé qu'après la mise à jour des
+documents et une revue de cohérence. Voici ce que J0 exige (`ROADMAP.md` §2 et §4), et
+ce qui y répond :
+
+| Exigence de J0 | Où | État |
+|---|---|---|
+| Trancher D-008 | `docs/DECISIONS.md`, D-008 | Fait : décision de projet clôturée, O3 retenue |
+| Appliquer la procédure d'identification sans déchiffrement | §1 et §2 | Fait : outil v1, exécuté par l'utilisateur sur sa machine |
+| Livrable : un rapport sans contenu propriétaire, avec le verdict « disque Europe du projet A, oui ou non » | Ce rapport, §2 et §3 | Fait : verdict « non » au sens des empreintes. Le contrôle des données du dépôt passe |
+| C0.1 à C0.4 | §5 | Validés le 2026-11-22 ; C0.4 avec la limite du §5.1 |
+| C0.5 | §5 | Atteint au sens de la gouvernance |
+
+Points encore ouverts. Aucun n'est un critère de J0 :
+
+| Point | Suite |
+|---|---|
+| Identité du code machine avec celui du projet A [I] | J2 : validation avant toute réutilisation (`docs/J2_PREREQUISITES.md` §3, `docs/J2_PLAN.md` phase B) |
+| Qualification juridique des actes | Risque résiduel R-01 (`docs/audit/RISKS.md`). C0.5 demande que D-008 soit tranchée, et elle l'est |
+| Affichage de la valeur d'approbation `64` (§4.3) | Proposition en attente d'accord, sans effet sur J2 |
+| Fichier `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude` du magasin (§5.1) | Ni supprimé, ni examiné plus avant |
+| Limite de C0.4 : les recherches ne sont pas exhaustives (§5.1) | Contrôles du magasin répétés à la phase B (`docs/J2_PREREQUISITES.md` §6) |
+| Existence d'une mise à jour du titre [I] | `docs/audit/ISO_REQUIREMENTS.md` §7 |
+
+**J0 est clos** (2026-11-22) : C0.1 à C0.5 sont atteints, et aucune autre exigence de J0
+ne manque. La clôture prend effet avec la fusion de la mise à jour qui l'enregistre,
+après la revue de cohérence demandée dans le ticket #8.
+
 ## 6. D-008 : ce qui change
 
 - **[V]** Le chiffrement des deux modules est **constaté** dans leurs en-têtes en clair,
@@ -252,12 +290,19 @@ Limites :
     l'image sans déchiffrement CBC ;
   - `XEXImage::Decode` dérive cependant toujours une clé de session à partir du champ de
     clé de l'en-tête et des clés maîtresses intégrées, avant d'appeler `DecodeWith`.
-- **La décision reste ouverte** : la question juridique est inchangée
-  (`docs/DECISIONS.md`, D-008).
+- Au moment de ce constat, la décision restait ouverte, et la question juridique était
+  inchangée.
+- **Clôture (2026-11-22)** : D-008 est une décision de projet clôturée, O3 retenue.
+  ReXGlue déchiffrera donc lui-même, localement, une fois J2 autorisé. La question
+  juridique n'est pas tranchée pour autant : le risque résiduel reste ouvert
+  (`docs/DECISIONS.md`, D-008 ; `docs/audit/RISKS.md`, R-01).
 
 ## 7. Suite
 
 - Prérequis techniques de J2, avec ce qui est réutilisable et ce qui demande une nouvelle
   analyse : `docs/J2_PREREQUISITES.md`.
 - Risques mis à jour : `docs/audit/RISKS.md`, R-01 et R-02.
-- J2 ne commence pas avant la décision D-008 et l'accord de l'orchestrateur.
+- Plan de J2 en deux phases, avec critères de sortie et points d'arrêt :
+  `docs/J2_PLAN.md`.
+- J2 ne commence pas avant l'autorisation explicite PJ2-3. Ni la décision D-008, ni la
+  clôture de J0, ni le plan n'en tiennent lieu.

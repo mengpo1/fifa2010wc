@@ -34,7 +34,8 @@
 
 ### J0 — Décisions préalables et identification de l'ISO (aucun code)
 
-- Trancher **D-008** (déchiffrement des XEX).
+- Trancher **D-008** (déchiffrement des XEX). *Fait le 2026-11-22 : décision de projet
+  clôturée, O3 retenue.*
 - Appliquer la procédure d'identification sans déchiffrement
   (`docs/audit/ISO_REQUIREMENTS.md` §3) : format du disque, liste des fichiers,
   SHA-256 des deux XEX, en-têtes en clair (identifiant du titre, version, chiffrement,
@@ -57,14 +58,17 @@
   - Critères : C0.1 à C0.4 **validés** le 2026-11-22 par l'utilisateur et
     l'orchestrateur. C0.4 l'est avec une limite : les recherches dans `/nix/store` ne
     prouvent pas une absence exhaustive (`docs/reports/J0_IDENTIFICATION.md` §5.1).
-  - **J0 n'est pas clos** : C0.5 (D-008) reste en attente. C'est la seule décision
-    bloquante pour J2. La validation de C0.4 n'autorise pas le déchiffrement des
-    exécutables.
-  - **D-008** : O3 retenue comme voie technique par l'utilisateur — mise en œuvre suspendue à la qualification des conditions juridiques et au feu vert opérationnel distinct (2026-11-22). Les déclarations de l'utilisateur sont
-    consignées : France, usage personnel, aucune distribution, DVD original. Ce choix ne
-    clôt ni D-008 ni C0.5. Restent ouvertes la qualification juridique, la décision sur
-    la contrainte « ne pas engager de contournement », puis l'accord de démarrage de J2
-    (PJ2-3) (`docs/DECISIONS.md`, D-008).
+  - **D-008** : **décision de projet clôturée — O3 retenue** (2026-11-22), c'est-à-dire
+    ReXGlue v0.11.0 amont tel quel. Les déclarations de l'utilisateur sont consignées :
+    France, usage personnel, aucune distribution, DVD original. La contrainte
+    « ne pas engager de contournement » est reformulée. **Le risque juridique résiduel
+    reste ouvert** : aucun avis juridique, aucun droit établi (`docs/DECISIONS.md`,
+    D-008 ; `docs/audit/RISKS.md`, R-01).
+  - C0.5 est atteint au sens de la gouvernance. **J0 est clos**, après vérification de
+    tous ses critères (`docs/reports/J0_IDENTIFICATION.md` §5.2).
+  - Ni la validation de C0.4, ni la clôture de J0 n'autorisent à traiter les
+    exécutables. Cela relève de l'autorisation de commencer J2 (PJ2-3), qui n'est pas
+    donnée.
 
 ### J1 — Chaîne de compilation Linux et NixOS (sans le jeu)
 
@@ -85,11 +89,16 @@
   l'utilisateur, sinon une analyse refaite avec ses outils. Les empreintes diffèrent
   depuis J0, sans que cela prouve un code différent. Prérequis, éléments réutilisables
   et éléments à refaire : `docs/J2_PREREQUISITES.md`.
+- **Plan d'exécution** : `docs/J2_PLAN.md`. Il a deux phases séparées : la phase A, sans
+  données du jeu, puis la phase B, sur les données privées, seulement après PJ2-3 et
+  les contrôles préalables. Le plan seul n'autorise aucune exécution.
 - Correctifs du SDK nécessaires à ce jeu transposés vers le commit retenu. Au minimum
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
   0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite.
 - Couche `platform/linux` : répertoires XDG, journaux, gestionnaire de plantage par
-  signaux.
+  signaux, limitée à ce que ReXGlue ne fournit pas. Le SDK suit déjà `XDG_DATA_HOME` et
+  `XDG_CONFIG_HOME`, et il a un rapporteur de plantage POSIX et un journal dans un
+  fichier [V] (`docs/J2_PLAN.md`, étape A1).
 
 ### J3 — Écran-titre sous Vulkan
 
@@ -139,7 +148,7 @@ Chaque critère est vérifiable par une commande, un compteur ou une liste de co
 La machine de référence (processeur, GPU, pilote, NixOS 26.05) est consignée à chaque
 validation.
 
-### J0 — Identification de l'ISO (critères du 2026-11-22 ; C0.1 à C0.4 validés, C0.5 en attente : O3 choisie, D-008 non clôturée)
+### J0 — Identification de l'ISO (critères du 2026-11-22 ; C0.1 à C0.5 atteints, J0 clos)
 
 | ID | Critère | Mesure |
 |---|---|---|
@@ -217,4 +226,5 @@ Un script du projet vérifie, avant chaque commit et en CI :
 - Linux x86_64 sous NixOS devient la **seule cible des jalons J1 à J5**.
 - Le backend graphique est **Vulkan** (D-003) ; D3D12 sort du périmètre.
 - Le point juridique du déchiffrement des XEX devient une **décision bloquante explicite**
-  (D-008), avant J2.
+  (D-008), avant J2. *2026-11-22 : la décision est prise (O3), et le risque juridique
+  résiduel reste ouvert.*
