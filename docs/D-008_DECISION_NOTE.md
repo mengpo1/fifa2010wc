@@ -5,9 +5,9 @@
 > pour C0.5 et J2. Cette note réunit les éléments d'une décision explicite de
 > l'utilisateur.
 >
-> Suite (2026-11-22) : l'utilisateur a choisi la voie technique **O3**, sous les
-> réserves consignées dans `docs/DECISIONS.md` (D-008). L'analyse ci-dessous n'est pas
-> modifiée.
+> Suite (2026-11-22) : l'utilisateur a retenu la voie technique **O3**, et a déclaré son
+> périmètre et l'origine de son exemplaire. Voir l'addendum (§9) et `docs/DECISIONS.md`
+> (D-008). L'analyse des §1 à §8, antérieure à ce choix, n'est pas modifiée.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 >
 > Méthode :
@@ -244,3 +244,76 @@ moment :
    - relecture de la décision par l'orchestrateur ;
    - pour O2, le test synthétique (§3.3) ;
    - puis les prérequis PJ2-1 à PJ2-3 (`J2_PREREQUISITES.md` §2).
+
+## 9. Addendum du 2026-11-22 — choix d'O3 et faits déclarés
+
+Cet addendum relate ce qui s'est passé après la rédaction de la note. Il ne réécrit pas
+l'analyse des §1 à §8. Il sépare trois choses : les faits déclarés par l'utilisateur, la
+lecture des sources officielles, et la qualification juridique, qui manque toujours.
+
+### 9.1 Faits déclarés par l'utilisateur
+
+Ce sont des déclarations de l'utilisateur, consignées dans le ticket #8. Elles n'ont pas
+été vérifiées de façon indépendante, et aucun justificatif n'est demandé.
+
+| Point | Déclaration | Ticket #8 |
+|---|---|---|
+| Voie technique : **O3**, ReXGlue tel quel, plutôt qu'O2 | « Je valide O3 » | [7084704229](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084704229) |
+| **France**, **usage personnel**, **aucune distribution** | « Oui en France pour mon usage personnel et sans distribution » | [7084729825](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084729825) |
+| **DVD original acheté en magasin**, ISO **extraite par l'utilisateur** | « Oui je l'ai acheté en magasin en DVD puis rippé moi-même » | [7084744556](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084744556) |
+| **Accord personnel** pour la voie O3 | « Je l'autorise » | [7084775427](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084775427) |
+
+Conséquences pour cette note :
+
+- l'inconnue « pays » (§5) devient : **France, selon la déclaration de l'utilisateur** ;
+- le périmètre est : usage personnel, sans distribution ;
+- le fondement d'acquisition déclaré est un DVD original acheté en magasin ;
+- l'acte 3 (§5, distribution) n'est **plus une activité projetée**. Il reste à qualifier
+  si une distribution est un jour envisagée.
+
+### 9.2 Sources officielles relevées dans le ticket #8
+
+L'orchestrateur a relevé ces sources dans le ticket #8 et les a consultées. Claude Code
+n'a pas pu les relire : l'accès automatique a été refusé. Ce sont des éléments de droit à
+examiner, pas une qualification :
+
+- **CPI L.122-6-1** (actes autorisés, sauvegarde, décompilation pour l'interopérabilité) :
+  [Légifrance](https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000044365559/2026-09-01) ;
+- **CPI L.331-5** (mesures techniques de protection) :
+  [Légifrance](https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069414/LEGISCTA000006146356/2026-06-22/) ;
+- **CPI L.335-3-1** (atteintes aux mesures techniques) :
+  [Légifrance](https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000006279236/2026-05-18) ;
+- **CJUE C-355/12, *Nintendo c/ PC Box*** :
+  [Curia](https://infocuria.curia.europa.eu/tabs/affair?publishedId=C-355%2F12) ;
+- relevé de l'orchestrateur, à vérifier : **CPI L.122-5 2°** exclurait les copies de
+  logiciels de l'exception de copie privée, hors la copie de sauvegarde prévue au
+  L.122-6-1 II
+  ([Légifrance](https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000028345224)).
+
+### 9.3 Qualification juridique : toujours manquante
+
+Aucune des déclarations du §9.1 ne qualifie les actes. Restent à qualifier avant toute
+exécution :
+
+1. le déchiffrement des XEX par ReXGlue, à la génération de code et à chaque lancement ;
+2. la traduction, c'est-à-dire la recompilation, du code existant ;
+3. la dépendance ReXGlue compilée par le flake, qui contient les clés et le code de
+   déchiffrement.
+
+S'y ajoutent deux décisions distinctes :
+
+- la façon dont la contrainte de mission « ne pas engager de contournement des
+  protections techniques » s'applique à O3, après clarification juridique ;
+- l'accord de démarrage de J2 (PJ2-3).
+
+La possession d'un exemplaire original, l'usage personnel et l'absence de distribution ne
+sont pas tenus pour suffisants à eux seuls (§2). « Je l'autorise » est un accord
+personnel. Ce n'est ni une autorisation des titulaires de droits, ni un avis juridique,
+ni une levée de PJ2-3.
+
+**Statuts** :
+
+- O3 est retenue comme voie technique ;
+- D-008 et C0.5 restent ouvertes, et J0 n'est pas clos ;
+- PJ2-1 et PJ2-3 ne sont pas atteints, et J2 n'est pas autorisé ;
+- aucun déchiffrement, aucune génération de code.

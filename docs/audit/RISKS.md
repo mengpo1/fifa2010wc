@@ -44,8 +44,8 @@
   est accepté par `XEXImage::DecodeWith`. `XEXImage::Decode` dérive toutefois une clé de
   session à partir des clés intégrées avant tout décodage, même pour un module non
   chiffré.
-- **[I]** Qualification juridique dans le pays de l'utilisateur ; le pays lui-même est
-  inconnu.
+- **[I]** Qualification juridique dans le pays de l'utilisateur. Pays : France, selon la
+  déclaration de l'utilisateur du 2026-11-22.
 - **Mitigation** : décision D-008 avant toute génération de code. Les jalons J0 et J1
   n'en dépendent pas. Le projet ne contient jamais de clé. Détails :
   `ISO_REQUIREMENTS.md` §5.

@@ -26,9 +26,9 @@
 
 | N° | Prérequis | État | Responsable |
 |---|---|---|---|
-| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Ouverte.** O3 est choisie comme voie technique (2026-11-22). Restent ouvertes la qualification juridique des quatre actes et la décision sur la contrainte « ne pas engager de contournement » | Orchestrateur ou utilisateur, après avis juridique |
+| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Ouverte.** O3 est retenue comme voie technique (2026-11-22) ; sa mise en œuvre est suspendue. Restent ouvertes la qualification juridique de trois points (déchiffrement, recompilation, dépendance contenant des clés) et la décision sur la contrainte « ne pas engager de contournement ». La distribution est exclue par le périmètre déclaré | Orchestrateur ou utilisateur, après avis juridique |
 | PJ2-2 | J0 clos : C0.5 atteint (`J0_IDENTIFICATION.md` §5) | C0.1 à C0.4 validés le 2026-11-22 ; C0.5 en attente, c'est-à-dire D-008 (PJ2-1) | Orchestrateur ou utilisateur |
-| PJ2-3 | Autorisation explicite de commencer J2 | Non donnée | Orchestrateur |
+| PJ2-3 | Autorisation explicite de commencer J2 | Non donnée. L'accord personnel de l'utilisateur pour O3 (« Je l'autorise ») n'en tient pas lieu | Orchestrateur et utilisateur |
 
 Aucun des travaux ci-dessous ne commence avant PJ2-3.
 
