@@ -32,7 +32,7 @@ quelles conditions, ou décider d'attendre :
 | Option | Principe |
 |---|---|
 | **O1** | Attente d'un avis juridique. Aucun déchiffrement. C'est le chemin conservatoire actuel |
-| **O2** | L'utilisateur fournit lui-même des XEX dont l'en-tête indique « non chiffré ». **Intention** : une voie où le projet n'utilise ni n'embarque de clé. **Ce n'est pas l'état actuel** : le SDK compilé par le flake contient déjà les clés et le code de déchiffrement (§3.4), et `Decode` dérive toujours une clé de session (§3.3). Un correctif du SDK reste nécessaire ; il n'est pas réalisé |
+| **O2** | L'utilisateur fournit lui-même des XEX dont l'en-tête indique « non chiffré ». **Objectif, conditionné à un correctif du SDK non réalisé** : que le projet n'utilise aucune clé, et que le SDK n'en contienne plus (§3.3 : un correctif pour ne plus dériver de clé, un correctif plus large pour retirer les clés). **Ce n'est pas l'état actuel de ReXGlue** : le SDK compilé par le flake contient les clés et le code de déchiffrement (§3.4), et `Decode` dérive toujours une clé de session, même pour un module non chiffré (§3.3) |
 | **O3** | ReXGlue est utilisé tel quel. Il déchiffre lui-même, sur la machine de l'utilisateur, pour sa copie |
 
 ## 2. Ce que cette note ne tient pas pour acquis
