@@ -46,7 +46,7 @@
 
 | Décision | Question | Recommandation de l'audit | Bloque |
 |---|---|---|---|
-| **D-008** | Comment traiter le déchiffrement des XEX ? | Attendre un avis juridique (O1) ; aucune clé ni code de déchiffrement dans le projet | J2 et suivants |
+| **D-008** | Comment traiter le déchiffrement des XEX ? | Attendre un avis juridique (O1) ; aucune clé ni code de déchiffrement dans le projet. *2026-11-22 : l'utilisateur a choisi la voie technique O3, sous réserves ; D-008 reste ouverte (`docs/DECISIONS.md`)* | J2 et suivants |
 | **D-011** | Quelle base de SDK ? | Tranchée par l'orchestrateur : ReXGlue v0.11.0 | — |
 | — | Qui fournit l'identification de l'ISO (J0) ? | L'utilisateur, avec la procédure sans déchiffrement | J2 |
 

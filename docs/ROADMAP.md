@@ -60,6 +60,11 @@
   - **J0 n'est pas clos** : C0.5 (D-008) reste en attente. C'est la seule décision
     bloquante pour J2. La validation de C0.4 n'autorise pas le déchiffrement des
     exécutables.
+  - **D-008** : O3 retenue comme voie technique par l'utilisateur — mise en œuvre suspendue à la qualification des conditions juridiques et au feu vert opérationnel distinct (2026-11-22). Les déclarations de l'utilisateur sont
+    consignées : France, usage personnel, aucune distribution, DVD original. Ce choix ne
+    clôt ni D-008 ni C0.5. Restent ouvertes la qualification juridique, la décision sur
+    la contrainte « ne pas engager de contournement », puis l'accord de démarrage de J2
+    (PJ2-3) (`docs/DECISIONS.md`, D-008).
 
 ### J1 — Chaîne de compilation Linux et NixOS (sans le jeu)
 
@@ -134,7 +139,7 @@ Chaque critère est vérifiable par une commande, un compteur ou une liste de co
 La machine de référence (processeur, GPU, pilote, NixOS 26.05) est consignée à chaque
 validation.
 
-### J0 — Identification de l'ISO (critères du 2026-11-22 ; C0.1 à C0.4 validés, C0.5 en attente)
+### J0 — Identification de l'ISO (critères du 2026-11-22 ; C0.1 à C0.4 validés, C0.5 en attente : O3 choisie, D-008 non clôturée)
 
 | ID | Critère | Mesure |
 |---|---|---|

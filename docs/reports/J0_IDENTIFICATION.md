@@ -211,7 +211,7 @@ Sources :
 | C0.2 — Empreintes des deux modules comparées au projet A | **Validé** (2026-11-22) | Les deux SHA-256 diffèrent de celles du projet A (§2.2) |
 | C0.3 — En-têtes en clair lus | **Validé** (2026-11-22) | Titre `454108E4`, média `6CCD3565`, version `0.0.0.3`, région PAL, chiffrement AES, compression LZX, bibliothèques importées `xam.xex` et `xboxkrnl.exe` (2.0.9328.0, minimale 2.0.8955.0), champs de chargement |
 | C0.4 — Rien de propriétaire partagé ni dans `/nix/store` | **Validé** (2026-11-22), avec la limite du §5.1 | Contrôle du rapport et recherches dans `/nix/store` exécutés sur NixOS par l'utilisateur (§5.1) |
-| C0.5 — D-008 tranchée | **En attente** | D-008 reste ouverte (§6) ; seule décision bloquante pour J2 |
+| C0.5 — D-008 tranchée | **En attente** | D-008 reste ouverte (§6) ; seule décision bloquante pour J2. L'utilisateur a choisi la voie technique O3 le 2026-11-22. Les conditions de D-008 restent ouvertes : qualification juridique, décision sur la contrainte de mission, accord de démarrage de J2 |
 
 Les validations de C0.1 à C0.4 sont de l'utilisateur et de l'orchestrateur, consignées
 le 2026-11-22 dans la

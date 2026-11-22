@@ -140,7 +140,8 @@ produire ce code revient à lever une mesure de chiffrement. La contrainte de la
 interdit d'« engager un contournement des protections techniques ».
 
 **[I] Juridique, hors de la compétence de cet audit**, à soumettre à un juriste du
-pays de l'utilisateur. Le pays lui-même est une inconnue. Textes à examiner, à titre
+pays de l'utilisateur. Le pays lui-même était une inconnue. *2026-11-22 : France, selon
+la déclaration de l'utilisateur (`docs/DECISIONS.md`, D-008).* Textes à examiner, à titre
 indicatif :
 - Directive 2001/29/CE, art. 6 (mesures techniques) ; Directive 2009/24/CE, art. 5 à 7
   (logiciels : actes autorisés, décompilation pour l'interopérabilité, moyens de
@@ -167,6 +168,10 @@ Analyse préalable à la décision (2026-11-22, ticket #8), sans décision :
 `docs/D-008_DECISION_NOTE.md`. Elle porte notamment sur la faisabilité d'O2, établie par
 lecture du code de ReXGlue seulement : le module non chiffré est accepté, mais une clé de
 session est toujours dérivée.
+
+Choix de l'utilisateur (2026-11-22) : la voie technique **O3**. Ce n'est ni un avis
+juridique ni une autorisation de traiter les exécutables, et D-008 reste ouverte. Les
+conditions sont consignées dans `docs/DECISIONS.md`, D-008.
 
 ## 6. Organisation locale des fichiers privés
 
@@ -199,7 +204,8 @@ $WC2010_PRIVATE_DIR            # hors dépôt, par défaut ~/.local/share/wc2010
    celui du projet A (`docs/J2_PREREQUISITES.md` §3).
 2. **[V]** (levée à J0) Chiffrement effectif des deux XEX : AES, avec compression LZX.
 3. **[I]** Existence d'une mise à jour du titre et pertinence de l'appliquer.
-4. **[I]** Statut juridique du déchiffrement dans le pays de l'utilisateur (§5).
+4. **[I]** Statut juridique du déchiffrement dans le pays de l'utilisateur (§5). Pays :
+   France, selon la déclaration de l'utilisateur du 2026-11-22.
 5. **[H]** Acceptation par ReXGlue d'un XEX non chiffré, pour l'option O2. La source de
    v0.11.0 l'accepte (`XEXImage::DecodeWith`, lu sans exécution), après une dérivation
    de clé de session faite dans tous les cas (`XEXImage::Decode`). Ce n'est pas

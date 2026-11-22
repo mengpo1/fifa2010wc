@@ -44,11 +44,15 @@
   est accepté par `XEXImage::DecodeWith`. `XEXImage::Decode` dérive toutefois une clé de
   session à partir des clés intégrées avant tout décodage, même pour un module non
   chiffré.
-- **[I]** Qualification juridique dans le pays de l'utilisateur ; le pays lui-même est
-  inconnu.
+- **[I]** Qualification juridique dans le pays de l'utilisateur. Pays : France, selon la
+  déclaration de l'utilisateur du 2026-11-22.
 - **Mitigation** : décision D-008 avant toute génération de code. Les jalons J0 et J1
   n'en dépendent pas. Le projet ne contient jamais de clé. Détails :
   `ISO_REQUIREMENTS.md` §5.
+- **État (2026-11-22)** : l'utilisateur a choisi la voie technique O3 : ReXGlue tel
+  quel, qui déchiffre à la génération de code et à chaque lancement. Ce choix **ne réduit
+  pas le risque**. La qualification juridique des actes et la décision sur la contrainte
+  de mission restent à obtenir avant toute exécution (`docs/DECISIONS.md`, D-008).
 
 ### R-02 — Disque différent de celui du projet A (mis à jour après J0, 2026-11-22)
 

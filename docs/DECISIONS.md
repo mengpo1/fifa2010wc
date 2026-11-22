@@ -15,7 +15,7 @@
 | D-005 | C++23, CMake, Ninja, Clang ≥ 20 | Proposée |
 | D-006 | Isolation des systèmes et règles de portabilité | Proposée |
 | D-007 | Ressources propriétaires hors dépôt et hors magasin Nix | Acceptée |
-| D-008 | Déchiffrement des XEX et protections techniques | **Ouverte, bloquante pour J2** |
+| D-008 | Déchiffrement des XEX et protections techniques | **Ouverte, bloquante pour J2** ; O3 retenue comme voie technique par l'utilisateur — mise en œuvre suspendue à la qualification des conditions juridiques et au feu vert opérationnel distinct |
 | D-009 | Intégration NixOS (flake, SDK pur, jeu impur) | Proposée |
 | D-010 | Politique de réutilisation des projets existants | Proposée |
 | D-011 | Épinglage du SDK et série de correctifs | Acceptée (v0.11.0) |
@@ -99,8 +99,9 @@
 
 ## D-008 — Déchiffrement des XEX et protections techniques
 
-- **Statut** : **Ouverte, bloquante pour J2.** À trancher par l'orchestrateur ou
-  l'utilisateur, après avis juridique.
+- **Statut** : **Ouverte, bloquante pour J2.** O3 retenue comme voie technique par l'utilisateur — mise en œuvre suspendue à la qualification des conditions juridiques et au feu vert opérationnel distinct
+  (2026-11-22). La décision n'est pas close : voir « Choix et déclarations de
+  l'utilisateur ».
 - **Faits** :
   - [V] ReXGlue déchiffre les XEX avec des clés intégrées, à la génération de code et à
     chaque lancement ;
@@ -116,7 +117,9 @@
     partir des clés intégrées avant de décoder. Avec l'option O2, ReXGlue tel quel
     garde donc une opération cryptographique sur l'en-tête, même si les données ne sont
     pas chiffrées ;
-  - [I] la qualification juridique et le pays de l'utilisateur.
+  - [I] la qualification juridique ;
+  - pays des opérations : France, selon la déclaration de l'utilisateur du 2026-11-22,
+    non vérifiée de façon indépendante.
 - **Options** (`ISO_REQUIREMENTS.md` §5) :
   - O1, attente d'un avis ;
   - O2, XEX non chiffrés fournis par l'utilisateur, **avec l'intention** que le projet
@@ -138,6 +141,53 @@
   - que le SDK compilé depuis J1 contient déjà le code de déchiffrement et ses clés.
 
   Elle liste aussi les actes à faire qualifier, et ce que la décision devra consigner.
+- **Choix et déclarations de l'utilisateur (2026-11-22)**, consignés dans le ticket #8.
+  Ce sont des déclarations : aucun justificatif n'a été examiné, et aucun n'est demandé.
+
+  | Point | Déclaration de l'utilisateur | Ticket #8 |
+  |---|---|---|
+  | Voie technique **O3**, c'est-à-dire ReXGlue tel quel, plutôt qu'O2 | « Je valide O3 » | [7084704229](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084704229) |
+  | Pays des opérations **France**, **usage personnel** uniquement, **aucune distribution** : ni jeu recompilé, ni code généré, ni ressource propriétaire | « Oui en France pour mon usage personnel et sans distribution » | [7084729825](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084729825) |
+  | Jeu **acheté en magasin sur DVD original**, ISO **extraite par l'utilisateur** lui-même | « Oui je l'ai acheté en magasin en DVD puis rippé moi-même » | [7084744556](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084744556) |
+  | **Accord personnel** de l'utilisateur pour la voie O3 | « Je l'autorise » | [7084775427](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084775427) |
+
+  - **Ce que ces déclarations ne sont pas** :
+    - ni une conclusion de légalité, ni un avis juridique ;
+    - ni une autorisation des titulaires de droits ;
+    - ni une preuve d'achat.
+
+    La possession d'un exemplaire original, l'usage personnel et l'absence de
+    distribution ne suffisent pas, à eux seuls, à rendre les opérations licites.
+    « Je l'autorise » vaut accord personnel pour O3. Il ne lève pas les prérequis et
+    n'autorise pas le démarrage de J2 (PJ2-3).
+  - **Points à qualifier avant toute exécution** :
+    1. le déchiffrement des XEX par ReXGlue, à la génération de code et à chaque
+       lancement ;
+    2. la traduction, c'est-à-dire la recompilation, du code existant ;
+    3. la dépendance ReXGlue compilée par le flake, qui contient les clés et le code de
+       déchiffrement.
+
+    La distribution n'est pas traitée comme une activité projetée : le périmètre déclaré
+    et D-007 l'excluent.
+  - **Autres conditions** :
+    - une décision explicite, après clarification juridique, sur la façon dont la
+      contrainte initiale « ne pas engager de contournement des protections
+      techniques » s'applique à cette voie ;
+    - l'accord distinct de démarrage de J2 (PJ2-3) ;
+    - le maintien de D-007 : ni ISO, ni XEX, ni code généré, ni clé, ni autre ressource
+      propriétaire dans le dépôt, les journaux partagés ou le magasin Nix.
+  - **Statuts** :
+    - O3 est retenue comme voie technique ;
+    - D-008 et C0.5 ne sont **pas clôturées** ;
+    - J0 n'est pas clos ;
+    - PJ2-1 et PJ2-3 ne sont pas atteints, et J2 n'est pas autorisé ;
+    - aucun déchiffrement, aucune génération de code.
+  - **Éléments de droit** : les sources officielles relevées dans le ticket #8 sont
+    listées dans l'addendum de la note (`docs/D-008_DECISION_NOTE.md` §9). Elles ne
+    remplacent pas une consultation juridique.
+  - **Conséquence technique** : le correctif « sans clé » et le test synthétique
+    (`docs/D-008_DECISION_NOTE.md` §3.3) ne concernent que la voie O2. Ils ne sont pas
+    prévus.
 - **Engagement immédiat** : le dépôt ne contiendra jamais de clé ni de code de
   déchiffrement écrit par le projet.
 
