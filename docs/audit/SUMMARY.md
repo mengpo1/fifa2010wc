@@ -91,8 +91,8 @@ J5 (stabilisation Linux) ; J6 (macOS ARM64).
 
 | Risque | Niveau | Parade |
 |---|---|---|
-| R-01 Déchiffrement et protections techniques | Élevé, bloquant | D-008 avant J2 |
-| R-02 ISO d'une autre version que le disque du projet A | Élevé | Identification à J0 ; outils d'analyse du projet A réutilisables |
+| R-01 Déchiffrement et protections techniques | Élevé, bloquant ; chiffrement des deux modules constaté à J0 | D-008 avant J2 |
+| R-02 Disque différent de celui du projet A (empreintes différentes, constat de J0) | Élevé | Configuration à revalider, puis à refaire si nécessaire ; outils du projet A réutilisables (`docs/J2_PREREQUISITES.md`) |
 | R-03 Rendu sous Vulkan jamais essayé avec ce jeu | Élevé | J3 dédié ; deux pilotes GPU ; deux chemins de cibles de rendu |
 | R-06 Longue traîne de défauts du code recompilé | Élevé | Critères par parcours ; outils et correctifs du projet A |
 | R-04 API ReXGlue instable | Moyen | Épinglage et série de correctifs |

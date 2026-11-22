@@ -105,12 +105,26 @@
   - [V] ReXGlue déchiffre les XEX avec des clés intégrées, à la génération de code et à
     chaque lancement ;
   - [V] l'outil `xeximage.py` du projet A contient la clé en clair ;
-  - [H] les XEX du jeu sont chiffrés ;
+  - [V] (J0, 2026-11-22) les deux modules du disque de l'utilisateur, `default.xex` et
+    `fifadllzf.xex`, sont chiffrés (AES) et compressés (LZX), d'après leur en-tête
+    *file format info* lu en clair, sans déchiffrement
+    (`docs/reports/J0_IDENTIFICATION.md`). Toute génération de code passera donc par
+    l'image en clair des deux modules ;
+  - [V] (lecture de la source de ReXGlue v0.11.0, `src/filesystem/xex.cpp`, sans
+    exécution) un module non chiffré est accepté par `XEXImage::DecodeWith`, sans
+    déchiffrement CBC. Mais `XEXImage::Decode` dérive toujours une clé de session à
+    partir des clés intégrées avant de décoder. Avec l'option O2, ReXGlue tel quel
+    garde donc une opération cryptographique sur l'en-tête, même si les données ne sont
+    pas chiffrées ;
   - [I] la qualification juridique et le pays de l'utilisateur.
 - **Options** (`ISO_REQUIREMENTS.md` §5) : O1, attente d'un avis ; O2, XEX non chiffrés
   fournis par l'utilisateur, sans clé ni déchiffrement dans le projet ; O3, ReXGlue
   utilisé tel quel.
 - **Recommandation de l'audit** : O1 jusqu'à décision. J0 et J1 n'en dépendent pas.
+- **Mise à jour du 2026-11-22** : le chiffrement est constaté, la décision **reste
+  ouverte**. Les options sont inchangées. Pour O2, des XEX non chiffrés ne peuvent venir
+  que d'une opération de l'utilisateur sur sa copie, hors du projet, et la question
+  juridique demeure.
 - **Engagement immédiat** : le dépôt ne contiendra jamais de clé ni de code de
   déchiffrement écrit par le projet.
 
@@ -135,7 +149,9 @@
 
 - **Statut** : Proposée.
 - **Projet A** (CalinGraphics, BSD 3-Clause) : réutilisation autorisée **avec notice**
-  pour la configuration d'analyse (si les empreintes concordent), les correctifs du SDK
+  pour la configuration d'analyse (si elle est revalidée sur le code du disque de
+  l'utilisateur, `docs/J2_PREREQUISITES.md` §3 ; les empreintes diffèrent depuis J0),
+  les correctifs du SDK
   (à transposer), les correctifs du jeu, les réglages GPU et les outils Python.
   **Exclus** : le lanceur WPF et les scripts PowerShell, qui ne sont pas portables, ainsi
   que `xeximage.py` (déchiffrement, D-008).

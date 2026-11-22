@@ -253,7 +253,7 @@ le chemin avec `nix-store --delete` (`nix-store --query --roots` montre ce qui l
 |---|---|
 | Identifiant du titre `454108E4` | C'est bien le jeu ; sinon, il s'agit d'une autre édition ou d'un autre titre |
 | Disque Europe du projet A : oui | La configuration d'analyse du projet A s'applique telle quelle (R-02 levé) |
-| Disque Europe du projet A : non | Analyse à refaire pour J2, avec les outils du projet A (`ISO_REQUIREMENTS.md` §3, étape 6) |
+| Disque Europe du projet A : non | Les fichiers diffèrent, ce qui ne prouve pas que le code diffère. La configuration du projet A est à revalider avant J2, et à refaire si la revalidation échoue (`J2_PREREQUISITES.md` §3) |
 | Modules chiffrés | Confirme ou infirme l'hypothèse [H] de D-008 ; si un module n'est pas chiffré, l'option O2 est à réexaminer |
 | Fichiers au-delà de la fin de l'image | Image tronquée ou incomplète : produire une nouvelle image du disque |
 | Autres anomalies | À signaler telles quelles, avec le rapport |

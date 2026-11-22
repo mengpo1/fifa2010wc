@@ -238,6 +238,10 @@ réécrire ou à isoler, sans incidence sur le code recompilé.
 1. **[I]** Version et région de l'ISO de l'utilisateur. Si ce n'est pas le disque
    « Europe (En, Es, Nl) » aux empreintes publiées par le projet A, ses 17 000 lignes de
    pointeurs ne s'appliquent pas et l'analyse doit être refaite (outils réutilisables).
+   *Mise à jour du 2026-11-22 (J0)* : disque PAL en version `0.0.0.3`, aux empreintes
+   différentes de celles du projet A. Les pointeurs ne peuvent pas être supposés valables
+   et sont à revalider. Que le code diffère n'est pas établi
+   (`docs/reports/J0_IDENTIFICATION.md` §3).
 2. **[I]** Comportement du jeu sur le backend Vulkan : aucun des deux projets ne
    documente d'essai Vulkan.
 3. **[I]** Correctifs du projet A encore nécessaires sur ReXGlue v0.11.0 (0002, 0004,
