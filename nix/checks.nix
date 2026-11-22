@@ -174,6 +174,9 @@ in
     tail -n 3 "$out/selftest.txt"
     grep -q '^test_rexglue_gdfx_fixture .* ok$' "$out/selftest.txt" \
       || { echo "the ReXGlue fixture cross-check did not run"; exit 1; }
+    # The refusal of a source in /nix/store is also tested on a real store file.
+    grep -q '^test_real_store_path_is_refused_and_left_untouched .* ok$' "$out/selftest.txt" \
+      || { echo "the /nix/store refusal test did not run"; exit 1; }
     # The packaged command starts and prints its usage.
     ${iso-identify}/bin/fifa2010wc-iso-identify --help > "$out/help.txt"
   '';
