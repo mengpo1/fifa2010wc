@@ -1,0 +1,59 @@
+# fifa2010wc never holds game data (D-007, docs/audit/ISO_REQUIREMENTS.md §1 and §6).
+# Keep the user's private folder outside the repository ($WC2010_PRIVATE_DIR).
+# tools/check_proprietary_data.py enforces the same rules on tracked files, so a file
+# forced past this list (git add -f) is still caught by the pre-commit hook and CI.
+
+# Disc images and executables
+*.iso
+*.ISO
+*.xiso
+*.god
+*.xex
+*.XEX
+*.xexp
+*.xcp
+*.dkey
+
+# Game archives, assets, dumps
+*.big
+*.bh
+*.bin
+*.img
+*.dmp
+*.xma
+*.xwb
+*.xsb
+*.xgs
+*.bik
+*.vp6
+
+# Content packages, saves, DLC
+*.stfs
+*.xcontent
+454108E4/
+xcontent/
+
+# Private and generated folders
+private/
+game-files/
+generated/
+
+# Build output
+/out/
+/build/
+/result
+/result-*
+*.o
+*.a
+*.so
+*.so.*
+*.log
+
+# Editors and OS
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+*.swp
+.DS_Store
+__pycache__/
