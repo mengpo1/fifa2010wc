@@ -8,8 +8,10 @@ check that these bytes never reach a report.
 Run with `python3 -I tools/test_iso_identify.py`.
 """
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import struct
@@ -32,7 +34,7 @@ def load(name, path):
 iso = load("iso_identify", TOOL)
 checker = load("check_proprietary_data", os.path.join(HERE, "check_proprietary_data.py"))
 
-# Marker bytes of the fields the tool must never read or report.
+# Marker bytes of the fields the tool must never select or report.
 AES_KEY = bytes(range(0xA0, 0xB0))
 LAN_KEY = bytes(range(0xC0, 0xD0))
 MEDIA_ID_128 = bytes(range(0xE0, 0xF0))
@@ -93,7 +95,7 @@ def make_xex(title_id=0x454108E4, media_id=0x1234ABCD, module_flags=0x01,
         struct.pack(">III", region, 0x00000002, 1) + struct.pack(">I", 0x10 | 1) + b"\x44" * 0x14
     header_size = security_offset + len(security)
     fixed = struct.pack(">4sIIIII", magic, module_flags, header_size, 0, security_offset, count)
-    image_data = b"\xA5" * 512  # stands for the (encrypted) image data, never read
+    image_data = b"\xA5" * 512  # stands for the (encrypted) image data: hashed, never decoded
     return fixed + table_entries + data + security + image_data
 
 
@@ -484,6 +486,150 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("/nix/store", result.stderr)
         self.assertEqual(self.run_tool(os.path.join(self.dir, "missing.iso")).returncode, 2)
+
+
+def sha256_file(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def tree_digest(root):
+    """SHA-256 of every file under `root`, by relative path."""
+    result = {}
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            result[os.path.relpath(path, root)] = sha256_file(path)
+    return result
+
+
+class OutputSafetyTest(unittest.TestCase):
+    """P-18: a report path must never let the tool overwrite the source, whatever name
+    leads to it. The sources are writable, as if the user forgot `chmod a-w`, and each
+    test checks that their bytes are unchanged."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+        self.image = os.path.join(self.dir, "disc.img")
+        write_image(self.image, sample_tree())
+        self.image_sha256 = sha256_file(self.image)
+        self.folder = os.path.join(self.dir, "game")
+        os.makedirs(self.folder)
+        write_folder(self.folder, sample_tree())
+        self.folder_digest = tree_digest(self.folder)
+        self.reports = os.path.join(self.dir, "reports")
+        os.makedirs(self.reports)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_tool(self, *args, stdout=subprocess.PIPE):
+        return subprocess.run([sys.executable, "-I", TOOL, *args], stdout=stdout,
+                              stderr=subprocess.PIPE, text=True)
+
+    def assert_refused(self, *args):
+        result = self.run_tool(*args)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("error:", result.stderr)
+        self.assertEqual(result.stdout, "")  # refused before any report
+        self.assertEqual(sha256_file(self.image), self.image_sha256)
+        self.assertEqual(tree_digest(self.folder), self.folder_digest)
+        return result
+
+    def test_report_on_the_image_itself(self):
+        for option in ("--json", "--markdown"):
+            with self.subTest(option=option):
+                self.assert_refused(option, self.image, self.image)
+
+    def test_report_on_an_alias_of_the_image(self):
+        os.makedirs(os.path.join(self.dir, "sub"))
+        for alias in (os.path.join(self.dir, ".", "disc.img"),
+                      os.path.join(self.dir, "sub", "..", "disc.img")):
+            with self.subTest(alias=alias):
+                self.assert_refused("--markdown", alias, self.image)
+
+    def test_report_on_a_symbolic_link_to_the_image(self):
+        link = os.path.join(self.reports, "report.md")
+        os.symlink(self.image, link)
+        self.assert_refused("--markdown", link, self.image)
+        self.assertTrue(os.path.islink(link))
+        # The image given through a link is protected the same way.
+        self.assert_refused("--json", self.image, link)
+
+    def test_report_on_a_hard_link_to_the_image(self):
+        link = os.path.join(self.reports, "report.json")
+        os.link(self.image, link)
+        self.assert_refused("--json", link, self.image)
+        self.assertTrue(os.path.samefile(link, self.image))
+
+    def test_reports_that_collide(self):
+        report = os.path.join(self.reports, "report")
+        self.assert_refused("--json", report, "--markdown", report, self.image)
+        self.assert_refused("--json", report, "--markdown",
+                            os.path.join(self.reports, ".", "report"), self.image)
+        with open(report, "w") as f:
+            f.write("old\n")
+        alias = os.path.join(self.reports, "alias")
+        os.symlink(report, alias)
+        self.assert_refused("--json", report, "--markdown", alias, self.image)
+
+    def test_reports_inside_the_source_folder(self):
+        outside = os.path.join(self.dir, "data-link")
+        os.symlink(os.path.join(self.folder, "data"), outside)
+        hard = os.path.join(self.reports, "hard.md")
+        os.link(os.path.join(self.folder, "default.xex"), hard)
+        for output in (os.path.join(self.folder, "report.md"),          # new file inside
+                       os.path.join(self.folder, "default.xex"),        # a module
+                       os.path.join(self.folder, "data", "readme.txt"),  # a data file
+                       os.path.join(outside, "report.md"),              # through a link
+                       hard,                                            # hard link
+                       self.folder):                                    # the folder itself
+            with self.subTest(output=output):
+                self.assert_refused("--markdown", output, self.folder)
+
+    def test_standard_output_redirected_to_the_source(self):
+        with open(self.image, "ab") as stdout:  # `>>`: appending would change the image
+            result = self.run_tool(self.image, stdout=stdout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("standard output", result.stderr)
+        self.assertEqual(sha256_file(self.image), self.image_sha256)
+
+    def test_paths_are_refused_before_the_source_is_read(self):
+        calls = []
+        saved = iso.identify
+        iso.identify = lambda *a, **k: calls.append(a) or saved(*a, **k)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                status = iso.main(["iso-identify", "--markdown", self.image, self.image])
+        finally:
+            iso.identify = saved
+        self.assertIn("refusing to write the report", stderr.getvalue())
+        self.assertEqual(status, 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(sha256_file(self.image), self.image_sha256)
+
+    def test_existing_report_is_replaced_not_written_through(self):
+        report = os.path.join(self.reports, "report.md")
+        with open(report, "w") as f:
+            f.write("old report\n")
+        keep = os.path.join(self.reports, "keep.md")
+        os.link(report, keep)  # another name for the old report's file
+        result = self.run_tool("--markdown", report, self.image)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(report, encoding="utf-8") as f:
+            self.assertEqual(f.read(), result.stdout)
+        with open(keep) as f:
+            self.assertEqual(f.read(), "old report\n")  # its file was never opened
+        self.assertEqual(sorted(os.listdir(self.reports)), ["keep.md", "report.md"])
+        self.assertEqual(sha256_file(self.image), self.image_sha256)
+
+    def test_safe_reports_from_a_folder(self):
+        out_md = os.path.join(self.reports, "folder.md")
+        result = self.run_tool("--markdown", out_md, self.folder)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(os.path.isfile(out_md))
+        self.assertEqual(tree_digest(self.folder), self.folder_digest)
 
 
 if __name__ == "__main__":

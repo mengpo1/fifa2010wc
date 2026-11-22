@@ -25,13 +25,16 @@ L'outil `iso-identify` :
 
 Il ne fait pas :
 
-- **aucun déchiffrement**. Il ne lit jamais les données d'image d'un XEX, chiffrées sur
-  les disques du commerce [H]. Il ne lit pas non plus ses champs de clé et de signature :
-  clé AES chiffrée, clé LAN, identifiant de média de 128 bits, signature RSA, empreintes
-  internes ;
+- **aucun déchiffrement**. Pour calculer les empreintes d'un module, il lit tous ses
+  octets, y compris les données d'image, chiffrées sur les disques du commerce [H]. Pour
+  lire un en-tête, il le charge entièrement en mémoire, champs de clé et de signature
+  compris. Il n'en sélectionne que les champs en clair listés au §5. La clé AES chiffrée,
+  la clé LAN, l'identifiant de média de 128 bits, la signature RSA et les empreintes
+  internes ne sont ni décodés, ni extraits, ni écrits dans un rapport ;
 - **aucune extraction**. Aucun fichier du disque n'est copié sur le disque dur ; les
   modules sont lus en mémoire pour leurs empreintes ;
-- **aucune écriture** hors des rapports demandés ; **aucun accès réseau** ;
+- **aucune écriture** hors des rapports demandés, et **jamais sur la source** (§4) ;
+  **aucun accès réseau** ;
 - **rien dans `/nix/store`**. L'image est un argument donné à l'exécution, jamais une
   entrée Nix ; l'outil refuse une image ou un rapport situés dans `/nix/store` ;
 - aucun MD5. Ses 32 chiffres hexadécimaux ressemblent à une clé de 128 bits pour le
@@ -149,6 +152,25 @@ nix run .#iso-identify -- --json "$WC2010_PRIVATE_DIR/logs/j0-identification.jso
   - `2` : erreur d'utilisation ou de lecture, chemin refusé, ou rapport refusé par la
     dernière vérification (§5) ; dans ce cas, aucun rapport n'est écrit.
 
+Sécurité des sorties (correction P-18, §10). Avant de lire l'image, l'outil refuse, avec le
+code 2 et sans rien écrire :
+
+- un rapport (`--json`, `--markdown`) qui désigne l'image, sous n'importe quel nom :
+  même chemin, alias (`./`, `../`), lien symbolique ou lien physique. La comparaison se
+  fait sur l'identité du fichier (périphérique et inode), pas sur le texte du chemin ;
+- deux rapports qui désignent le même fichier ;
+- pour un dossier extrait, un rapport qui est le dossier, un de ses fichiers ou un fichier
+  dans son arborescence, même à travers un lien ;
+- un rapport dans `/nix/store` ;
+- une sortie standard qui est l'image elle-même (redirection `>>`).
+
+Chaque rapport est écrit dans un fichier temporaire voisin, puis renommé à sa place : un
+lien présent à cet endroit est remplacé, et le fichier vers lequel il mène n'est jamais
+ouvert en écriture. Cette protection ne dépend pas du `chmod a-w` du §2, qui reste
+recommandé. Une redirection `>` vers l'image, en revanche, est faite par le shell, qui
+vide le fichier avant même le lancement de l'outil : ne jamais rediriger la sortie
+standard vers un fichier du dossier privé ; utiliser `--markdown`.
+
 Cas particuliers :
 
 - **Dossier déjà extrait** (par exemple par extract-xiso) : passer le dossier au lieu de
@@ -243,9 +265,10 @@ D-008. Ce document ne crée pas ce rapport.
 
 Les commandes et résultats suivants ont été exécutés pendant la préparation [V] :
 
-- `python3 -I tools/test_iso_identify.py` : 21 tests, dont 20 sur des images XDVDFS et
+- `python3 -I tools/test_iso_identify.py` : 31 tests, dont 30 sur des images XDVDFS et
   des modules XEX2 synthétiques fabriqués à l'exécution, et un recoupement sur l'image de
-  test de ReXGlue (sauté hors de Nix, faute de source ReXGlue).
+  test de ReXGlue (sauté hors de Nix, faute de source ReXGlue). Dix de ces tests portent
+  sur la sécurité des sorties (§10).
 - Le check `iso-identify-selftest` de `nix flake check` lance ces tests dans le bac à
   sable Nix, recoupement compris. Il échoue si le recoupement n'a pas tourné.
 - Le recoupement : sur `tests/fixtures/filesystem/gdfx.iso` de ReXGlue, l'outil trouve
@@ -273,3 +296,55 @@ Non vérifié, et seulement vérifiable par l'utilisateur :
   une valeur incohérente ou une anomalie, sans arrêt de l'outil ;
 - **[I]** le format exact de l'image de l'utilisateur : image complète XGD2 ou XGD3, ou
   image réduite.
+
+## 10. Suites de la revue de l'orchestrateur (PR #3)
+
+### P-18 — Une sortie pouvait écraser l'image source (bloquant)
+
+- **Constat** : les chemins `--json` et `--markdown` n'étaient comparés qu'à `/nix/store`,
+  puis ouverts en écriture (mode `w`). Une sortie qui désignait l'image l'écrasait.
+- **Reproduction** sur une image synthétique inscriptible de 83 968 octets (SHA-256
+  `d3c035c7…`). Commande :
+
+  ```
+  python3 -I tools/iso_identify.py --markdown disc.img disc.img
+  ```
+
+  Résultat : code de sortie 0. Le fichier ne fait plus que 5 073 octets (SHA-256
+  `c334d813…`), et ce sont ceux du rapport : l'image est détruite.
+- **Correction** :
+  - les chemins des rapports sont vérifiés avant toute lecture de la source, puis de
+    nouveau juste avant l'écriture ;
+  - la vérification compare l'identité des fichiers (périphérique, inode) et les dossiers
+    parents des chemins résolus, pas leur texte. Sont protégés l'image, ou pour un
+    dossier extrait le dossier et tout ce qu'il contient ;
+  - les rapports sont écrits par fichier temporaire, puis renommage (§4).
+- **Après correction** : la même commande rend 2 sans rien écrire, et l'image garde son
+  SHA-256 `d3c035c7…`.
+- **Tests de non-régression** (`OutputSafetyTest`, 10 tests, sur des sources
+  inscriptibles dont chaque test vérifie le SHA-256 après coup) :
+  - rapport sur l'image elle-même, sur un alias, sur un lien symbolique ou un lien
+    physique vers l'image, ou image donnée par un lien ;
+  - deux rapports confondus, par le même chemin, un alias ou un lien ;
+  - rapport dans un dossier source, sur un de ses fichiers, à travers un lien vers un de
+    ses sous-dossiers, par un lien physique vers un de ses fichiers, ou sur le dossier
+    lui-même ;
+  - sortie standard redirigée (`>>`) vers l'image ;
+  - refus avant toute lecture : la fonction d'identification n'est pas appelée ;
+  - rapport existant remplacé, et non écrit à travers un lien physique ;
+  - rapport valide depuis un dossier extrait.
+- **Preuve que ces tests détectent le défaut** : lancés contre la version d'origine de
+  l'outil (commit `4f3d44e`), 16 sous-tests échouent. Ils réussissent tous sur la
+  version corrigée.
+
+### P-19 — Exactitude de la documentation
+
+- **Constat** : la documentation, l'aide de l'outil et le texte du rapport disaient que
+  les données d'image et les champs de clé « ne sont pas lus ». Or les empreintes lisent
+  tous les octets des modules, données chiffrées comprises, et l'en-tête est chargé en
+  entier en mémoire, champs de clé et de signature compris.
+- **Correction** : la formulation exacte est désormais partout la suivante. Aucun
+  déchiffrement. Les octets sont lus pour les empreintes et les en-têtes sont chargés en
+  mémoire. Les champs de clé et de signature ne sont ni sélectionnés, ni décodés, ni
+  écrits dans un rapport. Elle figure dans l'aide de l'outil, ses commentaires, le texte
+  du rapport, ce document et la description de la PR.

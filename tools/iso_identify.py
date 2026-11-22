@@ -8,9 +8,14 @@ From the user's own disc image, or from a folder extracted from it, the tool rea
     version), file format info (encryption and compression types), security info
     (regions, media types, load address), import and static libraries.
 
-It never reads the image data of an XEX (encrypted on retail discs), nor its key or
-signature fields: the encrypted AES key, the LAN key, the 128-bit media ID, the RSA
-signature and the digests are skipped. It writes nothing but the reports asked for.
+It never decrypts anything. To hash a module, it reads all of its bytes, the image data
+included (encrypted on retail discs); to read a header, it loads the whole header into
+memory, key and signature fields included. From it, it picks out only the plaintext
+fields listed above: the encrypted AES key, the LAN key, the 128-bit media ID, the RSA
+signature and the digests are never selected, decoded or written to a report.
+It writes nothing but the reports asked for, and never onto the source: a report path
+that names the source image, or a file or folder of the source folder, under any name
+(alias, symbolic link, hard link), is refused before the source is read (see main()).
 A report holds hashes, file names and sizes, and header metadata, which D-007 allows to
 share. MD5 is not computed: its 32 hexadecimal digits look like a 128-bit key to the
 proprietary data check of the repository; SHA-1 and CRC32 cover the Redump comparison.
@@ -25,8 +30,8 @@ Usage: iso_identify.py [--no-image-hash] [--json FILE] [--markdown FILE] SOURCE
   SOURCE  the disc image file, or a folder that holds the extracted disc.
 The Markdown report is printed on stdout; --json and --markdown also write it to files.
 Exit status: 0 identified; 3 read but not identified (no XDVDFS volume, no default.xex,
-or a default.xex header that cannot be read); 2 usage or input error, or a report refused
-by the last check.
+or a default.xex header that cannot be read); 2 usage or input error, a refused path, or
+a report refused by the last check (nothing is written then).
 Only the Python standard library is used. Run it with `python3 -I`.
 """
 
@@ -38,6 +43,7 @@ import os
 import re
 import struct
 import sys
+import tempfile
 import zlib
 
 TOOL_NAME = "iso_identify"
@@ -83,8 +89,9 @@ STFS_MAGICS = (b"CON ", b"LIVE", b"PIRS")
 XEX2_MAGIC = b"XEX2"
 XEX_FIXED_HEADER = 0x18
 MAX_XEX_HEADER = 64 * 1024 * 1024
-# XEXSecurityInfoHeader: the only fields read, and the size up to the page descriptors.
-# rsa_signature (0x8), the digests, xgd2_media_id (0x140) and aes_key (0x150) are not read.
+# XEXSecurityInfoHeader: the only fields selected, and the size up to the page descriptors.
+# rsa_signature (0x8), the digests, xgd2_media_id (0x140) and aes_key (0x150) are loaded
+# with the rest of the header, but never selected, decoded or exported.
 SEC_IMAGE_SIZE = 0x004
 SEC_IMAGE_FLAGS = 0x10C
 SEC_LOAD_ADDRESS = 0x110
@@ -716,10 +723,11 @@ def render_markdown(report):
     add("")
     add(f"> Rapport produit localement par `tools/iso_identify.py` (version "
         f"{report['tool']['version']}), le {report['generated_at']}, en lecture seule.")
-    add("> Aucun déchiffrement, aucune extraction. Contenu : empreintes, noms et tailles de")
-    add("> fichiers, champs d'en-tête en clair (autorisés par D-007). Les champs de clé des")
-    add("> XEX (clé AES chiffrée, clé LAN, identifiant de média de 128 bits, signature RSA)")
-    add("> ne sont pas lus.")
+    add("> Aucun déchiffrement, aucune extraction. Les octets des modules XEX sont lus pour")
+    add("> leurs empreintes et leurs en-têtes sont chargés en mémoire ; leurs champs de clé et")
+    add("> de signature (clé AES chiffrée, clé LAN, identifiant de média de 128 bits,")
+    add("> signature RSA) n'en sont ni extraits ni écrits ici. Contenu : empreintes, noms et")
+    add("> tailles de fichiers, champs d'en-tête en clair (autorisés par D-007).")
     add("")
     add("## Verdict")
     add("")
@@ -868,6 +876,96 @@ def check_shareable(text):
         raise RuntimeError("internal error: a 128-bit token reached the report")
 
 
+# --- Output safety (P-18) ------------------------------------------------------------------
+
+def file_id(st):
+    return (st.st_dev, st.st_ino)
+
+
+def protected_ids(source):
+    """Identity (device, inode) of the source and, for a folder, of everything under it.
+    A report must never be one of these files or folders, whatever path names it: an
+    alias, a symbolic link and a hard link all lead to the same identity."""
+    ids = {file_id(os.stat(source))}
+    if os.path.isdir(source):
+        for dirpath, dirnames, filenames in os.walk(source):
+            for name in dirnames + filenames:
+                try:
+                    ids.add(file_id(os.stat(os.path.join(dirpath, name))))
+                except OSError:
+                    pass  # dangling link: nothing to protect behind it
+    return ids
+
+
+def output_problem(output, protected):
+    """Why the report must not be written to `output`, or None."""
+    resolved = os.path.realpath(output)
+    if in_nix_store(resolved):
+        return "it is in /nix/store"
+    if os.path.isdir(resolved):
+        return "it is a folder"
+    if os.path.exists(output) and file_id(os.stat(output)) in protected:
+        return "it is the source itself, or a file of the source folder, under another name"
+    folder = os.path.dirname(resolved)
+    while True:
+        try:
+            if file_id(os.stat(folder)) in protected:
+                return "it is inside the source folder"
+        except OSError:
+            pass  # a folder that does not exist yet cannot be the source
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return None
+        folder = parent
+
+
+def same_output(a, b):
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    return os.path.exists(a) and os.path.exists(b) and os.path.samefile(a, b)
+
+
+def check_outputs(outputs, protected):
+    """Error messages for the report paths; empty when every path is safe."""
+    problems = []
+    for output in outputs:
+        problem = output_problem(output, protected)
+        if problem:
+            problems.append(f"refusing to write the report to {output}: {problem}")
+    if len(outputs) == 2 and same_output(*outputs):
+        problems.append("--json and --markdown name the same file")
+    return problems
+
+
+def stdout_is_protected(protected):
+    try:
+        st = os.fstat(sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        return False
+    return file_id(st) in protected
+
+
+def write_report(path, text, protected):
+    """Write to a new temporary file next to `path`, then rename it onto `path`. The
+    rename replaces the directory entry: a symbolic or hard link at `path` is replaced,
+    and the file it led to is never opened for writing."""
+    problems = check_outputs([path], protected)  # again, just before writing
+    if problems:
+        raise OSError(problems[0])
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, temporary = tempfile.mkstemp(prefix=".iso-identify-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv):
     parser = argparse.ArgumentParser(
         prog="iso-identify", description=__doc__.split("\n\n", 1)[0])
@@ -887,10 +985,18 @@ def main(argv):
               "with `nix-store --delete` and keep the disc in the private folder.",
               file=sys.stderr)
         return 2
-    for output in (args.json, args.markdown):
-        if output and in_nix_store(os.path.dirname(os.path.abspath(output))):
-            print(f"error: refusing to write {output} into /nix/store", file=sys.stderr)
-            return 2
+
+    # Every check on the report paths runs before the source is read (P-18).
+    protected = protected_ids(args.source)
+    outputs = [path for path in (args.json, args.markdown) if path]
+    problems = check_outputs(outputs, protected)
+    if stdout_is_protected(protected):
+        problems.append("the standard output is the source itself, or a file of the source "
+                        "folder; use --markdown instead of a shell redirection")
+    if problems:
+        for problem in problems:
+            print(f"error: {problem}", file=sys.stderr)
+        return 2
 
     progress = None
     if sys.stderr.isatty():
@@ -912,10 +1018,13 @@ def main(argv):
     except RuntimeError as e:
         print(f"error: {e}; no report written", file=sys.stderr)
         return 2
-    for output, text in ((args.json, as_json), (args.markdown, markdown)):
-        if output:
-            with open(output, "w", encoding="utf-8") as f:
-                f.write(text)
+    try:
+        for output, text in ((args.json, as_json), (args.markdown, markdown)):
+            if output:
+                write_report(output, text, protected)
+    except OSError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     sys.stdout.write(markdown)
     return 0 if report["verdict"]["identified"] else 3
 
