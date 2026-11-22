@@ -125,6 +125,16 @@
   ouverte**. Les options sont inchangées. Pour O2, des XEX non chiffrés ne peuvent venir
   que d'une opération de l'utilisateur sur sa copie, hors du projet, et la question
   juridique demeure.
+- **Analyse préalable** (2026-11-22, ticket #8) : `docs/D-008_DECISION_NOTE.md` compare
+  O1, O2 et O3 sous les angles juridique, technique et opérationnel. Ce n'est ni une
+  décision ni un avis juridique : **D-008 reste ouverte**. La note établit, par lecture
+  du code public de ReXGlue :
+  - qu'il n'existe qu'un chemin de décodage, utilisé à la génération de code et à chaque
+    lancement ;
+  - qu'O2 n'est pas une voie sans clé avec ReXGlue tel quel ;
+  - que le SDK compilé depuis J1 contient déjà le code de déchiffrement et ses clés.
+
+  Elle liste aussi les actes à faire qualifier, et ce que la décision devra consigner.
 - **Engagement immédiat** : le dépôt ne contiendra jamais de clé ni de code de
   déchiffrement écrit par le projet.
 

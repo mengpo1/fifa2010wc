@@ -163,6 +163,11 @@ qualification de mesure technique.
 
 Recommandation de l'audit : **O1 jusqu'à décision**. J0 et J1 n'en dépendent pas.
 
+Analyse préalable à la décision (2026-11-22, ticket #8), sans décision :
+`docs/D-008_DECISION_NOTE.md`. Elle porte notamment sur la faisabilité d'O2, établie par
+lecture du code de ReXGlue seulement : le module non chiffré est accepté, mais une clé de
+session est toujours dérivée.
+
 ## 6. Organisation locale des fichiers privés
 
 Proposition (à valider, voir D-007) :
