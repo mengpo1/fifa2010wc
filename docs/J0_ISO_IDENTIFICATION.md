@@ -219,7 +219,10 @@ grand si `logs/` contient d'autres fichiers.
 ## 6. Vérifier que rien n'est entré dans le magasin Nix
 
 `nix run` ne construit que l'outil ; l'image est ouverte à l'exécution par son chemin.
-Pour le vérifier, aucune des deux commandes suivantes ne doit afficher de ligne.
+Les deux commandes suivantes le vérifient. La seconde ne doit afficher aucune ligne. La
+première peut afficher des fichiers légitimes du magasin, par exemple un paquet
+volumineux fait d'un seul fichier : chaque ligne s'identifie avant toute action (voir
+plus bas).
 
 Fichiers de plus de 100 Mo à la racine du magasin (une image ajoutée par
 `nix-store --add` y serait) :
@@ -236,8 +239,18 @@ find /nix/store -maxdepth 3 -type f \( -iname '*.xex' -o \( -iname '*.iso' -size
 ```
 
 L'image de test synthétique de ReXGlue (`tests/fixtures/filesystem/gdfx.iso`, 80 Kio)
-n'apparaît pas, à cause du seuil de taille. Si une ligne apparaît malgré tout, supprimer
-le chemin avec `nix-store --delete` (`nix-store --query --roots` montre ce qui le retient).
+n'apparaît pas, à cause du seuil de taille.
+
+Si une ligne apparaît, **ne rien supprimer sans l'avoir identifiée** :
+
+- comparer la taille du fichier à celle de l'image, donnée par le rapport ;
+- si elles sont égales, comparer son SHA-256 (`sha256sum`) à celui de l'image, donné
+  par le rapport.
+
+Seule une copie avérée de l'image ou d'un fichier du jeu se supprime, avec
+`nix-store --delete` ; `nix-store --query --roots` montre ce qui la retient. Lors de la
+validation de C0.4, la première commande a signalé un fichier sans rapport avec l'image,
+à ne pas supprimer (`docs/reports/J0_IDENTIFICATION.md` §5.1).
 
 ## 7. Ce qu'il faut transmettre
 
