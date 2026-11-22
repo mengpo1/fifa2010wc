@@ -35,6 +35,13 @@ in
   rexglue-sdk-debug-tests = rexglue-sdk.overrideAttrs (_: {
     pname = "rexglue-sdk-debug-tests";
     cmakeBuildType = "Debug";
+    # Built after the Release SDK, never at the same time. Some kernel tests hand work
+    # between guest threads that spin (e.g. "XamGetOverlappedResult sees the event set
+    # once the result is complete": 20000 handoffs, 20 s deadline, 1.65 s when the CPUs
+    # are free). In CI the Debug tests ran while the Release SDK was compiling on the 4
+    # vCPUs of the runner, and that test missed its deadline. Referencing the Release
+    # output makes it a build input, so Nix orders the two builds.
+    FIFA2010WC_BUILT_AFTER = "${rexglue-sdk}";
   });
 
   # C1.3: the SDK command line tool runs inside the Nix build sandbox. The sandbox has no

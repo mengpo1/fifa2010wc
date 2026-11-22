@@ -308,6 +308,56 @@ taillées ou dérivées d'une bibliothèque du SDK, sans aucune donnée du jeu) 
 Relance complète : `nix flake check -L` → « all checks passed! », code 0, en 1 min 42 s
 (les deux SDK étaient déjà construits ; seuls les contrôles modifiés ont été rejoués).
 
+**CI du commit `25fdd71` : échec d'un test Debug du SDK (P-17).**
+
+Le job `linux-x86_64` (exécution 44987255472) échoue au bout de 41 min, contre 18 min
+pour les deux passages précédents. Un seul test sur 2 234 échoue, dans le contrôle
+`rexglue-sdk-debug-tests` : « XamGetOverlappedResult sees the event set once the result
+is complete (Timeout) ». Le dispositif de test exige que ce test finisse en 20 s
+(`kernel_fixture.cpp:341`, `CHECK( finished_in_time )`) ; CTest l'arrête à 60 s.
+
+Faits relevés dans le journal du job :
+- le test fait 20 000 allers-retours entre deux fils invités synchronisés par attente
+  active (`SpinUntil`, `tests/unit/kernel/overlapped_test.cpp`) ;
+- au même moment, la CI compilait le SDK Release (lignes « rexglue-sdk> [1416/1472] » au
+  milieu des tests Debug) : les deux dérivations du SDK étaient construites en même
+  temps, chacune avec 4 tâches, sur les 4 processeurs virtuels de la machine ;
+- le SDK signale « Too few processor cores - scheduling will be wonky », et le fil invité
+  reste « still running » pendant plus de 40 s ;
+- les tests Debug durent 269 s, contre 93 s en local.
+
+Mesures locales :
+- sans contention, ce test dure 1,65 s (passage Debug réussi) ;
+- essai de reproduction : SDK Debug recompilé et testé pendant que 4 boucles de calcul
+  occupent les 4 processeurs. Le test de la CI **passe** (1,41 s), mais un **autre**
+  test de synchronisation du noyau échoue : « A KeReleaseMutant by the old owner after a
+  KeInitializeMutant is refused », SIGSEGV en `tests/unit/kernel/sync_test.cpp:855`
+  (99 % réussis, 1 échec sur 2 234).
+
+Conclusion. Le dépassement de délai précis de la CI n'est pas reproduit, mais deux échecs
+différents des tests de synchronisation du noyau de ReXGlue apparaissent tous deux sous
+contention processeur, et jamais sans elle (2 CI et 3 passages locaux réussis). La
+dérivation Debug de `25fdd71` est identique à celle des deux CI réussies : le changement
+de la PR n'en est pas la cause. Ce qui expose ce contrôle à la contention, c'est la
+construction simultanée des deux SDK par `nix flake check`.
+
+Correction : la dérivation `rexglue-sdk-debug-tests` référence la sortie du SDK Release
+(`FIFA2010WC_BUILT_AFTER`). Nix construit donc toujours le SDK Debug après le Release, en
+local comme en CI, quel que soit `max-jobs`. Vérifié avec `nix derivation show` : la
+dérivation Release figure parmi les entrées de la dérivation Debug. Aucun test n'est
+sauté, désactivé ni relancé automatiquement.
+
+Vérification locale du même contrôle après correction :
+`nix build .#checks.x86_64-linux.rexglue-sdk-debug-tests` → code 0, en 8 min 35 s ;
+« 100% tests passed, 0 tests failed out of 2234 », 91,75 s. Les deux tests en cause
+passent : « XamGetOverlappedResult sees the event set once the result is complete » en
+0,70 s, « A KeReleaseMutant by the old owner after a KeInitializeMutant is refused » en
+0,05 s.
+
+Le SIGSEGV sous charge laisse soupçonner une condition de course dans ReXGlue lui-même
+(fil propriétaire d'un mutant réinitialisé par un autre fil), en Debug. C'est à signaler
+en amont (§6).
+
 ## 5. Problèmes constatés
 
 | ID | Problème | Cause | Traitement |
@@ -328,6 +378,7 @@ Relance complète : `nix flake check -L` → « all checks passed! », code 0, e
 | P-14 | Échec du contrôle `proprietary-data-closure` : « Permission denied » | Défaut dans ce contrôle : `cp` gardait le mode lecture seule du fichier copié depuis le magasin, et l'ajout suivant échouait. Aucune donnée n'avait été détectée | Fichier écrit avec `cat` ; contrôle réussi ensuite |
 | P-15 | Revue de l'orchestrateur : le mode `staged` lisait l'arbre de travail, pas l'index | `check_repo_file` lisait le fichier sur disque. Après un `git add` suivi d'une modification, le hook vérifiait un autre contenu que celui du commit | Lecture des objets de l'index (`git ls-files --stage`, puis `git cat-file blob`) et tests de non-régression (§4.10) |
 | P-16 | Revue de l'orchestrateur : le contrôle ELF masquait l'échec de `ld.so --list` (`if ...; then :; fi`) | Un fichier du magasin que le chargeur ne peut pas analyser passait le contrôle : ses lignes d'erreur commencent par `/nix/store/` | Script strict `tools/check_elf_deps.sh`, contrôle `elf-deps-check-selftest` (§4.10) |
+| P-17 | CI de `25fdd71` : un test Debug du SDK dépasse son délai (« XamGetOverlappedResult sees the event set once the result is complete ») | Tests de synchronisation du noyau ReXGlue sensibles à la contention ; `nix flake check` construisait les SDK Release et Debug en même temps sur 4 processeurs virtuels. Sous charge locale, un autre test de ce groupe plante (SIGSEGV) | SDK Debug construit après le Release (§4.10) ; condition de course possible à signaler en amont (§6) |
 
 ## 6. Constats utiles pour J2
 
@@ -337,6 +388,10 @@ Relance complète : `nix flake check -L` → « all checks passed! », code 0, e
    généré est refusé par ses marqueurs (`// Generated by rexglue`, `DEFINE_REX_FUNC`).
 3. La transposition des correctifs 0002 et 0003 du projet A reste à faire (J2).
 4. D-008 (déchiffrement des XEX) reste ouverte et bloque toujours J2.
+5. Les tests de synchronisation du noyau de ReXGlue v0.11.0 échouent sous forte
+   contention processeur, en Debug (P-17), et l'un d'eux plante. À signaler en amont, et à
+   prendre en compte dans le risque R-05 (maturité du runtime sous Linux) : un jeu sollicite
+   ces mêmes primitives.
 
 ## 7. Validations matérielles restantes (tests impossibles à exécuter faute de matériel ou d'environnement adapté)
 
