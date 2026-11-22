@@ -54,9 +54,12 @@
     C'est une condition nécessaire, pas suffisante.
   - Verdict « disque Europe du projet A » : **non**, au sens des empreintes. L'identité
     du code reste inconnue.
-  - Critères : C0.1, C0.2 et C0.3 atteints d'après le rapport J0. **J0 n'est pas
-    clos** : C0.4 n'est pas vérifié, faute de sorties du contrôle de données et des
-    recherches dans `/nix/store`, et C0.5 (D-008) n'est pas atteint.
+  - Critères : C0.1 à C0.4 **validés** le 2026-11-22 par l'utilisateur et
+    l'orchestrateur. C0.4 l'est avec une limite : les recherches dans `/nix/store` ne
+    prouvent pas une absence exhaustive (`docs/reports/J0_IDENTIFICATION.md` §5.1).
+  - **J0 n'est pas clos** : C0.5 (D-008) reste en attente. C'est la seule décision
+    bloquante pour J2. La validation de C0.4 n'autorise pas le déchiffrement des
+    exécutables.
 
 ### J1 — Chaîne de compilation Linux et NixOS (sans le jeu)
 
@@ -131,7 +134,7 @@ Chaque critère est vérifiable par une commande, un compteur ou une liste de co
 La machine de référence (processeur, GPU, pilote, NixOS 26.05) est consignée à chaque
 validation.
 
-### J0 — Identification de l'ISO (critères proposés le 2026-11-22, à valider)
+### J0 — Identification de l'ISO (critères du 2026-11-22 ; C0.1 à C0.4 validés, C0.5 en attente)
 
 | ID | Critère | Mesure |
 |---|---|---|

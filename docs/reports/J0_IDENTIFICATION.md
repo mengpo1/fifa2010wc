@@ -5,7 +5,10 @@
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 >
 > Ce rapport ne s'appuie que sur les métadonnées du rapport J0 de l'utilisateur, telles
-> que l'orchestrateur les a transmises. Aucun fichier du jeu n'a été lu, demandé, transmis
+> que l'orchestrateur les a transmises.
+>
+> Mise à jour du 2026-11-22 : C0.1 à C0.4 sont validés par l'utilisateur et
+> l'orchestrateur (§5). C0.5, c'est-à-dire D-008, reste ouvert et bloquant. Aucun fichier du jeu n'a été lu, demandé, transmis
 > ou déchiffré pour l'écrire. Aucun code n'a été généré. J2 n'est pas commencé.
 
 ## 1. Source des résultats
@@ -204,15 +207,37 @@ Sources :
 
 | Critère | Statut | Justification |
 |---|---|---|
-| C0.1 — Format reconnu, arborescence lue entièrement | **Atteint d'après le rapport J0** | XGD2 ; 49 fichiers et 8 dossiers ; 0 fichier au-delà de la fin de l'image ; aucune anomalie. L'intégrité du contenu de chaque fichier n'est pas démontrée (§2.1) |
-| C0.2 — Empreintes des deux modules comparées au projet A | **Atteint** | Les deux SHA-256 diffèrent de celles du projet A (§2.2) |
-| C0.3 — En-têtes en clair lus | **Atteint d'après le rapport J0** | Titre `454108E4`, média `6CCD3565`, version `0.0.0.3`, région PAL, chiffrement AES, compression LZX, bibliothèques importées `xam.xex` et `xboxkrnl.exe` (2.0.9328.0, minimale 2.0.8955.0), champs de chargement |
-| C0.4 — Rien de propriétaire partagé ni dans `/nix/store` | **Non vérifié** | Le rapport partagé ne contient que des métadonnées autorisées par D-007. Mais les sorties de `check_proprietary_data.py tree` et des recherches `find` dans `/nix/store` (`J0_ISO_IDENTIFICATION.md` §5 et §6) n'ont pas été transmises. Le critère reste ouvert jusqu'à leur transmission par l'utilisateur, ou une preuve équivalente |
-| C0.5 — D-008 tranchée | **Non atteint** | D-008 reste ouverte (§6) ; bloquant pour J2 |
+| C0.1 — Format reconnu, arborescence lue entièrement | **Validé** (2026-11-22) | XGD2 ; 49 fichiers et 8 dossiers ; 0 fichier au-delà de la fin de l'image ; aucune anomalie. L'intégrité du contenu de chaque fichier n'est pas démontrée (§2.1) |
+| C0.2 — Empreintes des deux modules comparées au projet A | **Validé** (2026-11-22) | Les deux SHA-256 diffèrent de celles du projet A (§2.2) |
+| C0.3 — En-têtes en clair lus | **Validé** (2026-11-22) | Titre `454108E4`, média `6CCD3565`, version `0.0.0.3`, région PAL, chiffrement AES, compression LZX, bibliothèques importées `xam.xex` et `xboxkrnl.exe` (2.0.9328.0, minimale 2.0.8955.0), champs de chargement |
+| C0.4 — Rien de propriétaire partagé ni dans `/nix/store` | **Validé** (2026-11-22), avec la limite du §5.1 | Contrôle du rapport et recherches dans `/nix/store` exécutés sur NixOS par l'utilisateur (§5.1) |
+| C0.5 — D-008 tranchée | **En attente** | D-008 reste ouverte (§6) ; seule décision bloquante pour J2 |
 
-**J0 n'est donc pas clos** : C0.4 n'est pas vérifié et C0.5 n'est pas atteint. Vérifier
-C0.4 ne demande que des sorties de contrôle et des codes de sortie, pas de données du
-jeu.
+Les validations de C0.1 à C0.4 sont de l'utilisateur et de l'orchestrateur, consignées
+le 2026-11-22 dans la
+[discussion de la PR #4](https://github.com/mengpo1/fifa2010wc/pull/4#issuecomment-7081900363).
+**J0 n'est pas clos** : C0.5 reste en attente. La validation de C0.4 porte sur le
+contrôle des données ; elle n'autorise pas le déchiffrement des exécutables.
+
+### 5.1 Validation de C0.4 (2026-11-22)
+
+Vérifications exécutées sur NixOS par l'utilisateur. Les résultats sont repris tels qu'il
+les a rapportés (commentaire cité ci-dessus) :
+
+| Vérification (`J0_ISO_IDENTIFICATION.md` §5 et §6) | Résultat |
+|---|---|
+| `check_proprietary_data.py tree "$WC2010_PRIVATE_DIR/logs"` | `OK: 2 files checked, no proprietary data found`, code de retour 0 |
+| `find /nix/store -maxdepth 3 -type f \( -iname '*.xex' -o \( -iname '*.iso' -size +100M \) \) \| wc -l` | `0` |
+| `find /nix/store -maxdepth 1 -type f -size +100M \| wc -l` | `1` : `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude`, 290 728 968 octets |
+
+Limites :
+
+- **[H]** Le nom du seul fichier signalé suggère un paquet de Claude. **[I]** Son
+  contenu n'a pas été vérifié. **Il ne faut pas le supprimer.**
+- Ces recherches portent sur des noms, des tailles et une profondeur limitée. Elles ne
+  prouvent pas l'absence exhaustive de toute donnée propriétaire dans le magasin.
+- La validation est acceptée au regard des critères de contrôle de la feuille de route
+  (`ROADMAP.md` §4), avec ces limites. L'utilisateur l'a confirmée explicitement.
 
 ## 6. D-008 : ce qui change
 
