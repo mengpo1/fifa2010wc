@@ -117,9 +117,12 @@
     garde donc une opération cryptographique sur l'en-tête, même si les données ne sont
     pas chiffrées ;
   - [I] la qualification juridique et le pays de l'utilisateur.
-- **Options** (`ISO_REQUIREMENTS.md` §5) : O1, attente d'un avis ; O2, XEX non chiffrés
-  fournis par l'utilisateur, sans clé ni déchiffrement dans le projet ; O3, ReXGlue
-  utilisé tel quel.
+- **Options** (`ISO_REQUIREMENTS.md` §5) :
+  - O1, attente d'un avis ;
+  - O2, XEX non chiffrés fournis par l'utilisateur, **avec l'intention** que le projet
+    n'utilise ni n'embarque de clé. Ce n'est pas l'état actuel : il faudrait un correctif
+    du SDK, non réalisé (`docs/D-008_DECISION_NOTE.md` §3.3 et §3.4) ;
+  - O3, ReXGlue utilisé tel quel.
 - **Recommandation de l'audit** : O1 jusqu'à décision. J0 et J1 n'en dépendent pas.
 - **Mise à jour du 2026-11-22** : le chiffrement est constaté, la décision **reste
   ouverte**. Les options sont inchangées. Pour O2, des XEX non chiffrés ne peuvent venir
