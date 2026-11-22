@@ -4,10 +4,9 @@
 > `claude/j0-results-analysis`, issue de `main` au commit `b429667` (fusion de la PR #3).
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 >
-> Ce rapport ne s'appuie que sur les métadonnées que l'orchestrateur a transmises, issues
-> de l'exécution de l'outil J0 par l'utilisateur sur son image. Aucun fichier du jeu n'a
-> été lu, demandé, transmis ou déchiffré pour l'écrire. Aucun code n'a été généré. J2
-> n'est pas commencé.
+> Ce rapport ne s'appuie que sur les métadonnées du rapport J0 de l'utilisateur, telles
+> que l'orchestrateur les a transmises. Aucun fichier du jeu n'a été lu, demandé, transmis
+> ou déchiffré pour l'écrire. Aucun code n'a été généré. J2 n'est pas commencé.
 
 ## 1. Source des résultats
 
@@ -15,11 +14,15 @@
   fusionné sur `main` (PR #3, commit `e45dbef`). Il lit l'image en place, sans
   déchiffrement ni extraction (`docs/J0_ISO_IDENTIFICATION.md`).
 - **Exécution** : par l'utilisateur, sur sa machine NixOS, avec sa propre image.
-- **Transmission** : une synthèse des métadonnées, faite par l'orchestrateur.
-  - Ni l'image, ni les modules, ni le rapport local complet ne sont dans le dépôt.
-  - Les valeurs reprises ci-dessous (empreintes, identifiants, champs d'en-tête en clair)
-    sont autorisées par D-007.
-- **Résultat annoncé** : identification complète, sans anomalie signalée.
+- **Transmission** : les métadonnées du rapport original de l'utilisateur, en deux
+  envois de l'orchestrateur, sans qu'aucune valeur ait été redemandée :
+  - la synthèse de la mission ;
+  - les compléments de sa revue de la PR #4 (2026-11-22) : arborescence, bibliothèques
+    importées, champs de chargement.
+
+  Ni l'image, ni les modules, ni le rapport local complet ne sont dans le dépôt. Les
+  valeurs reprises ci-dessous (empreintes, identifiants, noms, tailles, adresses, champs
+  d'en-tête en clair) sont autorisées par D-007.
 
 ## 2. Résultats
 
@@ -28,7 +31,13 @@
 | Champ | Valeur | Statut |
 |---|---|---|
 | Format | XGD2 | [V] rapport J0 |
-| Identification | Complète, sans anomalie signalée | [V] rapport J0 |
+| Arborescence | 49 fichiers, 8 dossiers | [V] rapport J0 |
+| Fichiers au-delà de la fin de l'image | 0 | [V] rapport J0 |
+| Anomalies | Aucune | [V] rapport J0 |
+
+Ces résultats montrent que l'arborescence XDVDFS est lue entièrement et que l'image n'est
+pas tronquée. Ils ne démontrent **pas** l'intégrité du contenu de chaque fichier : aucune
+empreinte de référence n'existe pour les fichiers autres que les deux modules [I].
 
 ### 2.2 Modules XEX
 
@@ -38,6 +47,11 @@
 | Empreinte du projet A (disque Europe En, Es, Nl) | Différente | Différente | [V] comparaison à `ISO_REQUIREMENTS.md` §3 |
 | Chiffrement (*file format info*) | Normal (AES) | Normal (AES) | [V] en-tête en clair |
 | Compression (*file format info*) | Normale (LZX) | Normale (LZX) | [V] en-tête en clair |
+| Adresse de chargement | `0x82000000` | `0x82300000` | [V] rapport J0 (informations de sécurité) |
+| Taille de l'image chargée | 2 031 616 octets (`0x1F0000`) | 25 493 504 octets (`0x1850000`) | [V] rapport J0 |
+| Fin de l'image (chargement + taille) | `0x821F0000` | `0x83B50000` | [V] calcul |
+| Bibliothèques importées | `xam.xex`, `xboxkrnl.exe` | `xam.xex`, `xboxkrnl.exe` | [V] rapport J0 |
+| Versions des bibliothèques importées (minimale) | 2.0.9328.0 (2.0.8955.0) | 2.0.9328.0 (2.0.8955.0) | [V] rapport J0 |
 
 ### 2.3 Champs d'en-tête du titre
 
@@ -49,18 +63,16 @@
 | Version | `0.0.0.3` | [V] rapport J0, décodée selon la disposition `XEXVersion` de ReXGlue (QFE dans les 8 bits de poids faible) |
 | Approbation des bibliothèques statiques | `64` | [V] valeur brute ; analyse au §4 |
 
-Ce que la synthèse ne dit pas, et que ce rapport ne suppose pas :
+Ce que ce rapport ne suppose pas :
 
 - **[I]** La région et les langues exactes du disque (inscription de la jaquette).
-- **[I]** La version, l'identifiant de média et la région du disque du projet A. Le
-  projet A ne publie que les deux SHA-256 de ses modules et la mention « Europe (En, Es,
-  Nl) ».
-- **[I]** Les champs non repris dans la synthèse transmise : nombre de fichiers au-delà
-  de la fin de l'image, bibliothèques importées, adresses de chargement, tailles d'image,
-  points d'entrée, date d'édition de liens. Ils figurent dans le rapport local de
-  l'utilisateur.
+- **[I]** La version, l'identifiant de média, la région et la taille de l'image de
+  `fifadllzf.xex` du disque du projet A. Le projet A ne publie que les deux SHA-256 de ses
+  modules, la mention « Europe (En, Es, Nl) » et trois valeurs de disposition (§3.2).
 
 ## 3. Ce que la différence d'empreintes permet de conclure, et ce qu'elle ne permet pas
+
+### 3.1 Empreintes
 
 **Faits [V]** :
 
@@ -89,13 +101,47 @@ SHA-256 d'un fichier XEX couvre tout le fichier :
 
 Une seule de ces différences suffit à changer le SHA-256 du fichier, que le code soit
 identique ou non. **[I]** L'identité ou la différence du code machine reste donc à
-établir. Elle ne peut être tranchée ni par les empreintes des fichiers, ni par le
-déchiffrement, interdit tant que D-008 est ouverte. Les méthodes possibles sont décrites
-dans `docs/J2_PREREQUISITES.md` §3.
+établir :
 
-**Conséquence pratique [V]** : la configuration d'analyse du projet A ne peut pas être
-**supposée** valable pour ce disque. Il faut la **revalider** avant J2, ou refaire
-l'analyse si la revalidation échoue (`docs/audit/RISKS.md`, R-02).
+- les empreintes des fichiers ne permettent pas de la trancher ;
+- le déchiffrement ne la prouverait pas non plus à lui seul. Il donnerait accès à
+  l'image en clair, ce qui permettrait de comparer le code, par exemple à la
+  configuration d'analyse publiée par le projet A ;
+- **le déchiffrement reste interdit** tant que D-008 est ouverte.
+
+Les méthodes de validation sont décrites dans `docs/J2_PREREQUISITES.md` §3.
+
+### 3.2 Disposition en mémoire, comparée sans déchiffrement
+
+Le projet A publie trois valeurs de disposition dans `pc/config/default.toml` (BSD
+3-Clause) [V] : l'adresse de chargement de `default.xex`, la fin de son image et
+l'adresse de chargement de `fifadllzf.xex`.
+
+| Valeur | Disque de l'utilisateur (rapport J0) | Projet A (`pc/config/default.toml`) | Résultat |
+|---|---|---|---|
+| Chargement de `default.xex` | `0x82000000` | `0x82000000` | **Concordante** |
+| Fin de l'image de `default.xex` | `0x821F0000` (taille `0x1F0000`) | `0x821F0000` | **Concordante** |
+| Chargement de `fifadllzf.xex` | `0x82300000` | `0x82300000` | **Concordante** |
+| Taille de l'image de `fifadllzf.xex` | `0x1850000` | Non publiée dans ce fichier | Non comparable [I] |
+
+Contrôle complémentaire, sur les seules données publiques du projet A [V] : toutes les
+adresses de sa configuration d'analyse tombent dans l'image du module correspondant du
+disque de l'utilisateur. Ces fichiers sont :
+
+- `default.toml` et `default_pointers.toml` : 1 980 adresses, toutes dans
+  `[0x82000000, 0x821F0000)`. Les deux seules exceptions sont les bornes citées dans un
+  commentaire, et non des entrées ;
+- `fifadllzf.toml`, `fifadllzf_pointers.toml`, `boot_fixes.cpp` et
+  `lua_diagnostics.cpp` : 51 114 adresses, toutes dans `[0x82300000, 0x83B50000)`.
+
+Les adresses comptées sont les débuts de fonctions et les emplacements des pointeurs.
+`function_table_base` est exclue.
+
+**Portée** : ces concordances sont une condition **nécessaire, pas suffisante**. Une
+disposition différente aurait suffi à rendre invalides les adresses du projet A, et ce
+n'est pas le cas. En revanche, une même disposition ne garantit ni un même code, ni la
+validité des débuts de fonctions et des pointeurs du projet A [H]. Ni le code machine ni
+la configuration d'analyse ne sont établis comme identiques.
 
 ## 4. Valeur d'approbation `64` des bibliothèques statiques
 
@@ -158,14 +204,15 @@ Sources :
 
 | Critère | Statut | Justification |
 |---|---|---|
-| C0.1 — Format reconnu, arborescence lue entièrement | **Atteint en partie** | Format XGD2 reconnu, identification complète. Le nombre de fichiers au-delà de la fin de l'image n'est pas repris dans la synthèse transmise : à confirmer par l'utilisateur, sans transmettre de données du jeu |
+| C0.1 — Format reconnu, arborescence lue entièrement | **Atteint d'après le rapport J0** | XGD2 ; 49 fichiers et 8 dossiers ; 0 fichier au-delà de la fin de l'image ; aucune anomalie. L'intégrité du contenu de chaque fichier n'est pas démontrée (§2.1) |
 | C0.2 — Empreintes des deux modules comparées au projet A | **Atteint** | Les deux SHA-256 diffèrent de celles du projet A (§2.2) |
-| C0.3 — En-têtes en clair lus | **Atteint en partie** | Titre `454108E4`, média, version `0.0.0.3`, région PAL, chiffrement AES, compression LZX. Les bibliothèques importées ne sont pas reprises dans la synthèse |
-| C0.4 — Rien de propriétaire partagé ni dans `/nix/store` | **Atteint pour ce qui a été transmis** | Seules des métadonnées autorisées par D-007 ont été transmises. Résultats de `check_proprietary_data.py tree` et des recherches `find` (`J0_ISO_IDENTIFICATION.md` §5 et §6) : non transmis, à confirmer |
-| C0.5 — D-008 tranchée | **Non atteint** | D-008 reste ouverte (§6) |
+| C0.3 — En-têtes en clair lus | **Atteint d'après le rapport J0** | Titre `454108E4`, média `6CCD3565`, version `0.0.0.3`, région PAL, chiffrement AES, compression LZX, bibliothèques importées `xam.xex` et `xboxkrnl.exe` (2.0.9328.0, minimale 2.0.8955.0), champs de chargement |
+| C0.4 — Rien de propriétaire partagé ni dans `/nix/store` | **Non vérifié** | Le rapport partagé ne contient que des métadonnées autorisées par D-007. Mais les sorties de `check_proprietary_data.py tree` et des recherches `find` dans `/nix/store` (`J0_ISO_IDENTIFICATION.md` §5 et §6) n'ont pas été transmises. Le critère reste ouvert jusqu'à leur transmission par l'utilisateur, ou une preuve équivalente |
+| C0.5 — D-008 tranchée | **Non atteint** | D-008 reste ouverte (§6) ; bloquant pour J2 |
 
-**J0 n'est donc pas clos** : C0.5 le bloque. Les confirmations de C0.1 et C0.4 ne
-demandent que des comptes et des codes de sortie, pas de données du jeu.
+**J0 n'est donc pas clos** : C0.4 n'est pas vérifié et C0.5 n'est pas atteint. Vérifier
+C0.4 ne demande que des sorties de contrôle et des codes de sortie, pas de données du
+jeu.
 
 ## 6. D-008 : ce qui change
 

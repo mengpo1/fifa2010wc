@@ -62,6 +62,14 @@
   média, version, régions, clé de fichier chiffrée, signature) et des données chiffrées
   avec une clé propre au fichier. Un même code peut donc donner des fichiers différents
   (`J0_IDENTIFICATION.md` §3).
+- **[V]** (J0) La disposition en mémoire concorde avec les trois valeurs publiées par le
+  projet A dans `pc/config/default.toml` : `default.xex` chargé à `0x82000000`, fin de
+  son image à `0x821F0000`, `fifadllzf.xex` chargé à `0x82300000`.
+  - Toutes les adresses de la configuration d'analyse du projet A tombent dans les
+    images des modules de l'utilisateur.
+  - Condition **nécessaire, non suffisante** : ni le code ni la configuration ne sont
+    établis comme identiques (`docs/reports/J0_IDENTIFICATION.md` §3.2).
+  - La taille de l'image de `fifadllzf.xex` du projet A n'est pas publiée [I].
 - **[I]** Région, version et identifiant de média du disque du projet A (non publiés).
 - **Probabilité** : élevée qu'une revalidation soit nécessaire, puisque c'est certain.
   Probabilité d'une analyse complète à refaire : inconnue tant que le code n'est pas
@@ -74,11 +82,14 @@
   - si la revalidation échoue, l'analyse est à refaire avec les outils du projet A, qui
     restent réutilisables.
 - **Mitigation** (`docs/J2_PREREQUISITES.md` §3) :
-  - comparer d'abord, sans déchiffrement, la disposition en mémoire (adresses de
-    chargement et tailles d'image) aux valeurs publiées par le projet A, sur décision de
-    l'orchestrateur ;
-  - puis, seulement si D-008 le permet, appliquer la configuration du projet A et la
-    valider (C2.1 et contrôles ciblés) ;
+  - comparaison de la disposition en mémoire, sans déchiffrement : **faite**,
+    concordante ;
+  - puis, seulement si D-008 le permet :
+    - tests de compatibilité initiaux : C2.1 et contrôles ciblés. Ce n'est pas une
+      preuve d'identité ;
+    - validation spécifique avant toute réutilisation des adresses : régénérer avec les
+      outils du projet A ses fichiers d'analyse et exiger qu'ils soient identiques ;
+      vérifier une à une les adresses écrites à la main ;
   - ne jamais conclure sur le code à partir des seules empreintes des fichiers.
 
 ### R-07 — Fuite de ressources propriétaires
