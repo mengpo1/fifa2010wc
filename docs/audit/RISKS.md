@@ -11,7 +11,7 @@
 | ID | Risque | P | Im | Bloquant pour |
 |---|---|---|---|---|
 | R-01 | Déchiffrement des XEX et protections techniques | É | É | J2 et suivants |
-| R-02 | Version de l'ISO différente du disque Europe du projet A | M | É | J2 |
+| R-02 | Disque différent de celui du projet A : configuration d'analyse à revalider, ou à refaire (mis à jour après J0) | É | É | J2 |
 | R-03 | Rendu du jeu défectueux sur le backend Vulkan | M | É | J3, J4 |
 | R-04 | Instabilité de l'API ReXGlue, coût de transposition des correctifs | É | M | J2 |
 | R-05 | Maturité du runtime ReXGlue sous Linux pour ce jeu | M | É | J3, J4 |
@@ -36,23 +36,61 @@
 - **[V]** ReXGlue déchiffre les XEX avec des clés intégrées, à la génération de code et à
   chaque lancement. Les projets A et B reposent sur ce mécanisme ; l'outil
   `xeximage.py` du projet A contient la clé en clair.
-- **[H]** Les deux XEX du jeu sont chiffrés.
+- **[V]** (J0, 2026-11-22) Les deux modules du disque de l'utilisateur sont chiffrés en
+  AES et compressés en LZX, d'après leur en-tête en clair (*file format info*). Ce
+  n'est plus une hypothèse : toute génération de code passera par l'image en clair des
+  deux modules (`docs/reports/J0_IDENTIFICATION.md` §6).
+- **[V]** (lecture de la source de ReXGlue v0.11.0, sans exécution) Un module non chiffré
+  est accepté par `XEXImage::DecodeWith`. `XEXImage::Decode` dérive toutefois une clé de
+  session à partir des clés intégrées avant tout décodage, même pour un module non
+  chiffré.
 - **[I]** Qualification juridique dans le pays de l'utilisateur ; le pays lui-même est
   inconnu.
 - **Mitigation** : décision D-008 avant toute génération de code. Les jalons J0 et J1
-  restent possibles. Le projet ne contient jamais de clé. Détails :
+  n'en dépendent pas. Le projet ne contient jamais de clé. Détails :
   `ISO_REQUIREMENTS.md` §5.
 
-### R-02 — Version de l'ISO
+### R-02 — Disque différent de celui du projet A (mis à jour après J0, 2026-11-22)
 
 - **[V]** Le projet A n'accepte que le disque Europe (En, Es, Nl), identifié par deux
   SHA-256. Ses 17 691 lignes de configuration d'analyse sont propres à ces binaires.
-- **[I]** Version de l'ISO de l'utilisateur.
-- **Conséquence** : si la version diffère, l'analyse est à refaire (débuts de fonctions,
-  pointeurs de code, `setjmp`/`longjmp`, correctifs à adresses fixes comme
-  `boot_fixes.cpp`). Les outils restent réutilisables.
-- **Mitigation** : identifier l'ISO à J0 (procédure sans déchiffrement,
-  `ISO_REQUIREMENTS.md` §3).
+- **[V]** (J0) Le disque de l'utilisateur est un XGD2 PAL du titre `454108E4`, en
+  version `0.0.0.3`, avec l'identifiant de média `6CCD3565`. Les SHA-256 de ses deux
+  modules **diffèrent** de ceux du projet A (`docs/reports/J0_IDENTIFICATION.md`).
+- **[I]** Identité ou différence du **code machine**. La différence d'empreintes ne
+  permet pas de conclure. Le SHA-256 couvre tout le fichier : l'en-tête (identifiant de
+  média, version, régions, clé de fichier chiffrée, signature) et des données chiffrées
+  avec une clé propre au fichier. Un même code peut donc donner des fichiers différents
+  (`J0_IDENTIFICATION.md` §3).
+- **[V]** (J0) La disposition en mémoire concorde avec les trois valeurs publiées par le
+  projet A dans `pc/config/default.toml` : `default.xex` chargé à `0x82000000`, fin de
+  son image à `0x821F0000`, `fifadllzf.xex` chargé à `0x82300000`.
+  - Toutes les adresses de la configuration d'analyse du projet A tombent dans les
+    images des modules de l'utilisateur.
+  - Condition **nécessaire, non suffisante** : ni le code ni la configuration ne sont
+    établis comme identiques (`docs/reports/J0_IDENTIFICATION.md` §3.2).
+  - La taille de l'image de `fifadllzf.xex` du projet A n'est pas publiée [I].
+- **[I]** Région, version et identifiant de média du disque du projet A (non publiés).
+- **Probabilité** : élevée qu'une revalidation soit nécessaire, puisque c'est certain.
+  Probabilité d'une analyse complète à refaire : inconnue tant que le code n'est pas
+  comparé.
+- **Conséquence** :
+  - la configuration d'analyse du projet A ne peut pas être supposée valable ;
+  - il faut la revalider (débuts de fonctions, pointeurs de code, `setjmp`/`longjmp`,
+    correctifs à adresses fixes `boot_fixes.cpp` et `lua_diagnostics.cpp`,
+    `function_table_base`) ;
+  - si la revalidation échoue, l'analyse est à refaire avec les outils du projet A, qui
+    restent réutilisables.
+- **Mitigation** (`docs/J2_PREREQUISITES.md` §3) :
+  - comparaison de la disposition en mémoire, sans déchiffrement : **faite**,
+    concordante ;
+  - puis, seulement si D-008 le permet :
+    - tests de compatibilité initiaux : C2.1 et contrôles ciblés. Ce n'est pas une
+      preuve d'identité ;
+    - validation spécifique avant toute réutilisation des adresses : régénérer avec les
+      outils du projet A ses fichiers d'analyse et exiger qu'ils soient identiques ;
+      vérifier une à une les adresses écrites à la main ;
+  - ne jamais conclure sur le code à partir des seules empreintes des fichiers.
 
 ### R-07 — Fuite de ressources propriétaires
 

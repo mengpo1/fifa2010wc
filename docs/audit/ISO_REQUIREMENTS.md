@@ -86,11 +86,17 @@ l'utilisateur. Toutes les étapes ci-dessous lisent des données **en clair**.
    versionné sans contenu propriétaire) :
    - empreintes identiques à celles du projet A : la configuration d'analyse du projet A
      s'applique telle quelle ;
-   - empreintes différentes : il faut refaire l'analyse, avec les outils du projet A
-     (`autofix_codegen.py`, `find_code_pointers.py`, `find_setjmp.py`). Coût estimé de
-     quelques jours à quelques semaines [H].
+   - empreintes différentes : la configuration du projet A ne peut pas être supposée
+     valable. Elle est à revalider sur le code, sans conclure à partir des seules
+     empreintes, qui couvrent aussi l'en-tête et des données chiffrées. Si la
+     revalidation échoue, l'analyse est à refaire avec les outils du projet A
+     (`autofix_codegen.py`, `find_code_pointers.py`, `find_setjmp.py`), pour un coût
+     estimé de quelques jours à quelques semaines [H]. C'est le cas du disque de
+     l'utilisateur depuis J0 (`docs/J2_PREREQUISITES.md`).
 
-**[I]** Région et version de l'ISO de l'utilisateur : c'est la première inconnue à lever.
+**[V]** (J0, 2026-11-22) Disque XGD2, région PAL, titre `454108E4`, version `0.0.0.3`.
+Les empreintes des deux modules diffèrent de celles du projet A
+(`docs/reports/J0_IDENTIFICATION.md`).
 
 ## 4. Outils d'analyse
 
@@ -123,8 +129,9 @@ qu'après la décision D-008.
   génération de code et à chaque chargement par le runtime (§2).
 - **[V]** `tools/xeximage.py` du projet A contient la clé « retail » en clair.
 - **[V]** XenonRecomp dépend de `tiny-AES-c` pour la même opération.
-- **[H]** Les deux XEX du jeu sont chiffrés, comme la quasi-totalité des titres
-  commerciaux. À confirmer à l'étape 3.5, sans déchiffrement.
+- **[V]** (J0, 2026-11-22) Les deux XEX du disque de l'utilisateur sont chiffrés (AES)
+  et compressés (LZX), d'après leur en-tête *file format info*, lu en clair à l'étape 5
+  sans déchiffrement.
 
 ### Analyse
 
@@ -181,11 +188,17 @@ $WC2010_PRIVATE_DIR            # hors dépôt, par défaut ~/.local/share/wc2010
 
 ## 7. Inconnues à lever
 
-1. **[I]** Région, version et empreintes de l'ISO de l'utilisateur (§3).
-2. **[I]** Chiffrement effectif des deux XEX (en-tête, §3, étape 5).
+1. **[V]** (levée à J0) Région, version et empreintes de l'ISO de l'utilisateur : PAL,
+   `0.0.0.3`, empreintes différentes de celles du projet A
+   (`docs/reports/J0_IDENTIFICATION.md`). Reste **[I]** : identité du code machine avec
+   celui du projet A (`docs/J2_PREREQUISITES.md` §3).
+2. **[V]** (levée à J0) Chiffrement effectif des deux XEX : AES, avec compression LZX.
 3. **[I]** Existence d'une mise à jour du titre et pertinence de l'appliquer.
 4. **[I]** Statut juridique du déchiffrement dans le pays de l'utilisateur (§5).
-5. **[I]** Acceptation par ReXGlue d'un XEX non chiffré, pour l'option O2.
+5. **[H]** Acceptation par ReXGlue d'un XEX non chiffré, pour l'option O2. La source de
+   v0.11.0 l'accepte (`XEXImage::DecodeWith`, lu sans exécution), après une dérivation
+   de clé de session faite dans tous les cas (`XEXImage::Decode`). Ce n'est pas
+   vérifié par une exécution.
 
 ## Sources
 

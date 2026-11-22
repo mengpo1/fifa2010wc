@@ -44,6 +44,19 @@
 - Outil et procédure (préparés le 2026-11-22) : `nix run .#iso-identify`, décrit dans
   `docs/J0_ISO_IDENTIFICATION.md`. L'identification est faite par l'utilisateur, sur sa
   machine, avec sa copie.
+- **État (2026-11-22)** : identification faite. Rapport : `docs/reports/J0_IDENTIFICATION.md`.
+  - Disque XGD2 PAL, titre `454108E4`, version `0.0.0.3`.
+  - 49 fichiers, 8 dossiers, 0 fichier au-delà de la fin de l'image, aucune anomalie.
+  - Empreintes des deux modules différentes de celles du projet A.
+  - Les deux modules sont chiffrés (AES) et compressés (LZX), et importent `xam.xex` et
+    `xboxkrnl.exe` (2.0.9328.0, minimale 2.0.8955.0).
+  - La disposition en mémoire concorde avec les trois valeurs publiées par le projet A.
+    C'est une condition nécessaire, pas suffisante.
+  - Verdict « disque Europe du projet A » : **non**, au sens des empreintes. L'identité
+    du code reste inconnue.
+  - Critères : C0.1, C0.2 et C0.3 atteints d'après le rapport J0. **J0 n'est pas
+    clos** : C0.4 n'est pas vérifié, faute de sorties du contrôle de données et des
+    recherches dans `/nix/store`, et C0.5 (D-008) n'est pas atteint.
 
 ### J1 — Chaîne de compilation Linux et NixOS (sans le jeu)
 
@@ -60,8 +73,10 @@
 ### J2 — Génération de code et édition de liens
 
 - Manifeste à deux modules (`default.xex` et `fifadllzf.xex`) et configuration
-  d'analyse : celle du projet A si les empreintes concordent, sinon une analyse refaite
-  avec ses outils.
+  d'analyse : celle du projet A si elle est revalidée sur le code du disque de
+  l'utilisateur, sinon une analyse refaite avec ses outils. Les empreintes diffèrent
+  depuis J0, sans que cela prouve un code différent. Prérequis, éléments réutilisables
+  et éléments à refaire : `docs/J2_PREREQUISITES.md`.
 - Correctifs du SDK nécessaires à ce jeu transposés vers le commit retenu. Au minimum
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
   0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite.
