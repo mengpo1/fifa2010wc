@@ -9,6 +9,22 @@
 
 let
   python = pkgs.python3;
+  elfDepsCheck = "${self}/tools/check_elf_deps.sh";
+
+  # Broken ELF samples for the self-test of tools/check_elf_deps.sh, each in its own store
+  # path: the loader's error lines then start with /nix/store/, the case the first version
+  # of the C1.3 check let through (J1 review of PR #2). They are cut from or derived from
+  # an SDK library, so they hold no game data.
+  brokenElfTruncated = pkgs.runCommand "elf-sample-truncated.so" { } ''
+    head -c 64 ${rexglue-sdk}/lib/librexbase.so > "$out"
+  '';
+  brokenElfMissingNeeded =
+    pkgs.runCommand "elf-sample-missing-needed.so" { nativeBuildInputs = [ pkgs.patchelf ]; }
+      ''
+        cp ${rexglue-sdk}/lib/librexbase.so "$out"
+        chmod u+w "$out"
+        patchelf --add-needed libfifa2010wc-does-not-exist.so.1 "$out"
+      '';
 in
 {
   # The SDK itself: building it runs its unit tests (checkPhase in nix/rexglue-sdk.nix).
@@ -53,26 +69,9 @@ in
         esac
 
         echo "== Dynamic dependencies of every ELF file of the SDK" >> "$log"
-        found=0
-        for f in "$sdk"/bin/* "$sdk"/lib/*.so*; do
-          [ -f "$f" ] || continue
-          file -L "$f" | grep -q ELF || continue
-          found=$((found + 1))
-          if "$interp" --list "$f" > deps.txt 2>&1; then :; fi
-          if grep -q "not found" deps.txt; then
-            echo "unresolved dependency in $f:" >&2
-            grep "not found" deps.txt >&2
-            exit 1
-          fi
-          # Lines read "libfoo.so.1 => /nix/store/.../libfoo.so.1 (0x...)": every resolved
-          # path must be in the store, and so must a line that is a bare path (the loader).
-          if grep -E '=> /' deps.txt | grep -vE '=> /nix/store/' ||
-             grep -E '^\s*/' deps.txt | grep -vE '^\s*/nix/store/'; then
-            echo "dependency outside the store in $f" >&2
-            exit 1
-          fi
-        done
-        echo "$found ELF files, every dependency resolved inside /nix/store" >> "$log"
+        # Fails on a non-zero exit of `ld.so --list`, a dependency not found, or a path
+        # outside the store (tools/check_elf_deps.sh).
+        bash ${elfDepsCheck} "$interp" "$sdk"/bin/* "$sdk"/lib/*.so* >> "$log"
 
         echo "== Libraries opened with dlopen() are on the RUNPATH" >> "$log"
         for lib in libSDL3.so.0 librexgpu-xenos-vulkan.so; do
@@ -87,6 +86,49 @@ in
         "$sdk/bin/rexglue" --help > "$out/rexglue-help.txt" 2>&1
         echo "exit status 0" >> "$log"
         cat "$out/rexglue-help.txt" >> "$log"
+      '';
+
+  # Regression proof for the ELF check used by rexglue-cli-runs: it accepts the SDK and
+  # rejects a file the loader cannot analyse and a file with a missing dependency, both
+  # stored under /nix/store.
+  elf-deps-check-selftest =
+    pkgs.runCommand "elf-deps-check-selftest"
+      {
+        nativeBuildInputs = [
+          pkgs.patchelf
+          pkgs.file
+        ];
+      }
+      ''
+        set -euo pipefail
+        mkdir -p "$out"
+        interp=$(patchelf --print-interpreter ${rexglue-sdk}/bin/rexglue)
+
+        bash ${elfDepsCheck} "$interp" ${rexglue-sdk}/bin/* ${rexglue-sdk}/lib/*.so* \
+          > "$out/sdk.txt"
+        cat "$out/sdk.txt"
+
+        expect_failure() {
+          name=$1
+          shift
+          if bash ${elfDepsCheck} "$interp" "$@" > "$out/$name.txt" 2>&1; then
+            echo "$name: the check accepted a broken file" >&2
+            cat "$out/$name.txt" >&2
+            exit 1
+          fi
+          echo "$name: rejected as expected"
+          cat "$out/$name.txt"
+        }
+        expect_failure truncated ${brokenElfTruncated}
+        expect_failure missing-needed ${brokenElfMissingNeeded}
+        # One broken file among valid ones must still fail the whole run.
+        expect_failure mixed ${rexglue-sdk}/bin/rexglue ${brokenElfTruncated}
+
+        if bash ${elfDepsCheck} "$interp" > "$out/usage.txt" 2>&1; then
+          echo "usage: missing arguments were accepted" >&2
+          exit 1
+        fi
+        echo "usage error rejected as expected"
       '';
 
   # The CMake skeleton configures against the SDK package with the linux-amd64-release preset.
@@ -112,10 +154,13 @@ in
     };
 
   # D-007: no proprietary data among the tracked files of the repository.
-  proprietary-data-source = pkgs.runCommand "proprietary-data-source" { } ''
+  # The self-test needs git: the staged mode tests build a throwaway repository.
+  proprietary-data-source = pkgs.runCommand "proprietary-data-source" { nativeBuildInputs = [ pkgs.git ]; } ''
     set -euo pipefail
     mkdir -p "$out"
-    ${python}/bin/python3 -I ${self}/tools/test_check_proprietary_data.py > "$out/selftest.txt" 2>&1
+    ${python}/bin/python3 -I ${self}/tools/test_check_proprietary_data.py > "$out/selftest.txt" 2>&1 \
+      || { cat "$out/selftest.txt"; exit 1; }
+    tail -n 3 "$out/selftest.txt"
     ${python}/bin/python3 -I ${self}/tools/check_proprietary_data.py tree ${self} > "$out/report.txt"
     cat "$out/report.txt"
   '';

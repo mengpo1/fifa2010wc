@@ -7,6 +7,8 @@ holds a file that trips the checker. Run with `python3 -I tools/test_check_propr
 
 import importlib.util
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -105,6 +107,82 @@ class CheckerTest(unittest.TestCase):
         xex = self.write("share/x.dat", b"XEX2" + b"\0" * 64)
         self.assertEqual(checker.check_store_file(os.path.join(self.root, "lib/libfoo.so.bin"), []), [])
         self.assertTrue(checker.check_store_file(os.path.join(self.root, xex), []))
+
+
+class StagedModeTest(unittest.TestCase):
+    """The pre-commit hook must check what the commit will hold: the index, not the
+    working tree (regression test for the J1 review of PR #2)."""
+
+    XEX_SAMPLE = b"XEX2" + b"\0" * 64
+    CLEAN_SAMPLE = b"clean text\n"
+
+    def setUp(self):
+        if shutil.which("git") is None:
+            self.fail("git is required by the staged mode tests")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        # Hermetic git: no system or user configuration, no hooks.
+        self.env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                        HOME=self.root)
+        self.git("init", "-q")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def git(self, *args):
+        subprocess.run(["git", *args], cwd=self.root, env=self.env, check=True,
+                       capture_output=True)
+
+    def write(self, rel, data):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+
+    def staged_findings(self):
+        old_env = dict(os.environ)
+        os.environ.update(self.env)
+        try:
+            results, scanned = checker.check_staged(self.root, [])
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+        return results, scanned
+
+    def test_staged_data_is_caught_when_the_working_tree_is_clean(self):
+        # The defect: XEX bytes are staged, then the working copy is replaced by clean
+        # text. Reading the working tree let the XEX bytes through to the commit.
+        self.write("assets/asset.dat", self.XEX_SAMPLE)
+        self.git("add", "assets/asset.dat")
+        self.write("assets/asset.dat", self.CLEAN_SAMPLE)
+        results, scanned = self.staged_findings()
+        self.assertEqual(scanned, 1)
+        self.assertEqual([rel for rel, _ in results], ["assets/asset.dat"])
+        self.assertTrue(any("XEX executable" in f for f in results[0][1]))
+
+    def test_unstaged_working_tree_change_is_not_what_is_committed(self):
+        # The other way round: the index holds clean text; data only in the working tree
+        # is not part of this commit (repo mode and CI check tracked files later).
+        self.write("assets/asset.dat", self.CLEAN_SAMPLE)
+        self.git("add", "assets/asset.dat")
+        self.write("assets/asset.dat", self.XEX_SAMPLE)
+        results, scanned = self.staged_findings()
+        self.assertEqual(scanned, 1)
+        self.assertEqual(results, [])
+
+    def test_staged_name_rules_still_apply(self):
+        self.write("disc/game.iso", self.CLEAN_SAMPLE)
+        self.git("add", "-f", "disc/game.iso")
+        results, _ = self.staged_findings()
+        self.assertTrue(any("forbidden file type" in f for f in results[0][1]))
+
+    def test_deleted_files_are_not_checked(self):
+        self.write("a.txt", self.CLEAN_SAMPLE)
+        self.git("add", "a.txt")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "a")
+        self.git("rm", "-q", "a.txt")
+        results, scanned = self.staged_findings()
+        self.assertEqual((results, scanned), ([], 0))
 
 
 if __name__ == "__main__":

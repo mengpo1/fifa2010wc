@@ -12,15 +12,15 @@
 | Critère (`docs/ROADMAP.md` §4) | Statut | Preuve |
 |---|---|---|
 | C1.1 — Le SDK se compile depuis un dépôt propre par une seule commande Nix | **Validé** (environnement Nix sur Ubuntu) | §4.3 : `nix build .#rexglue-sdk`, code de sortie 0 |
-| C1.2 — Les tests unitaires du SDK passent | **Validé** en bac à sable Nix : Release 2 213 réussis, 0 échec, 10 sautés ; Debug 2 232 réussis, 0 échec, 2 sautés (raisons au §4.4) ; exécution « sous NixOS » non vérifiable ici (§7) | §4.4 : rapport JUnit installé avec le SDK |
-| C1.3 — `rexglue` s'exécute sans `nix-ld` ni `steam-run` | **Validé** dans le bac à sable Nix, sans aucun dossier de bibliothèques FHS ; sur un hôte NixOS réel : non vérifiable ici (§7) | §4.5 : contrôle `rexglue-cli-runs` |
-| C1.4 — Le pilote Vulkan trouve le GPU | **Non vérifiable** : pas de GPU dans cet environnement (§7). La sonde est livrée et validée sur un périphérique logiciel | §4.7 |
-| C1.5 — Aucune donnée du jeu requise ni présente | **Validé** | §4.6 : contrôles du dépôt, de la clôture Nix et du hook |
+| C1.2 — Les tests unitaires du SDK passent | **Validé** en bac à sable Nix : Release 2 213 réussis, 0 échec, 10 sautés ; Debug 2 232 réussis, 0 échec, 2 sautés (raisons au §4.4) ; validation sur un hôte NixOS réel : **restante** (§7) | §4.4 : rapport JUnit installé avec le SDK |
+| C1.3 — `rexglue` s'exécute sans `nix-ld` ni `steam-run` | **Validé** dans le bac à sable Nix, sans aucun dossier de bibliothèques FHS, avec un contrôle ELF strict (§4.10) ; validation sur un hôte NixOS réel : **restante** (§7) | §4.5 : contrôles `rexglue-cli-runs` et `elf-deps-check-selftest` |
+| C1.4 — Le pilote Vulkan trouve le GPU | **Validation matérielle restante** : pas de GPU dans cet environnement ni sur les machines de la CI, ce qui n'est pas un défaut du développement (§7). La sonde est livrée et validée sur un périphérique logiciel | §4.7 |
+| C1.5 — Aucune donnée du jeu requise ni présente | **Validé**, avec un contrôle avant commit qui lit l'index (§4.10) | §4.6 : contrôles du dépôt, de la clôture Nix et du hook |
 
 Commande de synthèse, rejouée sur l'arbre final de la branche : `nix flake check -L` →
-« all checks passed! », code de sortie 0. Les 6 contrôles sont `rexglue-sdk`,
-`rexglue-sdk-debug-tests`, `rexglue-cli-runs`, `cmake-skeleton`,
-`proprietary-data-source` et `proprietary-data-closure` ; les paquets et l'environnement
+« all checks passed! », code de sortie 0. Les 7 contrôles sont `rexglue-sdk`,
+`rexglue-sdk-debug-tests`, `rexglue-cli-runs`, `elf-deps-check-selftest`,
+`cmake-skeleton`, `proprietary-data-source` et `proprietary-data-closure` ; les paquets et l'environnement
 `devShells.default` sont évalués. La même suite a réussi en CI GitHub (§4.9). Les résultats des tests sont installés avec chaque SDK
 (`share/rexglue-sdk/test-results/`), et les rapports de contrôle sont dans les sorties
 des dérivations de contrôle.
@@ -136,8 +136,10 @@ Contrôle `rexglue-cli-runs` (`nix/checks.nix`), exécuté dans le bac à sable 
 1. il échoue si `/lib`, `/lib64`, `/usr/lib` ou `/usr/lib64` existent, ce qui prouve
    l'absence de dossier FHS et l'activité réelle du bac à sable (P-09) ;
 2. il vérifie que l'interpréteur ELF de `rexglue` est dans `/nix/store` ;
-3. il résout, avec `ld.so --list`, toutes les dépendances de chaque fichier ELF du SDK,
-   et échoue si l'une est introuvable ou hors de `/nix/store` ;
+3. il résout, avec `ld.so --list`, toutes les dépendances de chaque fichier ELF du SDK
+   (`tools/check_elf_deps.sh`), et échoue si `ld.so --list` sort avec un code non nul,
+   si une dépendance est introuvable ou si elle est hors de `/nix/store` (version stricte
+   depuis la revue, §4.10) ;
 4. il vérifie la présence de `vulkan-loader` dans le RUNPATH de `libSDL3.so.0` et de
    `librexgpu-xenos-vulkan.so`, qui chargent `libvulkan.so.1` par `dlopen` ;
 5. il exécute `rexglue --help` et exige le code de sortie 0.
@@ -151,6 +153,7 @@ correction, **toutes les étapes réussissent**. Extrait du rapport du contrôle
 bin build dev etc nix proc tmp
 no /lib, /lib64, /usr/lib or /usr/lib64
 == Interpreter: /nix/store/pagq7gjgxqbi09g0091x2cxwq2kwxyx8-glibc-2.42-103/lib/ld-linux-x86-64.so.2
+== Dynamic dependencies of every ELF file of the SDK
 21 ELF files, every dependency resolved inside /nix/store
 libSDL3.so.0: vulkan-loader on RUNPATH
 librexgpu-xenos-vulkan.so: vulkan-loader on RUNPATH
@@ -166,10 +169,10 @@ Hors bac à sable, dans `nix develop` sur l'hôte : `rexglue --version` affiche
 
 | Contrôle | Commande | Résultat |
 |---|---|---|
-| Tests du script de contrôle | `python3 -I tools/test_check_proprietary_data.py` | 12 tests, tous réussis |
+| Tests du script de contrôle | `python3 -I tools/test_check_proprietary_data.py` | 16 tests, tous réussis, dont 4 sur le mode `staged` ajoutés après la revue (§4.10) |
 | Fichiers suivis | `python3 -I tools/check_proprietary_data.py repo` | « OK: 28 files checked, no proprietary data found » (arbre final) |
-| Fichiers indexés | `python3 -I tools/check_proprietary_data.py staged` | « OK: 21 files checked, no proprietary data found » (les 21 fichiers ajoutés par J1) |
-| Source du flake (bac à sable) | contrôle `proprietary-data-source` | « OK: 28 files checked, no proprietary data found » sur l'arbre final ; les 12 tests du script passent aussi dans le bac à sable |
+| Fichiers indexés | `python3 -I tools/check_proprietary_data.py staged` | « OK: 21 files checked, no proprietary data found » (les 21 fichiers ajoutés par J1). Depuis la revue, ce mode lit le contenu de l'index (§4.10) |
+| Source du flake (bac à sable) | contrôle `proprietary-data-source` | « OK: 29 files checked, no proprietary data found » sur l'arbre final ; les 16 tests du script passent aussi dans le bac à sable (« Ran 16 tests », avec `git` fourni au contrôle) |
 | Clôture Nix (SDK, sonde) et source de ReXGlue | contrôle `proprietary-data-closure` | 276 chemins du magasin analysés : « OK: 46121 files checked, no proprietary data found » |
 | Hook pre-commit, de bout en bout | Dépôt jetable : un commit propre, puis un fichier à signature XEX sous un nom anodin, puis une `.iso` forcée (`git add -f`) | Commit propre accepté ; les deux autres refusés (code 1) ; un seul commit dans l'historique |
 | Workflow CI | `actionlint` 1.7.12 (nixpkgs épinglé) | Aucun signalement |
@@ -234,6 +237,77 @@ les lignes des tests Debug et de la première étape sont plus anciennes. Leur r
 reste établie : « all checks passed! » exige celle du contrôle
 `rexglue-sdk-debug-tests`, et la conclusion **success** du job celle de chaque étape.
 
+### 4.10 Corrections après la revue de l'orchestrateur (PR #2)
+
+La revue, « conforme sous réserves, fusion non autorisée à ce stade », relève deux
+défauts. Chacun a été reproduit avant correction, puis couvert par un test de
+non-régression.
+
+**Défaut 1 : le mode `staged` lisait l'arbre de travail (P-15).**
+
+Reproduction avant correction, dans un dépôt jetable :
+
+```bash
+printf 'XEX2\0\0\0\0' > asset.dat && git add asset.dat && printf 'clean text\n' > asset.dat
+python3 -I tools/check_proprietary_data.py staged
+```
+
+L'index contenait la signature `XEX2`, l'arbre de travail du texte propre. Résultat :
+« OK: 1 files checked », code 0 : le contenu indexé, celui qui aurait été commité,
+passait.
+
+Correction : `check_staged()` lit la liste des fichiers ajoutés, copiés, modifiés ou
+renommés dans l'index, prend l'objet de chacun avec `git ls-files --stage`, l'extrait
+avec `git cat-file blob` dans un dossier temporaire, à son chemin dans le dépôt, puis
+applique les mêmes règles qu'aux autres fichiers. Les liens symboliques et les
+sous-modules n'ont pas de contenu propre et sont ignorés.
+
+Preuve de non-régression (`tools/test_check_proprietary_data.py`, classe
+`StagedModeTest`, dépôt Git temporaire isolé de toute configuration globale) :
+
+| Test | Vérifie |
+|---|---|
+| `test_staged_data_is_caught_when_the_working_tree_is_clean` | Contenu XEX indexé, arbre de travail propre : refusé (le cas du défaut) |
+| `test_unstaged_working_tree_change_is_not_what_is_committed` | Index propre, donnée seulement dans l'arbre de travail : accepté, car ce n'est pas le contenu du commit |
+| `test_staged_name_rules_still_apply` | Une `.iso` forcée dans l'index reste refusée |
+| `test_deleted_files_are_not_checked` | Une suppression indexée n'est pas analysée |
+
+Résultat après correction : « Ran 16 tests … OK », en local et dans le bac à sable
+(`proprietary-data-source`, `git` fourni au contrôle). Le même scénario est désormais
+refusé : « asset.dat: XEX executable signature b'XEX2' at offset 0 », code 1.
+
+**Défaut 2 : le contrôle ELF masquait l'échec de `ld.so --list` (P-16).**
+
+Reproduction avant correction : un fichier ELF tronqué à 64 octets (en-tête d'une
+bibliothèque du SDK), placé dans le magasin avec `nix store add-file`. `ld.so --list`
+sort avec le code 127 (« cannot read file data »), mais l'ancienne logique l'accepte :
+la ligne d'erreur commence par `/nix/store/`, donc elle ne contient ni « not found »
+ni chemin hors du magasin. Hors du magasin, le même fichier était refusé, mais par
+hasard, par le filtre « chemin hors du magasin » : c'est pourquoi la preuve utilise des
+fichiers du magasin.
+
+Correction : `tools/check_elf_deps.sh` fait échouer un fichier dès que `ld.so --list`
+sort avec un code non nul, et affiche ce code et le message du chargeur. Il échoue aussi
+si une dépendance est introuvable ou hors de `/nix/store`, ou si aucun fichier ELF n'est
+fourni. Les 21 fichiers ELF du SDK rendent tous 0 avec `ld.so --list` (vérifié un par
+un) : aucun traitement d'exception n'est nécessaire. `rexglue-cli-runs` utilise ce
+script.
+
+Preuve de non-régression : contrôle `elf-deps-check-selftest`, sur des fichiers placés
+dans le magasin (dérivations `elf-sample-truncated.so` et `elf-sample-missing-needed.so`,
+taillées ou dérivées d'une bibliothèque du SDK, sans aucune donnée du jeu) :
+
+| Cas | Résultat |
+|---|---|
+| Les 21 fichiers ELF du SDK | Acceptés : « 21 ELF files, every dependency resolved inside /nix/store » |
+| ELF tronqué | Refusé : « exited with status 127 » |
+| Bibliothèque avec une dépendance inexistante (`patchelf --add-needed`) | Refusée : « exited with status 127 » |
+| Un fichier défectueux parmi des fichiers sains | Refusé : « FAIL: 1 of 2 ELF files » |
+| Appel sans fichier | Refusé (erreur d'usage) |
+
+Relance complète : `nix flake check -L` → « all checks passed! », code 0, en 1 min 42 s
+(les deux SDK étaient déjà construits ; seuls les contrôles modifiés ont été rejoués).
+
 ## 5. Problèmes constatés
 
 | ID | Problème | Cause | Traitement |
@@ -252,6 +326,8 @@ reste établie : « all checks passed! » exige celle du contrôle
 | P-12 | `nix flake check` copie les fichiers suivis dans `/nix/store` | Fonctionnement normal des flakes Git | Le hook pre-commit et la CI contrôlent les fichiers **avant** qu'ils ne soient suivis |
 | P-13 | L'API GitHub est bloquée depuis cet environnement (`github:` refusé) | Politique réseau de la session | Entrées en `https://releases.nixos.org/…` et `git+https://…`, également valables en CI |
 | P-14 | Échec du contrôle `proprietary-data-closure` : « Permission denied » | Défaut dans ce contrôle : `cp` gardait le mode lecture seule du fichier copié depuis le magasin, et l'ajout suivant échouait. Aucune donnée n'avait été détectée | Fichier écrit avec `cat` ; contrôle réussi ensuite |
+| P-15 | Revue de l'orchestrateur : le mode `staged` lisait l'arbre de travail, pas l'index | `check_repo_file` lisait le fichier sur disque. Après un `git add` suivi d'une modification, le hook vérifiait un autre contenu que celui du commit | Lecture des objets de l'index (`git ls-files --stage`, puis `git cat-file blob`) et tests de non-régression (§4.10) |
+| P-16 | Revue de l'orchestrateur : le contrôle ELF masquait l'échec de `ld.so --list` (`if ...; then :; fi`) | Un fichier du magasin que le chargeur ne peut pas analyser passait le contrôle : ses lignes d'erreur commencent par `/nix/store/` | Script strict `tools/check_elf_deps.sh`, contrôle `elf-deps-check-selftest` (§4.10) |
 
 ## 6. Constats utiles pour J2
 
@@ -262,7 +338,11 @@ reste établie : « all checks passed! » exige celle du contrôle
 3. La transposition des correctifs 0002 et 0003 du projet A reste à faire (J2).
 4. D-008 (déchiffrement des XEX) reste ouverte et bloque toujours J2.
 
-## 7. Tests impossibles à exécuter faute de matériel ou d'environnement adapté
+## 7. Validations matérielles restantes (tests impossibles à exécuter faute de matériel ou d'environnement adapté)
+
+Ces validations restent à faire sur du matériel adapté. Leur absence ne révèle aucun
+défaut du développement : ni ce conteneur ni les machines hébergées de la CI n'ont de
+GPU ou de NixOS.
 
 | Test | Raison | Ce qui a été fait à la place | Pour le réaliser |
 |---|---|---|---|

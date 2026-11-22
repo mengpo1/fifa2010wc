@@ -6,8 +6,11 @@ executables, content packages, game assets, C++ generated from the game, or keys
 This script looks for them by name, by size and by content signature.
 
 Modes:
-  repo     Files tracked by git in the current repository (default).
-  staged   Files staged for the next commit (used by .githooks/pre-commit).
+  repo     Files tracked by git in the current repository, as they are in the working
+           tree (default; used by CI on a clean checkout).
+  staged   Files staged for the next commit, read from the git index, that is the
+           content the commit will hold, whatever the working tree contains
+           (used by .githooks/pre-commit).
   tree DIR Every file under DIR (used by the Nix check on the flake source).
   store PATH...
            Every file under the given Nix store paths, signature rules only
@@ -23,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ALLOWLIST_PATH = os.path.join(HERE, "proprietary-data-allowlist.json")
@@ -175,9 +179,44 @@ def check_store_file(path, allowlist):
     return findings
 
 
-def git_files(args):
-    out = subprocess.run(["git", *args], check=True, capture_output=True).stdout
+def git_files(args, cwd=None):
+    out = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True).stdout
     return [p for p in out.decode("utf-8").split("\0") if p]
+
+
+def staged_entries(root):
+    """(path, mode, object id) of each file added, copied, modified or renamed in the
+    index, from `git ls-files --stage`: the blob the next commit will hold."""
+    paths = git_files(["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"], root)
+    out = subprocess.run(["git", "ls-files", "--stage", "-z", "--", *paths], cwd=root,
+                         check=True, capture_output=True).stdout if paths else b""
+    index = {}
+    for record in out.split(b"\0"):
+        if not record:
+            continue
+        meta, path = record.split(b"\t", 1)
+        mode, oid, _stage = meta.decode("ascii").split()
+        index[path.decode("utf-8")] = (mode, oid)
+    return [(p, *index[p]) for p in paths if p in index]
+
+
+def check_staged(root, allowlist):
+    """Checks the staged content, not the working tree: each blob is written from the
+    index into a temporary folder, at its repository path, then checked like a file."""
+    entries = staged_entries(root)
+    results = []
+    with tempfile.TemporaryDirectory(prefix="fifa2010wc-staged-") as tmp:
+        for rel, mode, oid in entries:
+            if mode in ("120000", "160000"):
+                continue  # symbolic link or submodule: no file content of its own
+            dest = os.path.join(tmp, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as f:
+                subprocess.run(["git", "cat-file", "blob", oid], cwd=root, stdout=f, check=True)
+            findings = check_repo_file(tmp, rel, allowlist)
+            if findings:
+                results.append((rel, findings))
+    return results, len(entries)
 
 
 def walk(root):
@@ -205,9 +244,10 @@ def main(argv):
     if mode in ("repo", "staged"):
         root = subprocess.run(["git", "rev-parse", "--show-toplevel"], check=True,
                               capture_output=True, text=True).stdout.strip()
-        os.chdir(root)
-        files = git_files(["ls-files", "-z"]) if mode == "repo" else \
-            git_files(["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"])
+        if mode == "staged":
+            results, scanned = check_staged(root, allowlist)
+            return report(results, scanned)
+        files = git_files(["ls-files", "-z"], root)
         for rel in files:
             findings = check_repo_file(root, rel, allowlist)
             if findings:
