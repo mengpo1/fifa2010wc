@@ -966,6 +966,18 @@ def write_report(path, text, protected):
         raise
 
 
+def store_source_message(source):
+    """Refusal message for a source found in /nix/store. It recommends no removal: a store
+    path is removed only after it is identified and the user decides it explicitly
+    (docs/J0_ISO_IDENTIFICATION.md §6)."""
+    return (f"error: {source} is in /nix/store, readable by every user of the machine "
+            "and pushable to a binary cache (D-007). Nothing was read or changed. Do not "
+            "remove anything on the strength of this message: first identify the store "
+            "path and check its roots and referrers, as docs/J0_ISO_IDENTIFICATION.md "
+            "section 6 explains, then remove it only after a separate, explicit decision. "
+            "Keep the disc in the private folder.")
+
+
 def main(argv):
     parser = argparse.ArgumentParser(
         prog="iso-identify", description=__doc__.split("\n\n", 1)[0])
@@ -980,10 +992,7 @@ def main(argv):
         print(f"error: {args.source} does not exist", file=sys.stderr)
         return 2
     if in_nix_store(args.source):
-        print(f"error: {args.source} is in /nix/store, readable by every user of the "
-              "machine and pushable to a binary cache (D-007). Remove it from the store "
-              "with `nix-store --delete` and keep the disc in the private folder.",
-              file=sys.stderr)
+        print(store_source_message(args.source), file=sys.stderr)
         return 2
 
     # Every check on the report paths runs before the source is read (P-18).

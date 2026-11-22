@@ -624,6 +624,53 @@ class OutputSafetyTest(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.reports)), ["keep.md", "report.md"])
         self.assertEqual(sha256_file(self.image), self.image_sha256)
 
+    def test_store_source_message_recommends_no_removal(self):
+        message = iso.store_source_message("/nix/store/abc-disc.iso")
+        self.assertIn("/nix/store/abc-disc.iso", message)
+        self.assertIn("docs/J0_ISO_IDENTIFICATION.md", message)
+        self.assertIn("section 6", message)
+        self.assertIn("explicit decision", message)
+        self.assertIn("Nothing was read or changed", message)
+        for advice in ("nix-store --delete", "--delete", "nix store delete",
+                       "nix-collect-garbage", "rm "):
+            self.assertNotIn(advice, message)
+
+    def test_source_in_the_store_is_refused_without_reading_it(self):
+        # The image stands for a source in /nix/store: the refusal is the same, exit 2,
+        # with the non-destructive message, before anything is read.
+        calls = []
+        saved_identify, saved_in_store = iso.identify, iso.in_nix_store
+        image = os.path.realpath(self.image)
+        iso.identify = lambda *a, **k: calls.append(a)
+        iso.in_nix_store = lambda path: os.path.realpath(path) == image
+        try:
+            with contextlib.redirect_stderr(io.StringIO()) as stderr, \
+                    contextlib.redirect_stdout(io.StringIO()) as stdout:
+                status = iso.main(["iso-identify", self.image])
+        finally:
+            iso.identify, iso.in_nix_store = saved_identify, saved_in_store
+        self.assertEqual(status, 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue().strip(), iso.store_source_message(self.image))
+        self.assertEqual(sha256_file(self.image), self.image_sha256)
+
+    def test_real_store_path_is_refused_and_left_untouched(self):
+        # A real file of /nix/store: the synthetic GDFX fixture of the pinned ReXGlue
+        # source (set by the Nix check). Read only by the test, to hash it.
+        source = os.environ.get("REXGLUE_SRC")
+        if not source:
+            self.skipTest("REXGLUE_SRC is not set")
+        fixture = os.path.join(source, "tests", "fixtures", "filesystem", "gdfx.iso")
+        before = sha256_file(fixture)
+        result = self.run_tool(fixture)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("section 6", result.stderr)
+        self.assertNotIn("--delete", result.stderr)
+        self.assertTrue(os.path.isfile(fixture))
+        self.assertEqual(sha256_file(fixture), before)
+
     def test_safe_reports_from_a_folder(self):
         out_md = os.path.join(self.reports, "folder.md")
         result = self.run_tool("--markdown", out_md, self.folder)
