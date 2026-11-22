@@ -219,10 +219,13 @@ grand si `logs/` contient d'autres fichiers.
 ## 6. Vérifier que rien n'est entré dans le magasin Nix
 
 `nix run` ne construit que l'outil ; l'image est ouverte à l'exécution par son chemin.
-Les deux commandes suivantes le vérifient. La seconde ne doit afficher aucune ligne. La
-première peut afficher des fichiers légitimes du magasin, par exemple un paquet
-volumineux fait d'un seul fichier : chaque ligne s'identifie avant toute action (voir
-plus bas).
+Les deux commandes suivantes **apportent des indices limités**. Elles cherchent par
+extension, par taille et jusqu'à une profondeur donnée. Elles ne prouvent donc pas, à
+elles seules, l'absence de toute ressource propriétaire dans le magasin.
+
+- La seconde ne devrait afficher aucune ligne.
+- La première peut afficher des fichiers légitimes du magasin, par exemple un paquet
+  volumineux fait d'un seul fichier.
 
 Fichiers de plus de 100 Mo à la racine du magasin (une image ajoutée par
 `nix-store --add` y serait) :
@@ -241,16 +244,27 @@ find /nix/store -maxdepth 3 -type f \( -iname '*.xex' -o \( -iname '*.iso' -size
 L'image de test synthétique de ReXGlue (`tests/fixtures/filesystem/gdfx.iso`, 80 Kio)
 n'apparaît pas, à cause du seuil de taille.
 
-Si une ligne apparaît, **ne rien supprimer sans l'avoir identifiée** :
+Si une ligne apparaît, la démarche est **non destructive**. Cette procédure ne supprime
+rien et ne modifie pas le magasin :
 
-- comparer la taille du fichier à celle de l'image, donnée par le rapport ;
-- si elles sont égales, comparer son SHA-256 (`sha256sum`) à celui de l'image, donné
-  par le rapport.
+1. **Constater** : noter le chemin et la taille du fichier signalé, sans le modifier ni
+   le déplacer.
+2. **Vérifier les indices** : comparer sa taille à celle de l'image, donnée par le
+   rapport J0. Si les tailles diffèrent, ce n'est pas une copie de l'image ; s'arrêter
+   là. Si elles sont égales, comparer son SHA-256 (`sha256sum`) à celui de l'image.
+3. **Conserver les preuves** : garder les sorties des commandes dans le dossier privé
+   (`logs/`), pour qu'une décision puisse s'appuyer dessus.
+4. **Examiner les références** : `nix-store --query --roots` sur le chemin montre ce
+   qui le retient, et `nix-store --query --referrers` ce qui en dépend. Ces deux
+   commandes lisent les métadonnées du magasin, pas le contenu du fichier.
+5. **Demander une décision séparée et explicite à l'utilisateur** avant tout retrait,
+   avec ces éléments. Un retrait n'est jamais la suite automatique d'une recherche. Il
+   passe par un mécanisme Nix approprié, par exemple le retrait de la racine qui retient
+   le chemin, puis le ramasse-miettes du magasin, après examen de ses conséquences.
 
-Seule une copie avérée de l'image ou d'un fichier du jeu se supprime, avec
-`nix-store --delete` ; `nix-store --query --roots` montre ce qui la retient. Lors de la
-validation de C0.4, la première commande a signalé un fichier sans rapport avec l'image,
-à ne pas supprimer (`docs/reports/J0_IDENTIFICATION.md` §5.1).
+Lors de la validation de C0.4, la première commande a signalé un fichier dont le nom
+suggère un paquet de Claude. Il ne faut ni le supprimer, ni l'inspecter davantage
+(`docs/reports/J0_IDENTIFICATION.md` §5.1).
 
 ## 7. Ce qu'il faut transmettre
 
