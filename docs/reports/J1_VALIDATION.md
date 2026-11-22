@@ -354,6 +354,16 @@ passent : « XamGetOverlappedResult sees the event set once the result is comple
 0,70 s, « A KeReleaseMutant by the old owner after a KeInitializeMutant is refused » en
 0,05 s.
 
+CI du commit `d31d4c2` (exécution 44992169209) : job `linux-x86_64` du 2026-11-22
+06:05:27 au 06:23:21 UTC (17 min 54 s), conclusion **success**. Le SDK Debug est
+désormais construit en dernier, et ses tests figurent dans la partie lisible du journal :
+« rexglue-sdk-debug-tests> 100% tests passed, 0 tests failed out of 2234 », en
+82,31 s, contre 269,32 s lors de l'échec. Les deux tests en cause passent : « XamGetOverlappedResult
+sees the event set once the result is complete » en 1,43 s, « A KeReleaseMutant by the
+old owner after a KeInitializeMutant is refused » en 0,07 s. Le journal affiche aussi
+« all checks passed! » ; la sonde Vulkan, informative, rend 4 (pas de GPU sur la machine
+de la CI) ; l'artefact `j1-evidence` est publié.
+
 Le SIGSEGV sous charge laisse soupçonner une condition de course dans ReXGlue lui-même
 (fil propriétaire d'un mutant réinitialisé par un autre fil), en Debug. C'est à signaler
 en amont (§6).
