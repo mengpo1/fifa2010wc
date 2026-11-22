@@ -17,15 +17,16 @@
   - Les deux modules sont chiffrés (AES) et compressés (LZX).
   - Leur disposition en mémoire **concorde** avec les trois valeurs publiées par le
     projet A (`J0_IDENTIFICATION.md` §3.2).
-- **D-008** reste ouverte. Le code machine des deux disques peut être identique ou
-  différent [I]. Ni les empreintes des fichiers, ni la disposition en mémoire ne
+- **D-008** reste ouverte. L'utilisateur a choisi la voie technique O3 le 2026-11-22,
+  sous les réserves consignées dans D-008. Le code machine des deux disques peut être
+  identique ou différent [I]. Ni les empreintes des fichiers, ni la disposition en mémoire ne
   suffisent à le dire (`J0_IDENTIFICATION.md` §3).
 
 ## 2. Prérequis bloquants
 
 | N° | Prérequis | État | Responsable |
 |---|---|---|---|
-| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Ouverte** | Orchestrateur ou utilisateur, après avis juridique |
+| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Ouverte.** O3 est choisie comme voie technique (2026-11-22). Restent ouvertes la qualification juridique des quatre actes et la décision sur la contrainte « ne pas engager de contournement » | Orchestrateur ou utilisateur, après avis juridique |
 | PJ2-2 | J0 clos : C0.5 atteint (`J0_IDENTIFICATION.md` §5) | C0.1 à C0.4 validés le 2026-11-22 ; C0.5 en attente, c'est-à-dire D-008 (PJ2-1) | Orchestrateur ou utilisateur |
 | PJ2-3 | Autorisation explicite de commencer J2 | Non donnée | Orchestrateur |
 
@@ -68,7 +69,9 @@ tombent toutes dans l'image du module correspondant du disque de l'utilisateur
 ### 3.2 Avec l'image en clair : tests de compatibilité, puis validation des adresses
 
 Seulement si D-008 permet d'obtenir l'image en clair, et dans le dossier privé de
-l'utilisateur. Le déchiffrement ne prouve rien à lui seul : il donne accès au code en
+l'utilisateur. Avec la voie O3 choisie, c'est ReXGlue qui déchiffrerait les modules dès
+l'étape A. Cette étape reste donc bloquée tant que les conditions de D-008 ne sont pas
+remplies. Le déchiffrement ne prouve rien à lui seul : il donne accès au code en
 clair, qui peut alors être comparé à ce que le projet A a publié de son propre code.
 
 **Étape A — tests de compatibilité initiaux.** Ils détectent une incompatibilité, mais

@@ -168,6 +168,10 @@ Analyse préalable à la décision (2026-11-22, ticket #8), sans décision :
 lecture du code de ReXGlue seulement : le module non chiffré est accepté, mais une clé de
 session est toujours dérivée.
 
+Choix de l'utilisateur (2026-11-22) : la voie technique **O3**. Ce n'est ni un avis
+juridique ni une autorisation de traiter les exécutables, et D-008 reste ouverte. Les
+conditions sont consignées dans `docs/DECISIONS.md`, D-008.
+
 ## 6. Organisation locale des fichiers privés
 
 Proposition (à valider, voir D-007) :

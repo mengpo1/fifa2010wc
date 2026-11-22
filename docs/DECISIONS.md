@@ -15,7 +15,7 @@
 | D-005 | C++23, CMake, Ninja, Clang ≥ 20 | Proposée |
 | D-006 | Isolation des systèmes et règles de portabilité | Proposée |
 | D-007 | Ressources propriétaires hors dépôt et hors magasin Nix | Acceptée |
-| D-008 | Déchiffrement des XEX et protections techniques | **Ouverte, bloquante pour J2** |
+| D-008 | Déchiffrement des XEX et protections techniques | **Ouverte, bloquante pour J2** ; O3 choisie comme voie technique le 2026-11-22, conditions ouvertes |
 | D-009 | Intégration NixOS (flake, SDK pur, jeu impur) | Proposée |
 | D-010 | Politique de réutilisation des projets existants | Proposée |
 | D-011 | Épinglage du SDK et série de correctifs | Acceptée (v0.11.0) |
@@ -100,7 +100,9 @@
 ## D-008 — Déchiffrement des XEX et protections techniques
 
 - **Statut** : **Ouverte, bloquante pour J2.** À trancher par l'orchestrateur ou
-  l'utilisateur, après avis juridique.
+  l'utilisateur, après avis juridique. L'utilisateur a choisi la voie technique **O3**
+  le 2026-11-22 ; la décision n'est pas close pour autant (voir « Choix de
+  l'utilisateur »).
 - **Faits** :
   - [V] ReXGlue déchiffre les XEX avec des clés intégrées, à la génération de code et à
     chaque lancement ;
@@ -138,6 +140,35 @@
   - que le SDK compilé depuis J1 contient déjà le code de déchiffrement et ses clés.
 
   Elle liste aussi les actes à faire qualifier, et ce que la décision devra consigner.
+- **Choix de l'utilisateur (2026-11-22) : O3.**
+  - Citation : « Je valide O3 ». Le choix est consigné dans le ticket #8
+    ([commentaire 7084704229](https://github.com/mengpo1/fifa2010wc/issues/8#issuecomment-7084704229)).
+    L'utilisateur a demandé qu'il soit reporté ici.
+  - **Portée** : l'utilisateur sélectionne la voie technique O3, c'est-à-dire ReXGlue
+    utilisé tel quel pour le traitement des XEX, de préférence à O2. Il accepte que le
+    déchiffrement intégré soit examiné dans le cadre du projet.
+  - **Ce que ce choix n'est pas** : une conclusion de légalité, un avis juridique, ou une
+    autorisation de traiter les exécutables ou de générer du code.
+  - **Conditions encore ouvertes avant toute exécution** :
+    - la qualification juridique des quatre actes de la note
+      (`docs/D-008_DECISION_NOTE.md` §5) : déchiffrement, recompilation, distribution
+      éventuelle, dépendance contenant des clés. Il faut aussi documenter le pays des
+      opérations et le périmètre d'utilisation, sans les inventer ;
+    - une décision explicite, après clarification juridique, sur la façon dont la
+      contrainte initiale « ne pas engager de contournement des protections
+      techniques » s'applique à cette voie ;
+    - l'accord distinct de démarrage de J2 (PJ2-3), une fois ces conditions remplies ;
+    - le maintien de D-007 : ni ISO, ni XEX, ni code généré, ni clé, ni autre ressource
+      propriétaire dans le dépôt, les journaux partagés ou le magasin Nix.
+  - **Statuts** :
+    - O3 est le choix technique de l'utilisateur ;
+    - D-008 et C0.5 ne sont **pas clôturées** : la qualification et les conditions de
+      mise en œuvre manquent ;
+    - J0 n'est pas clos, J2 n'est pas autorisé ;
+    - aucun déchiffrement, aucune génération de code.
+  - **Conséquence technique** : le correctif « sans clé » et le test synthétique
+    (`docs/D-008_DECISION_NOTE.md` §3.3) ne concernent que la voie O2. Ils ne sont pas
+    prévus.
 - **Engagement immédiat** : le dépôt ne contiendra jamais de clé ni de code de
   déchiffrement écrit par le projet.
 

@@ -4,6 +4,10 @@
 > **Ce n'est ni une décision, ni un avis juridique.** D-008 reste **ouverte et bloquante**
 > pour C0.5 et J2. Cette note réunit les éléments d'une décision explicite de
 > l'utilisateur.
+>
+> Suite (2026-11-22) : l'utilisateur a choisi la voie technique **O3**, sous les
+> réserves consignées dans `docs/DECISIONS.md` (D-008). L'analyse ci-dessous n'est pas
+> modifiée.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 >
 > Méthode :
