@@ -251,9 +251,16 @@ Les étapes 1 à 4 sont l'analyse préalable ; l'étape 5 est l'autorisation :
 
 1. **Constater** : noter le chemin et la taille du fichier signalé, sans le modifier ni
    le déplacer.
-2. **Vérifier les indices** : comparer sa taille à celle de l'image, donnée par le
-   rapport J0. Si les tailles diffèrent, ce n'est pas une copie de l'image ; s'arrêter
-   là. Si elles sont égales, comparer son SHA-256 (`sha256sum`) à celui de l'image.
+2. **Vérifier les indices** : comparer le type (extension) et la taille du fichier aux
+   valeurs de référence pertinentes du rapport J0 :
+   - pour une image, la taille et le SHA-256 de l'image ;
+   - pour un module `.xex`, la taille et le SHA-256 de `default.xex` ou de
+     `fifadllzf.xex`.
+
+   Quand une identité doit être vérifiée, comparer le SHA-256 correspondant
+   (`sha256sum`). Une taille différente de celle de l'image exclut seulement une copie
+   intégrale de cette image, **pas** toute ressource du jeu : un module `.xex`, comme
+   les autres fichiers du disque, est bien plus petit que l'image.
 3. **Conserver les preuves** : garder les sorties des commandes dans le dossier privé
    (`logs/`), pour qu'une décision puisse s'appuyer dessus.
 4. **Examiner les références** : `nix-store --query --roots` sur le chemin montre ce
