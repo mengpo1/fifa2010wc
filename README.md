@@ -23,7 +23,7 @@ nix build .#rexglue-sdk
 ```
 
 Lancer toutes les vérifications (SDK et tests, outil `rexglue`, squelette CMake, contrôle
-des données propriétaires) :
+des données propriétaires, outil d'identification de J0) :
 
 ```bash
 nix flake check -L
@@ -51,6 +51,16 @@ Activer le contrôle des données propriétaires avant chaque commit :
 
 ```bash
 git config core.hooksPath .githooks
+```
+
+## Identification de l'image du disque (jalon J0)
+
+Avant tout travail de code, chacun identifie sa propre image du disque, sans la
+déchiffrer ni l'extraire. L'image reste dans un dossier privé, hors du dépôt et hors du
+magasin Nix. Procédure complète : `docs/J0_ISO_IDENTIFICATION.md`.
+
+```bash
+nix run .#iso-identify -- --markdown "$WC2010_PRIVATE_DIR/logs/j0-identification.md" "$WC2010_PRIVATE_DIR/iso/VOTRE-IMAGE.iso"
 ```
 
 Le jeu lui-même n'est pas encore compilé : la génération de code arrive au jalon J2.

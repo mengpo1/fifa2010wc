@@ -52,7 +52,7 @@ ni les tests ni les contrôles ne lisent de fichier du jeu (D-008 reste ouverte)
 | `cmake` | 4.1.6 | Construction (CMake ≥ 3.25) |
 | `ninja` | 1.13.2 | Générateur |
 | `pkg-config` | 0.29.2 | Détection des bibliothèques par SDL3 |
-| `python3` | 3.13.18 | Scripts de construction du SDK, contrôles du projet |
+| `python3` | 3.13.18 | Scripts de construction du SDK, contrôles du projet, outil d'identification de J0 (`iso-identify`, bibliothèque standard seulement) |
 | `wayland-scanner` | 1.25.0 | Génération des protocoles Wayland pour SDL3 |
 | `autoPatchelfHook` | (nixpkgs) | Ajoute au RUNPATH les bibliothèques liées et celles chargées par `dlopen` |
 | `vulkan-headers` | 1.4.341.0 | En-têtes du pilote Vulkan Xenos |

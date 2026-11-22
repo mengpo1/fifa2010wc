@@ -48,13 +48,19 @@ dossier local.
 Objectif : savoir **avant tout travail de code** quelle version du jeu possède
 l'utilisateur. Toutes les étapes ci-dessous lisent des données **en clair**.
 
+> Mise en œuvre (préparation de J0, 2026-11-22) : les étapes 1, 2, 4, 5 et 6 sont
+> automatisées par `nix run .#iso-identify` (`tools/iso_identify.py`), qui lit les modules
+> en mémoire, sans extraction : l'étape 3 n'est plus nécessaire. Procédure :
+> `docs/J0_ISO_IDENTIFICATION.md`.
+
 1. **Format du disque.** Chercher la signature `MICROSOFT*XBOX*MEDIA` au secteur 32
    (secteurs de 2 048 octets) de la partition de jeu, aux décalages `0x0` (XDVDFS nu),
    `0x2080000` (XGD3), `0xFD90000` (XGD2) et `0x18300000` (XGD1). C'est la méthode de
    `tools/disc.py` du projet A [V].
 2. **Liste des fichiers.** Lister l'arborescence (extract-xiso `-l`, ou `disc.py list`),
    sans rien extraire.
-3. **Extraction ciblée** des deux XEX vers un dossier privé (§6).
+3. **Extraction ciblée** des deux XEX vers un dossier privé (§6). *Inutile avec l'outil de
+   J0, qui calcule les empreintes en mémoire.*
 4. **Empreintes.** Calculer le SHA-256 de `default.xex` et de `fifadllzf.xex`, puis les
    comparer à celles du disque Europe (En, Es, Nl) publiées par le projet A [V] :
 
@@ -65,7 +71,9 @@ l'utilisateur. Toutes les étapes ci-dessous lisent des données **en clair**.
 
 5. **En-têtes XEX en clair** (magie `XEX2`, en-têtes optionnels) [V] (format lu par
    `tools/xexinfo.py` du projet A) :
-   - *execution info* (`0x000183FF`) : identifiant du titre (attendu : `454108E4`,
+   - *execution info* (`0x00040006` ; correction du 2026-11-22 : l'audit indiquait
+     `0x000183FF`, qui est l'en-tête *original PE name*, d'après
+     `include/rex/kernel/types/xex.h` de ReXGlue v0.11.0 [V]) : identifiant du titre (attendu : `454108E4`,
      identifiant visible dans l'adresse de la fiche Xbox Marketplace et dans les chemins
      de contenu du projet B [V]), identifiant du média, version, version de base,
      numéro de disque ;

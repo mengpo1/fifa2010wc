@@ -1,5 +1,5 @@
 {
-  description = "fifa2010wc: native Linux build infrastructure (milestone J1, no game data)";
+  description = "fifa2010wc: native Linux build infrastructure (J1) and disc identification (J0), no game data";
 
   inputs = {
     # NixOS 26.05 channel release 26.05.14894.ab5c18fdedfc (nixpkgs ab5c18fdedfc8f9bbc9d773f10a540790e2787a7),
@@ -38,17 +38,33 @@
         ];
         text = ''exec python3 -I ${./tools/vulkan_probe.py} "$@"'';
       };
+
+      # J0: identifies the user's disc image from its plaintext metadata, without
+      # decrypting or extracting anything (docs/J0_ISO_IDENTIFICATION.md). The image is a
+      # run time argument: it is opened in place and never enters the store.
+      iso-identify = pkgs.writeShellApplication {
+        name = "fifa2010wc-iso-identify";
+        runtimeInputs = [ pkgs.python3 ];
+        text = ''exec python3 -I ${./tools/iso_identify.py} "$@"'';
+      };
     in
     {
       packages.${system} = {
-        inherit rexglue-sdk vulkan-probe;
+        inherit rexglue-sdk vulkan-probe iso-identify;
         default = rexglue-sdk;
       };
 
-      apps.${system}.vulkan-probe = {
-        type = "app";
-        program = "${vulkan-probe}/bin/fifa2010wc-vulkan-probe";
-        meta.description = "List Vulkan devices and the features ReXGlue requires";
+      apps.${system} = {
+        vulkan-probe = {
+          type = "app";
+          program = "${vulkan-probe}/bin/fifa2010wc-vulkan-probe";
+          meta.description = "List Vulkan devices and the features ReXGlue requires";
+        };
+        iso-identify = {
+          type = "app";
+          program = "${iso-identify}/bin/fifa2010wc-iso-identify";
+          meta.description = "Identify the disc image from its plaintext metadata (J0)";
+        };
       };
 
       checks.${system} = import ./nix/checks.nix {
@@ -58,6 +74,7 @@
           rexglue-src
           rexglue-sdk
           vulkan-probe
+          iso-identify
           ;
       };
 
