@@ -224,7 +224,7 @@
     pas une attestation de conformité juridique. Pour la clôture de J0, voir
     `docs/reports/J0_IDENTIFICATION.md` §5 ;
   - **PJ2-1** est levé au même titre (`docs/J2_PREREQUISITES.md` §2) ;
-  - **PJ2-3 n'est pas donné** : cette décision ne lance pas J2. Aucun XEX n'est traité,
+  - **L'autorisation PJ2-3 n'est pas donnée** : cette décision ne lance pas J2. Aucun XEX n'est traité,
     aucun code n'est généré, rien n'est déchiffré ;
   - **R-01** reste un risque élevé (`docs/audit/RISKS.md`).
 - **Éléments de droit** : les sources officielles sont listées aux §9.2 et §10 de

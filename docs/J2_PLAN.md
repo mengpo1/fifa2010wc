@@ -1,8 +1,8 @@
 # Plan du jalon J2 — génération de code et édition de liens
 
 > Préparé le 2026-11-22 pour le ticket [#12](https://github.com/mengpo1/fifa2010wc/issues/12).
-> **Ce plan n'autorise aucune exécution, et ne commence pas J2.** PJ2-3, l'autorisation
-> de commencer J2, n'est pas donné. Chaque phase demande sa propre autorisation
+> **Ce plan n'autorise aucune exécution, et ne commence pas J2.** L'autorisation de
+> commencer J2 (PJ2-3) n'est pas donnée. Chaque phase demande sa propre autorisation
 > explicite (§2).
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
@@ -19,7 +19,7 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 | J0 | Clos : C0.1 à C0.5 atteints | `reports/J0_IDENTIFICATION.md` §5.2 |
 | PJ2-1 | Levé au plan de la gouvernance, sans certification juridique | `J2_PREREQUISITES.md` §2 |
 | PJ2-2 | Atteint | `J2_PREREQUISITES.md` §2 |
-| PJ2-3 | **Non donné** | `J2_PREREQUISITES.md` §2 |
+| PJ2-3 | **Non donnée** | `J2_PREREQUISITES.md` §2 |
 
 **Règles qui valent pour toutes les étapes** :
 
@@ -45,7 +45,7 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 |---|---|---|---|
 | **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A |
 | **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9 |
-| **PB-0** | Avant la phase B | Porteur du projet | **PJ2-3 exprès**, PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), source de l'image décidée (`J2_PREREQUISITES.md` §3.3) |
+| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse**, PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), source de l'image décidée (`J2_PREREQUISITES.md` §3.3) |
 | **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0 |
 | **PB-2** | Après le contrôle de compatibilité (B2) | Orchestrateur, puis porteur du projet | Validation des adresses ou nouvelle analyse |
 | **PB-3** | Avant de versionner un fichier tiré du disque | Orchestrateur, puis porteur du projet | Seules des adresses et des métadonnées, autorisées par D-007, après le contrôle des données |
@@ -132,10 +132,18 @@ décision explicite) :
   - un script qui vérifie le confinement de `$WC2010_PRIVATE_DIR` (CP-1). Il refuse un
     dossier situé dans le dépôt ou dans `/nix/store`, un chemin relatif et des droits
     trop larges ;
-  - une procédure écrite pour CP-3 à CP-5.
+  - un script pour CP-4 (`J2_PREREQUISITES.md` §6.1). Avant l'invocation, il vérifie les
+    destinations d'écriture. Après, il recherche les fichiers créés dans les
+    emplacements surveillés ;
+  - une procédure écrite pour CP-3 et CP-5.
 - **Critère de sortie** : des tests sur des arborescences synthétiques, dans
-  `nix flake check`. L'un d'eux montre que le script refuse un dossier privé placé dans le
-  dépôt.
+  `nix flake check`. Ils montrent que :
+  - le script de CP-1 refuse un dossier privé placé dans le dépôt ;
+  - celui de CP-4 refuse une destination hors du dossier privé ;
+  - celui de CP-4 signale un fichier écrit dans un emplacement surveillé.
+
+  Ces tests ne prouvent pas l'absence de toute sortie ailleurs (`J2_PREREQUISITES.md`
+  §6.1).
 
 ### 3.5 A5 — Gabarit de configuration non propriétaire
 
@@ -184,7 +192,8 @@ décision explicite) :
   sur `main`.
 - Aucun fichier du jeu n'a été lu ni requis, ce que garantit une CI sans le jeu.
 - La série de correctifs ne touche ni le décodage des XEX, ni `excrypt`, ni les clés.
-- La source de l'image est décidée. À défaut, la phase B s'arrête après B2.
+- La source de l'image est décidée par le porteur du projet, sur la proposition A8. À
+  défaut, PB-0 n'est pas franchi et la phase B ne commence pas.
 - Un rapport de phase A est rédigé. Ensuite, la décision PJ2-3 appartient au porteur
   du projet.
 

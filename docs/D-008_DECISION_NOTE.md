@@ -369,7 +369,7 @@ valables, en particulier les faits techniques et l'absence de qualification juri
 | 2. Pays, périmètre, fondement | France, usage personnel, aucune distribution, DVD acheté en magasin et ISO extraite par l'utilisateur. Ce sont des déclarations (§9.1) |
 | 3. L'avis juridique | **Non obtenu**. Aucun acte n'est qualifié. Le préalable est levé par décision du porteur du projet |
 | 4. Conditions, réserves, limites de diffusion | D-007 impérative. Aucune distribution. Ni clé ni outil de déchiffrement propres au projet. Le SDK contenant des clés reste déclaré |
-| 5. Point de contrôle avant J2 | Relecture de la décision par l'orchestrateur, puis revue de la mise à jour documentaire. Le test synthétique d'O2 est sans objet. PJ2-1 est levé au plan de la gouvernance. PJ2-2 suit la clôture de J0. **PJ2-3 n'est pas donné** (`docs/J2_PREREQUISITES.md` §2) |
+| 5. Point de contrôle avant J2 | Relecture de la décision par l'orchestrateur, puis revue de la mise à jour documentaire. Le test synthétique d'O2 est sans objet. PJ2-1 est levé au plan de la gouvernance. PJ2-2 suit la clôture de J0. **L'autorisation PJ2-3 n'est pas donnée** (`docs/J2_PREREQUISITES.md` §2) |
 
 ### 10.4 Repères juridiques
 
@@ -387,5 +387,5 @@ recompilation.
 - C0.5 : atteint au sens de la gouvernance. Pour J0, voir
   `docs/reports/J0_IDENTIFICATION.md` §5.
 - PJ2-1 : levé au même titre.
-- PJ2-3 : non donné, et J2 n'est pas commencé.
+- PJ2-3 : autorisation non donnée, et J2 n'est pas commencé.
 - Aucun déchiffrement ni aucune génération de code n'ont eu lieu.

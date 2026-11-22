@@ -5,7 +5,8 @@
 > dont J2 aura besoin, ce qui peut être repris du projet A et ce qui demande une
 > nouvelle analyse.
 > Mis à jour le 2026-11-22 après la clôture de D-008 (O3 retenue) et de J0. Le plan
-> d'exécution de J2 est dans `docs/J2_PLAN.md`. **PJ2-3 n'est pas donné.**
+> d'exécution de J2 est dans `docs/J2_PLAN.md`. **L'autorisation PJ2-3 n'est pas
+> donnée.**
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Point de départ
@@ -182,18 +183,63 @@ faisable sans réécrire de méthode.
 ## 6. Contrôles requis avant de traiter des fichiers du jeu
 
 Ils conditionnent l'entrée en phase B du plan (`docs/J2_PLAN.md`). Chacun se vérifie par
-une commande, et son résultat est consigné sans contenu propriétaire. Ils sont répétés
+des commandes ou une procédure écrite, et son résultat est consigné sans contenu
+propriétaire. Ils sont répétés
 après chaque étape de la phase B qui lit ou produit des données du jeu.
 
 | N° | Contrôle | Vérification |
 |---|---|---|
 | CP-1 | **Confinement du dossier privé.** `$WC2010_PRIVATE_DIR` est défini et absolu. Il n'est ni dans le dépôt, ni dans `/nix/store`. Ses droits sont `0700`. Les sous-dossiers prévus existent, et `iso/` est en lecture seule (`ISO_REQUIREMENTS.md` §6) | `realpath`, `stat -c %a` ; `git -C "$WC2010_PRIVATE_DIR" rev-parse` doit échouer. Script à écrire en phase A (étape A4) |
 | CP-2 | **Aucune entrée du jeu dans Nix.** Ni l'ISO, ni les XEX, ni un chemin du dossier privé ne sont une entrée du flake ou d'une dérivation. Les chemins sont donnés à l'exécution seulement | Lecture de `flake.nix` et de `nix/` ; `nix flake check` sur une copie propre, sans le dossier privé |
-| CP-3 | **Magasin Nix vérifié avant et après.** Recherches de `docs/J0_ISO_IDENTIFICATION.md` §6, avec la procédure non destructive : constater, vérifier, conserver les preuves, ne rien supprimer sans décision explicite | Résultats identiques avant et après l'étape. Ces recherches sont limitées et non exhaustives (C0.4) |
-| CP-4 | **Sorties et journaux dans le dossier privé.** Toute sortie de ReXGlue (code généré, journaux par `--log-file`, caches) et des outils d'analyse est écrite sous `$WC2010_PRIVATE_DIR` | Après l'étape : `git status --porcelain` sans fichier nouveau ; aucun fichier modifié hors du dossier privé, sauf la configuration prévue |
+| CP-3 | **Magasin Nix vérifié avant et après.** Recherches de `docs/J0_ISO_IDENTIFICATION.md` §6, avec la procédure non destructive : constater, vérifier, conserver les preuves, ne rien supprimer sans décision explicite | **Aucune nouvelle correspondance suspecte imputable aux opérations du jeu.** Le magasin peut changer pour des raisons sans rapport avec le projet : les différences sont comparées et replacées dans leur contexte, sans rien supprimer. Le fichier `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude` déjà relevé n'est pas examiné plus avant. Si rien ne change, on note simplement le résultat. Ces recherches sont limitées et non exhaustives (C0.4) |
+| CP-4 | **Sorties, journaux et caches confinés.** Toute sortie de ReXGlue et des outils d'analyse est écrite sous `$WC2010_PRIVATE_DIR` : code généré, journal par `--log-file`, caches, fichiers temporaires | Un contrôle avant l'invocation, puis un contrôle après (§6.1). `git status --porcelain` n'en est qu'un complément |
 | CP-5 | **Aucun contenu du jeu dans ce qui est partagé.** Un journal ou un rapport n'est partagé qu'après relecture. Il ne contient ni clé, ni vidage mémoire, ni code généré, ni chaînes ou ressources du jeu au-delà de quelques lignes de contexte | `check_proprietary_data.py tree` sur le dossier de ce qui est partagé, puis relecture ; aucun envoi en CI |
 | CP-6 | **Dépôt protégé.** Le crochet de pré-commit est actif et le dépôt est propre | `git config core.hooksPath` vaut `.githooks` ; `check_proprietary_data.py repo` et `staged` passent |
 | CP-7 | **Pas d'identité présumée avec le projet A.** Sa configuration n'est qu'une entrée de test tant que la validation des adresses (§3.2) n'est pas faite | Aucun fichier d'adresses du projet A n'est repris dans le dépôt avant cette validation |
+
+### 6.1 CP-4 en détail : confinement des sorties
+
+**Avant chaque invocation** :
+
+1. **Lister toutes les destinations d'écriture de la commande** :
+   - le dossier de sortie du code généré et le fichier `--log-file` ;
+   - les caches et les fichiers temporaires ;
+   - le répertoire de travail courant ;
+   - les chemins relatifs du fichier de configuration.
+
+   Ce que ReXGlue écrit, et où, sera établi par l'inventaire A1 de `docs/J2_PLAN.md`. Ce
+   n'est pas encore connu [I].
+2. Résoudre chaque destination en **chemin canonique**, liens symboliques compris
+   (`realpath -m`).
+3. Exiger que chacune soit **sous `$WC2010_PRIVATE_DIR`**, dossier lui-même vérifié par
+   CP-1.
+4. Lancer la commande depuis un **répertoire de travail du dossier privé**. Diriger aussi
+   vers des sous-dossiers du dossier privé :
+   - `TMPDIR` ;
+   - `XDG_DATA_HOME` et `XDG_CONFIG_HOME` : [V] le SDK y place ses dossiers d'utilisateur,
+     et à défaut sous `~/.local/share` et `~/.config` (`docs/J2_PLAN.md` §3.1) ;
+   - `XDG_CACHE_HOME`, par précaution.
+
+**Après chaque invocation** :
+
+1. Juste avant l'invocation, **créer un fichier repère** dans le dossier privé.
+2. Ensuite, rechercher les **fichiers créés ou modifiés depuis ce repère** dans les
+   emplacements surveillés hors du dossier privé :
+   - le dépôt ;
+   - le répertoire personnel, dont `~/.local/share`, `~/.config` et `~/.cache` ;
+   - `/tmp` et le `TMPDIR` d'origine.
+
+   Commande type, pour chaque emplacement :
+   `find <emplacement> -xdev -newer <repère> -type f -not -path "$WC2010_PRIVATE_DIR/*"`.
+3. Un fichier trouvé est **examiné localement, sans être partagé**. S'il peut contenir
+   des données du jeu, l'étape s'arrête (arrêt immédiat de `docs/J2_PLAN.md` §2). Il n'est
+   supprimé qu'après une décision explicite.
+4. `git status --porcelain`, qui ne doit montrer aucun fichier nouveau, complète ce
+   contrôle. Il ne suffit pas : il n'inspecte que le dépôt.
+
+**Limite** : ces contrôles couvrent les destinations déclarées et les emplacements
+surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs. Le script qui
+les automatise est à réaliser à l'étape A4 du plan.
 
 ## 7. Plan de J2
 
