@@ -257,6 +257,13 @@ Les étapes 1 à 4 sont l'analyse préalable ; l'étape 5 est l'autorisation :
    - pour un module `.xex`, la taille et le SHA-256 de `default.xex` ou de
      `fifadllzf.xex`.
 
+   Les tailles à comparer sont celles des **fichiers sur disque**. Elles figurent dans le
+   rapport local produit par `iso-identify`, ligne « Taille » des sections « Image » et
+   « Modules XEX ». Il ne faut pas les confondre avec la « Taille de l'image chargée »,
+   qui est la taille du module **en mémoire**. C'est aussi celle que donne le rapport de
+   synthèse versionné (`docs/reports/J0_IDENTIFICATION.md` §2.2). Elle diffère de la
+   taille du fichier.
+
    Quand une identité doit être vérifiée, comparer le SHA-256 correspondant
    (`sha256sum`). Une taille différente de celle de l'image exclut seulement une copie
    intégrale de cette image, **pas** toute ressource du jeu : un module `.xex`, comme
