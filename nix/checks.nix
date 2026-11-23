@@ -6,6 +6,7 @@
   rexglue-sdk,
   vulkan-probe,
   iso-identify,
+  private-guard,
 }:
 
 let
@@ -181,6 +182,23 @@ in
     ${iso-identify}/bin/fifa2010wc-iso-identify --help > "$out/help.txt"
   '';
 
+  # J2 step A4: the CP-1 and CP-4 controls (tools/private_guard.py), on synthetic folders
+  # only. In the build sandbox the tests run as an unprivileged user, so the full cycle
+  # (preflight, a write outside the private folder, postflight) is exercised, and the
+  # refusal of a private folder in /nix/store is tested on the store path of Python.
+  private-guard-selftest = pkgs.runCommand "private-guard-selftest" { nativeBuildInputs = [ pkgs.git ]; } ''
+    set -euo pipefail
+    mkdir -p "$out"
+    ${python}/bin/python3 -I ${self}/tools/test_private_guard.py > "$out/selftest.txt" 2>&1 \
+      || { cat "$out/selftest.txt"; exit 1; }
+    tail -n 3 "$out/selftest.txt"
+    for t in test_store_path_is_refused test_full_cycle_with_the_command_line \
+             test_folder_inside_the_repository_is_refused; do
+      grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }
+    done
+    ${private-guard}/bin/fifa2010wc-private-guard --help > "$out/help.txt"
+  '';
+
   # D-007: no proprietary data among the tracked files of the repository.
   # The self-test needs git: the staged mode tests build a throwaway repository.
   proprietary-data-source = pkgs.runCommand "proprietary-data-source" { nativeBuildInputs = [ pkgs.git ]; } ''
@@ -194,8 +212,8 @@ in
   '';
 
   # D-007: no proprietary data in the store paths this flake builds or fetches: the runtime
-  # closure of the SDK, of the Vulkan probe and of the identification tool, plus the
-  # ReXGlue source with its submodules.
+  # closure of the SDK, of the Vulkan probe, of the identification tool and of the private
+  # folder guard, plus the ReXGlue source with its submodules.
   proprietary-data-closure =
     let
       closure = pkgs.closureInfo {
@@ -203,6 +221,7 @@ in
           rexglue-sdk
           vulkan-probe
           iso-identify
+          private-guard
         ];
       };
     in
