@@ -254,7 +254,8 @@ sont des constats pour A8, pas une décision de méthode.**
 - base : `image_base + image_size` ;
 - taille : `(code_size + 0x10000) × 2`, où `0x10000` est la réserve de thunks
   (`include/rex/kernel/function_dispatcher.h:95`) ;
-- échec de l'allocation : erreur fatale.
+- échec de l'allocation : erreur fatale. *Précision d'A3 : l'allocation ne refuse pas
+  des pages déjà réservées, elle les reprend (`docs/J2_A3_FUNCTION_TABLE.md` §4.2).*
 
 Pour le disque de l'utilisateur :
 - la table de `default.xex` commencerait à `0x821F0000` ;
@@ -264,7 +265,8 @@ Pour le disque de l'utilisateur :
 
 Cette taille est **inconnue** [I] : la taille de l'image, `0x1F0000`, ne la donne pas.
 Le correctif 0003 est donc probablement encore nécessaire [H]. Il faudra le transposer
-avec une nouvelle clé ou un autre mécanisme, à établir en A3.
+avec une nouvelle clé ou un autre mécanisme, à établir en A3. *Traité en A3 :
+`docs/J2_A3_FUNCTION_TABLE.md`.*
 
 ### 5.5 Premiers constats pour A8 [H]
 

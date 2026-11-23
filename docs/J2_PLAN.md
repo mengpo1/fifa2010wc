@@ -119,7 +119,7 @@ décision explicite) :
   - En partie : 0006, dont le compteur est fourni.
   - 0002 : compatibilité à vérifier en phase B, la configuration d'abord.
   - 0008 : besoin probable, reporté à J4.
-  - 0003 : candidat pour J2, à confirmer en A3.
+  - 0003 : candidat pour J2, à confirmer en A3. *Transposé en A3 (§3.3).*
   - Non nécessaire : 0005, puisque la racine du jeu est extraite.
 
   Les correctifs ne seront écrits qu'après la validation de ces verdicts.
@@ -144,6 +144,15 @@ décision explicite) :
 - **Livrable** : le correctif, des contraintes documentées et un test synthétique.
 - **Critère de sortie** : le test passe dans la construction du SDK. La valeur
   `0x86100000` du projet A n'est pas tenue pour valide sans cette analyse.
+- **État (2026-11-23)** : correctif et analyse rédigés, soumis à la revue
+  (`docs/J2_A3_FUNCTION_TABLE.md`, `patches/rexglue-sdk/0001-function-table-base.patch`).
+  - Sans la clé, la table reste où l'amont la place.
+  - Une table déplacée doit tomber sur des pages libres : v0.11.0 ne le vérifie pas. Le
+    correctif l'alloue par une allocation exclusive, sans fenêtre entre la vérification et
+    la prise des pages (P-38), et calcule tailles et fins sur 64 bits (P-39).
+  - `0x86100000` n'est valable que si le code de `fifadllzf.xex` ne dépasse pas
+    `0x12C8000` octets [I]. `0x86C10000` l'est pour toute taille de code. Le choix
+    revient à la phase B.
 
 ### 3.4 A4 — Outils des contrôles avant traitement
 
@@ -299,7 +308,8 @@ décision explicite) :
 
 ### 4.5 B5 — Génération de code complète et édition de liens
 
-- **Action** : le manifeste à deux modules, les correctifs 0002 et 0003 transposés, et
+- **Action** : le manifeste à deux modules, les correctifs 0002 et 0003 transposés (0003 :
+  A3 ; 0002 : seulement si la configuration échoue, `docs/J2_A2_SDK_PATCHES.md` §5), et
   l'édition de liens avec `-DREXGLUE_LLD` et un RUNPATH corrigé.
 - **Critère de sortie** : C2.1 à C2.4 (`ROADMAP.md` §4) :
   - `readelf -h` montre un ELF x86-64, sans dépendance à Wine ni à Windows ;
