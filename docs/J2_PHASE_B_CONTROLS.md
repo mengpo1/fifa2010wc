@@ -173,6 +173,7 @@ surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs.
 | CP-2 | Les chemins du jeu ne sont que des arguments d'exécution. `git grep -n WC2010_PRIVATE_DIR -- '*.nix'` ne doit montrer que des commentaires ou des usages à l'exécution, et `nix flake check` passe sur une copie propre, sans le dossier privé |
 | CP-6 | Ci-dessus (§1), puis `python3 -I tools/check_proprietary_data.py staged` avant chaque commit, par le crochet |
 | CP-7 | Aucun fichier d'adresses du projet A n'entre dans le dépôt avant la validation des adresses (`docs/J2_PREREQUISITES.md` §3.2), et `git status` le confirme |
+| CP-4, une fois avant PB-0 | **Core dumps transmis par tube** (`docs/J2_A6_LINUX_GAPS.md` §5.2) : le noyau ignore `ulimit -c 0` quand `kernel.core_pattern` est un tube. Relever `sysctl kernel.core_pattern fs.suid_dumpable`, puis faire planter un shell sans rien du jeu, `bash -c 'ulimit -c 0; kill -SEGV $$'`, et vérifier avec `coredumpctl list --since=-2min` que rien n'est stocké. À défaut, le porteur du projet décide d'un réglage du système (`Storage=none ProcessSizeMax=0` dans `coredump.conf`) |
 
 ## 6. Ce qui est consigné
 

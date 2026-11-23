@@ -196,6 +196,13 @@ décision explicite) :
 - **Ticket #11** (J1-bis) : il est remplacé par la phase A (D-015). La couche Linux
   générique relève de A1, puis de A6, et rien n'est engagé sous #11.
 - **Critère de sortie** : des tests Linux sans données du jeu.
+- **État (2026-11-23)** : audit rédigé, soumis à la revue (`docs/J2_A6_LINUX_GAPS.md`,
+  ticket #21). **Aucun changement du runtime** : aucun manque ne justifie du code.
+  - Le contrôle Nix `linux-confinement` rejoue la procédure de phase B avec `rexglue vfs
+    dump` sur une image synthétique : les réglages confinent les écritures, et leur absence
+    est signalée avant et après l'étape.
+  - Restent sans correctif : l'objet de mémoire de l'invité dans `/dev/shm`, et le
+    *core dump* transmis par tube, à vérifier une fois sur la machine de l'utilisateur.
 
 ### 3.7 A7 — Essai de la chaîne sans données du jeu (facultatif)
 
