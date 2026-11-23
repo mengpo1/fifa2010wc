@@ -12,8 +12,16 @@ L'outil est `tools/private_guard.py`, empaqueté par le flake. Il a trois comman
 | Commande | Contrôle | Ce qu'elle vérifie |
 |---|---|---|
 | `check-dir` | CP-1 | Le dossier privé est absolu. Il n'est ni dans `/nix/store`, ni dans le dépôt, ni dans un dépôt git. Il appartient à l'utilisateur, en mode `0700` ou plus strict. Ses sous-dossiers existent, et les fichiers de `iso/` sont en lecture seule |
-| `preflight` | CP-1, puis CP-4 avant | Destinations, dossier de travail, `TMPDIR`, dossiers XDG et `REX_APP_ROOT` dans le dossier privé. Pas de root, masque `077`, *core dumps* désactivés. Aucun réglage de ReXGlue lu avant l'environnement, aucun `.xexp` imprévu, aucun objet `xenia_memory_*` restant |
+| `preflight` | CP-1, puis CP-4 avant | Destinations **obligatoires** (`--dest`, ou `--no-writes` pour une étape qui n'écrit rien), dossier de travail, `TMPDIR`, dossiers XDG et `REX_APP_ROOT` dans le dossier privé. Pas de root, masque `077`, *core dumps* désactivés. Aucun réglage de ReXGlue lu avant l'environnement, aucun `.xexp` imprévu, aucun objet `xenia_memory_*` restant |
 | `postflight` | CP-4 après | Fichiers créés, modifiés ou déplacés depuis le repère, hors du dossier privé, dans les emplacements surveillés. Objets `xenia_memory_*` restants. `nix store verify` du SDK et `git status` du dépôt, si on le demande |
+
+**Un contrôle qui ne peut pas s'exécuter en entier est un constat, jamais un `OK`** :
+- `/dev/shm` illisible ;
+- un emplacement surveillé absent, sauf s'il est déclaré par `--optional-watch` ;
+- un dossier ou un fichier illisible sous un emplacement surveillé.
+
+L'outil ne lit pas le contenu de ces emplacements : il ne regarde que leurs noms et leurs
+dates.
 
 Codes de sortie :
 - `0` : rien trouvé ;
@@ -96,8 +104,15 @@ mkdir -p "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$REX_A
 cd "$P"
 ```
 
-Lancer le contrôle préalable. Il écrit le repère s'il ne trouve rien. Les `--dest` et
-`--game-root` dépendent de l'étape ; l'exemple vaut pour la génération de code :
+Lancer le contrôle préalable. Il écrit le repère s'il ne trouve rien.
+
+**Options qui dépendent de l'étape :**
+- **`--dest`, obligatoire** : chaque dossier ou fichier que l'étape écrit. Une étape qui
+  n'écrit rien le déclare par `--no-writes` ;
+- **`--game-root`, requis** pour la génération de code et pour toute étape qui lit le
+  dossier du jeu. Sans lui, la recherche des `.xexp` n'a pas lieu.
+
+L'exemple vaut pour la génération de code :
 
 ```bash
 "$G" --repo "$REPO" preflight --dest "$P/generated" --game-root "$P/game" --sdk-bin "$SDK/bin" --marker "$P/logs/step.marker"
@@ -116,6 +131,12 @@ Depuis le même shell :
 
 - **Emplacements surveillés** : sans `--watch`, ce sont le dossier personnel et `/tmp`,
   plus le dépôt avec `--repo`. `/dev/shm` est toujours contrôlé.
+  - Chaque emplacement `--watch` doit exister et être lisible en entier.
+  - Un emplacement qui peut manquer sans conséquence se déclare par `--optional-watch` ;
+    son absence n'est alors qu'une note.
+- **Contrôle incomplet** : il faut l'expliquer avant de continuer, par exemple pour un
+  dossier illisible. Réduire `--watch` pour l'éviter réduit la couverture. Ce choix est
+  consigné.
 - **Fichier signalé** : on l'examine localement, sans le partager. S'il peut contenir des
   données du jeu, c'est un **arrêt immédiat** (`docs/J2_PLAN.md` §2). Il n'est supprimé
   qu'après une décision explicite.

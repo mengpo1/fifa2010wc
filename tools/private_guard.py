@@ -23,6 +23,11 @@ Commands:
               with --sdk, `nix store verify` of the SDK store path; with --repo,
               `git status` of the repository.
 
+A check that cannot run in full is a finding, never an OK: /dev/shm that cannot be
+listed, a watched place that is absent (unless declared with --optional-watch), or a
+folder or file under it that cannot be read. preflight also refuses a step that declares
+no write destination, unless --no-writes says it writes nothing.
+
 These checks cover the declared destinations and the watched places only. They do not
 prove that nothing was written anywhere else (docs/J2_PREREQUISITES.md section 6.1).
 
@@ -157,11 +162,16 @@ def xexp_files(game_root):
     return sorted(found)
 
 
-def shm_objects(shm_dir):
+def shm_findings(shm_dir):
+    """Guest memory objects left in `shm_dir`. A folder that cannot be listed is itself a
+    finding: the check could not run, which must not read as "nothing found"."""
     try:
-        return sorted(name for name in os.listdir(shm_dir) if name.startswith(SHM_PREFIX))
-    except OSError:
-        return []
+        names = os.listdir(shm_dir)
+    except OSError as exc:
+        return [f"incomplete check: cannot list {shm_dir} ({exc.strerror or exc}), so guest "
+                "memory objects cannot be ruled out"]
+    return [f"guest memory object left in {shm_dir}: {name}"
+            for name in sorted(names) if name.startswith(SHM_PREFIX)]
 
 
 def process_settings():
@@ -175,13 +185,21 @@ def process_settings():
 
 def preflight(private, dests=(), cwd=None, env=None, settings=None, repo=None, git="git",
               sdk_bin=None, game_root=None, allow_xexp=False, allowed_settings=(),
-              shm_dir="/dev/shm", home=None):
-    """CP-4, before an invocation. Returns the list of findings."""
+              shm_dir="/dev/shm", home=None, no_writes=False):
+    """CP-4, before an invocation. Returns the list of findings.
+
+    The step's write destinations are required: an empty list is a finding unless
+    `no_writes` states that the step writes nothing."""
     env = os.environ if env is None else env
     settings = process_settings() if settings is None else settings
     findings = check_dir(private, repo=repo, git=git, home=home)
     if findings and not (private and os.path.isabs(private) and os.path.isdir(private)):
         return findings
+    if not dests and not no_writes:
+        findings.append("no write destination declared: give each folder or file the step "
+                        "writes with --dest, or --no-writes for a step that writes nothing")
+    if dests and no_writes:
+        findings.append("--no-writes contradicts the declared write destinations")
     for dest in dests:
         if not within(dest, private):
             findings.append(f"write destination outside the private folder: {dest}")
@@ -208,8 +226,7 @@ def preflight(private, dests=(), cwd=None, env=None, settings=None, repo=None, g
         if not allow_xexp:
             for path in xexp_files(game_root):
                 findings.append(f"title update patch applied automatically by ReXGlue: {path}")
-    for name in shm_objects(shm_dir):
-        findings.append(f"guest memory object left in {shm_dir}: {name}")
+    findings.extend(shm_findings(shm_dir))
     return findings
 
 
@@ -229,7 +246,7 @@ def changed_since(top, marker_ns, private):
     try:
         top_dev = os.lstat(top).st_dev
     except OSError:
-        return changed, unreadable
+        return changed, [top]
     private = canonical(private)
 
     def on_error(error):
@@ -256,6 +273,7 @@ def changed_since(top, marker_ns, private):
             try:
                 st = os.lstat(path)
             except OSError:
+                unreadable.append(path)
                 continue
             if within(path, private):
                 continue
@@ -265,16 +283,25 @@ def changed_since(top, marker_ns, private):
 
 
 def postflight(private, marker, watch=(), shm_dir="/dev/shm", sdk=None, nix="nix", repo=None,
-               git="git"):
-    """CP-4, after an invocation. Returns (findings, notes)."""
+               git="git", optional=()):
+    """CP-4, after an invocation. Returns (findings, notes).
+
+    Every place in `watch` must be searched in full. A place that is absent, or a folder or
+    file under it that cannot be read, makes the check incomplete, which is a finding.
+    Only the places listed in `optional` may be absent, and that is reported as a note."""
     findings, notes = [], []
     try:
         marker_ns = os.stat(marker).st_mtime_ns
     except OSError:
         return [f"marker not found: {marker} (run preflight --marker first)"], notes
-    for top in watch:
+    optional = {canonical(path) for path in optional}
+    for top in list(watch) + sorted(optional - {canonical(t) for t in watch}):
         if not os.path.isdir(top):
-            notes.append(f"watched folder absent: {top}")
+            if canonical(top) in optional:
+                notes.append(f"optional watched folder absent: {top}")
+            else:
+                findings.append(f"incomplete check: watched folder absent or not a folder: "
+                                f"{top}")
             continue
         changed, unreadable = changed_since(top, marker_ns, private)
         for path in changed:
@@ -282,9 +309,10 @@ def postflight(private, marker, watch=(), shm_dir="/dev/shm", sdk=None, nix="nix
             if finding not in findings:
                 findings.append(finding)
         if unreadable:
-            notes.append(f"{len(unreadable)} unreadable folder(s) skipped under {top}")
-    for name in shm_objects(shm_dir):
-        findings.append(f"guest memory object left in {shm_dir}: {name}")
+            shown = ", ".join(unreadable[:5]) + (" ..." if len(unreadable) > 5 else "")
+            findings.append(f"incomplete check: {len(unreadable)} location(s) under {top} "
+                            f"could not be read: {shown}")
+    findings.extend(shm_findings(shm_dir))
     if sdk:
         try:
             result = subprocess.run([nix, "store", "verify", sdk], capture_output=True,
@@ -334,7 +362,10 @@ def main(argv):
 
     pre = sub.add_parser("preflight", help="CP-4 before an invocation")
     pre.add_argument("--dest", action="append", default=[],
-                     help="a folder or file the command will write (repeatable)")
+                     help="a folder or file the step writes (repeatable; required unless "
+                          "--no-writes)")
+    pre.add_argument("--no-writes", action="store_true",
+                     help="the step writes nothing (instead of --dest)")
     pre.add_argument("--sdk-bin", help="folder of the rexglue executable or of the game")
     pre.add_argument("--game-root", help="folder mounted as game:")
     pre.add_argument("--allow-xexp", action="store_true",
@@ -347,8 +378,10 @@ def main(argv):
     post = sub.add_parser("postflight", help="CP-4 after an invocation")
     post.add_argument("--marker", required=True, help="marker written by preflight")
     post.add_argument("--watch", action="append", default=[],
-                      help="a folder to search for new files (repeatable; default: the "
-                           "home folder and /tmp)")
+                      help="a folder to search for new files, which must exist and be "
+                           "readable (repeatable; default: the home folder and /tmp)")
+    post.add_argument("--optional-watch", action="append", default=[],
+                      help="a folder searched if it exists; its absence is only a note")
     post.add_argument("--sdk", help="SDK store path to check with nix store verify")
     post.add_argument("--nix", default="nix", help="nix command (default: nix)")
     post.add_argument("--shm-dir", default="/dev/shm", help=argparse.SUPPRESS)
@@ -366,7 +399,7 @@ def main(argv):
         findings = preflight(args.private_dir, dests=args.dest, repo=args.repo, git=args.git,
                              sdk_bin=args.sdk_bin, game_root=args.game_root,
                              allow_xexp=args.allow_xexp, allowed_settings=args.allow_settings,
-                             shm_dir=args.shm_dir)
+                             shm_dir=args.shm_dir, no_writes=args.no_writes)
         if findings:
             return report(findings)
         if args.marker:
@@ -383,7 +416,7 @@ def main(argv):
         watch = [args.repo] + watch
     findings, notes = postflight(args.private_dir, args.marker, watch=watch,
                                  shm_dir=args.shm_dir, sdk=args.sdk, nix=args.nix,
-                                 repo=args.repo, git=args.git)
+                                 repo=args.repo, git=args.git, optional=args.optional_watch)
     return report(findings, notes, ok_message="no file written outside the private folder "
                                               "in the watched places")
 

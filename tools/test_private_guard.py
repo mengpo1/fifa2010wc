@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC = importlib.util.spec_from_file_location("private_guard",
@@ -63,6 +64,8 @@ class Base(unittest.TestCase):
         return guard.check_dir(self.private if private is None else private, **kw)
 
     def preflight(self, **kw):
+        if not kw.get("no_writes"):
+            kw.setdefault("dests", [os.path.join(self.private, "generated")])
         kw.setdefault("cwd", self.private)
         kw.setdefault("env", self.env())
         kw.setdefault("settings", dict(SAFE))
@@ -216,6 +219,26 @@ class PreflightTest(Base):
         self.private = os.path.join(self.root, "absent")
         self.assertEqual(len(self.preflight()), 1)
 
+    # P-34: the write destinations are required.
+    def test_missing_destinations_are_a_finding(self):
+        self.assertTrue(has(self.preflight(dests=[]), "no write destination declared"))
+
+    def test_no_writes_replaces_the_destinations(self):
+        self.assertEqual(self.preflight(no_writes=True), [])
+
+    def test_no_writes_with_destinations_is_contradictory(self):
+        findings = self.preflight(no_writes=True,
+                                  dests=[os.path.join(self.private, "generated")])
+        self.assertTrue(has(findings, "contradicts"))
+
+    # P-32: /dev/shm that cannot be listed fails closed.
+    def test_unlistable_shm_folder_is_a_finding(self):
+        for shm in (os.path.join(self.root, "no-shm"), os.path.join(self.root, "shm-file")):
+            if shm.endswith("file"):
+                open(shm, "w").close()
+            findings = self.preflight(shm_dir=shm)
+            self.assertTrue(has(findings, f"incomplete check: cannot list {shm}"), shm)
+
 
 class PostflightTest(Base):
     def marker(self):
@@ -263,11 +286,78 @@ class PostflightTest(Base):
     def test_nothing_new_passes(self):
         self.write(os.path.join(self.home, "old.txt"))
         marker = self.marker()
-        findings, notes = guard.postflight(self.private, marker,
-                                           watch=[self.home, os.path.join(self.root, "nope")],
+        findings, notes = guard.postflight(self.private, marker, watch=[self.home],
                                            shm_dir=self.shm)
         self.assertEqual(findings, [])
-        self.assertTrue(has(notes, "watched folder absent"))
+        self.assertEqual(notes, [])
+
+    # P-33: a watched place that cannot be searched in full is a finding.
+    def test_absent_required_watch_folder_is_a_finding(self):
+        marker = self.marker()
+        absent = os.path.join(self.root, "nope")
+        findings, _ = guard.postflight(self.private, marker, watch=[self.home, absent],
+                                       shm_dir=self.shm)
+        self.assertTrue(has(findings, f"incomplete check: watched folder absent or not a "
+                                      f"folder: {absent}"))
+
+    def test_absent_optional_watch_folder_is_only_a_note(self):
+        marker = self.marker()
+        absent = os.path.join(self.root, "nope")
+        findings, notes = guard.postflight(self.private, marker, watch=[self.home],
+                                           shm_dir=self.shm, optional=[absent])
+        self.assertEqual(findings, [])
+        self.assertTrue(has(notes, "optional watched folder absent"))
+
+    def test_present_optional_watch_folder_is_searched(self):
+        extra = os.path.join(self.root, "extra")
+        os.mkdir(extra)
+        marker = self.marker()
+        self.write(os.path.join(extra, "new.bin"))
+        findings, _ = guard.postflight(self.private, marker, watch=[], shm_dir=self.shm,
+                                       optional=[extra])
+        self.assertTrue(has(findings, "new.bin"))
+
+    def test_unreadable_subfolder_is_a_finding(self):
+        locked = os.path.join(self.home, "locked")
+        os.mkdir(locked)
+        marker = self.marker()
+        real_scandir = os.scandir
+
+        def scandir(path="."):
+            if os.fspath(path) == locked:
+                raise PermissionError(13, "Permission denied", locked)
+            return real_scandir(path)
+
+        # Patched rather than chmod 000, which does not stop root.
+        with mock.patch("os.scandir", scandir):
+            findings, _ = guard.postflight(self.private, marker, watch=[self.home],
+                                           shm_dir=self.shm)
+        self.assertTrue(has(findings, "incomplete check: 1 location(s)"))
+        self.assertTrue(has(findings, locked))
+
+    def test_unreadable_file_status_is_a_finding(self):
+        target = os.path.join(self.home, "unstatable.txt")
+        self.write(target)
+        marker = self.marker()
+        real_lstat = os.lstat
+
+        def lstat(path, *args, **kwargs):
+            if os.fspath(path) == target:
+                raise PermissionError(13, "Permission denied", target)
+            return real_lstat(path, *args, **kwargs)
+
+        with mock.patch("os.lstat", lstat):
+            findings, _ = guard.postflight(self.private, marker, watch=[self.home],
+                                           shm_dir=self.shm)
+        self.assertTrue(has(findings, "incomplete check"))
+        self.assertTrue(has(findings, target))
+
+    # P-32 after the step as well.
+    def test_unlistable_shm_folder_is_a_finding_after_the_step(self):
+        marker = self.marker()
+        findings, _ = guard.postflight(self.private, marker, watch=[],
+                                       shm_dir=os.path.join(self.root, "no-shm"))
+        self.assertTrue(has(findings, "incomplete check: cannot list"))
 
     def test_left_guest_memory_object_is_found(self):
         marker = self.marker()
@@ -328,6 +418,24 @@ class CommandLineTest(Base):
         result = self.run_cli("preflight", "--shm-dir", self.shm, env=env)
         self.assertEqual(result.returncode, 1)
         self.assertIn("REX_APP_ROOT is not set", result.stdout)
+
+    def test_preflight_without_destination_fails(self):
+        env = dict(os.environ, **self.env())
+        result = subprocess.run(
+            ["sh", "-c", "umask 077; ulimit -c 0; exec \"$@\"", "sh", sys.executable, "-I",
+             os.path.join(HERE, "private_guard.py"), "--private-dir", self.private,
+             "--git", GIT, "preflight", "--shm-dir", self.shm],
+            capture_output=True, text=True, env=env, cwd=self.private)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no write destination declared", result.stdout)
+
+    def test_postflight_with_absent_watch_folder_fails(self):
+        marker = os.path.join(self.private, "logs", "marker")
+        guard.write_marker(self.private, marker)
+        result = self.run_cli("postflight", "--marker", marker, "--shm-dir", self.shm,
+                              "--watch", os.path.join(self.root, "absent"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("incomplete check", result.stdout)
 
     def test_usage_error_exit_code(self):
         self.assertEqual(self.run_cli("no-such-command").returncode, 2)
