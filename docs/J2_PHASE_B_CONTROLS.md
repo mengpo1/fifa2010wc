@@ -72,6 +72,26 @@ Contrôler le dossier privé (CP-1) :
 "$G" --repo "$REPO" check-dir
 ```
 
+Préparer le projet de génération de code (A5, `docs/J2_A5_CONFIG_TEMPLATE.md`). L'outil
+refait le contrôle CP-1, copie le gabarit du manifeste dans `project/` sans jamais écraser
+une copie existante, et crée les dossiers de sortie :
+
+```bash
+PP="$(nix build --no-link --print-out-paths .#private-project)/bin/fifa2010wc-private-project"
+```
+
+```bash
+"$PP" --repo "$REPO" init
+```
+
+La génération de code cherche les deux XEX dans `game/`, l'arborescence extraite : elle
+refuse un module hors de `game_root`. Le dossier `xex/` ne lui sert pas. Avant chaque
+génération, contrôler la copie, qui aura reçu en phase B les adresses validées :
+
+```bash
+"$PP" check
+```
+
 Contrôler le dépôt (CP-6) : le crochet doit valoir `.githooks`, et le contrôle du dépôt
 doit passer.
 
@@ -115,7 +135,7 @@ Lancer le contrôle préalable. Il écrit le repère s'il ne trouve rien.
 L'exemple vaut pour la génération de code :
 
 ```bash
-"$G" --repo "$REPO" preflight --dest "$P/generated" --game-root "$P/game" --sdk-bin "$SDK/bin" --marker "$P/logs/step.marker"
+"$G" --repo "$REPO" preflight --dest "$P/generated" --dest "$P/project/wc2010_manifest.toml" --game-root "$P/game" --sdk-bin "$SDK/bin" --marker "$P/logs/step.marker"
 ```
 
 **N'exécuter l'étape que si ce contrôle répond `OK`.** Un `.xexp` voulu se déclare par

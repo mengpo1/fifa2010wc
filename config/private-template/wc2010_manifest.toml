@@ -1,0 +1,38 @@
+# fifa2010wc: template of the ReXGlue codegen manifest (J2 step A5,
+# docs/J2_A5_CONFIG_TEMPLATE.md).
+#
+# It is never used in place. tools/private_project.py copies it into
+# $WC2010_PRIVATE_DIR/project/ and never overwrites a copy that is already there.
+# ReXGlue resolves every path relative to the folder of the manifest, so the copy only
+# needs these relative paths into the private folder: no absolute path, no path of a
+# given machine.
+#
+# It holds no address of the game (CP-7). Function starts, code pointers, setjmp and
+# longjmp, hooks and function_table_base are added to the private copy in phase B, after
+# the address validation (docs/J2_A8_ADDRESS_VALIDATION.md, docs/J2_A3_FUNCTION_TABLE.md).
+#
+# rexglue codegen rewrites [project].sdk_version in the copy after each successful run.
+
+[project]
+name = "wc2010"
+sdk_version = "0.11.0"
+# The extracted disc tree. Both XEX files must lie under it: ReXGlue refuses a module
+# outside game_root.
+game_root = "../game"
+
+[entrypoint]
+file_path = "../game/default.xex"
+# A dedicated folder: codegen deletes the files in it that look like an output it did not
+# write this time.
+out_directory_path = "../generated/default"
+includes = []
+
+# The game loads this module by its bare name. The runtime joins that name to the device
+# path of default.xex; this guest_path normalises to the same path. It is a hypothesis to
+# try in phase B, after PB-0; patch 0002 is written only if it fails
+# (docs/J2_A2_SDK_PATCHES.md §3.1 and §5).
+[[modules]]
+guest_path = "\\Device\\Harddisk0\\Partition1\\fifadllzf.xex"
+file_path = "../game/fifadllzf.xex"
+out_directory_path = "../generated/fifadllzf"
+includes = []

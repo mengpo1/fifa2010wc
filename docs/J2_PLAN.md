@@ -188,6 +188,14 @@ décision explicite) :
   - le gabarit se résout sur un dossier privé synthétique ;
   - le dépôt ne contient aucun chemin absolu ni aucune valeur propre au disque ;
   - le contrôle des données passe.
+- **État (2026-11-23)** : gabarit et outil rédigés, soumis à la revue
+  (`docs/J2_A5_CONFIG_TEMPLATE.md`, `config/private-template/wc2010_manifest.toml`,
+  `tools/private_project.py`).
+  - Les deux XEX doivent se trouver sous `game_root` : le gabarit les cherche dans
+    `game/`, et le dossier `xex/` ne sert pas à la génération.
+  - Le module porte le `guest_path` de la voie 1 de 0002, hypothèse à essayer en phase B.
+  - L'analyseur de ReXGlue lit la copie dans un dossier synthétique sans XEX, et s'arrête
+    avant de lire le jeu.
 
 ### 3.6 A6 — Couche `platform/linux`, limitée aux manques
 
