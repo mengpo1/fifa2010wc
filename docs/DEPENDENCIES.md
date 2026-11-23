@@ -36,8 +36,11 @@ une version de nixpkgs.
 | xxHash | `e626a72bc2321cd320e953a0ccf1584cad60f363` |
 
 Remarque : `excrypt` fournit l'AES avec lequel ReXGlue déchiffre les XEX. Il est compilé
-dans le SDK, mais **aucun déchiffrement n'est exécuté à J1** : aucun XEX n'est fourni, et
-ni les tests ni les contrôles ne lisent de fichier du jeu (D-008 reste ouverte).
+dans le SDK, avec les clés maîtresses intégrées dans `src/filesystem/xex.cpp`
+(`docs/D-008_DECISION_NOTE.md` §3.4). **Aucun déchiffrement n'est exécuté à J1** : aucun
+XEX n'est fourni, et ni les tests ni les contrôles ne lisent de fichier du jeu. À J1,
+D-008 était ouverte. Depuis le 2026-11-22, O3 est retenue : ce SDK est le seul moyen de
+déchiffrement du projet, et J2 n'est pas autorisé (PJ2-3).
 
 ## 3. Paquets nixpkgs (révision `ab5c18f`)
 

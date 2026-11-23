@@ -137,6 +137,8 @@ réécrire ou à isoler, sans incidence sur le code recompilé.
   la clé du disque. Voir `docs/audit/ISO_REQUIREMENTS.md` §5 et `docs/DECISIONS.md` D-008.
 - **[V]** `ppcdis.py` (capstone), `find_code_pointers.py`, `find_setjmp.py`, `xref.py`,
   `callers.py`, `autofix_codegen.py` : aides à la rétro-ingénierie, en Python, portables.
+  *Précision du 2026-11-22 : tous chargent l'image par `xeximage.load`, donc par le
+  déchiffrement de `xeximage.py` (`docs/J2_PREREQUISITES.md` §3.3).*
 - **[V]** `tools/lzxdec/lzxdec.c` : décompresseur LZX en C portable (libmspack).
 
 ### Licence

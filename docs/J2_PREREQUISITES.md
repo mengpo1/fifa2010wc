@@ -4,33 +4,42 @@
 > (`docs/reports/J0_IDENTIFICATION.md`). **Ce document ne commence pas J2.** Il dit ce
 > dont J2 aura besoin, ce qui peut être repris du projet A et ce qui demande une
 > nouvelle analyse.
+> Mis à jour le 2026-11-22 après la clôture de D-008 (O3 retenue) et de J0. Le plan
+> d'exécution de J2 est dans `docs/J2_PLAN.md`. **L'autorisation PJ2-3 n'est pas
+> donnée.**
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Point de départ
 
 - **J1** : chaîne de compilation Linux et NixOS validée et fusionnée (PR #2). C1.4 est
   validé sur le GPU de l'utilisateur.
-- **J0** : identification faite (PR #3 pour l'outil).
+- **J0** : clos le 2026-11-22. L'identification est faite (PR #3 pour l'outil), et C0.1 à
+  C0.5 sont atteints (`J0_IDENTIFICATION.md` §5.2).
   - Le disque de l'utilisateur est un XGD2 PAL du titre `454108E4`, version `0.0.0.3` :
     49 fichiers, 8 dossiers, aucune anomalie.
   - Les SHA-256 de ses deux modules **diffèrent** de ceux du projet A.
   - Les deux modules sont chiffrés (AES) et compressés (LZX).
   - Leur disposition en mémoire **concorde** avec les trois valeurs publiées par le
     projet A (`J0_IDENTIFICATION.md` §3.2).
-- **D-008** reste ouverte. L'utilisateur a choisi la voie technique O3 le 2026-11-22,
-  sous les réserves consignées dans D-008. Le code machine des deux disques peut être
-  identique ou différent [I]. Ni les empreintes des fichiers, ni la disposition en mémoire ne
-  suffisent à le dire (`J0_IDENTIFICATION.md` §3).
+- **D-008** est une décision de projet clôturée : O3 est retenue le 2026-11-22. ReXGlue
+  v0.11.0 amont déchiffrera lui-même les modules, localement. Le risque juridique
+  résiduel reste ouvert (R-01).
+- Le code machine des deux disques peut être identique ou différent [I]. Ni les
+  empreintes des fichiers, ni la disposition en mémoire ne suffisent à le dire
+  (`J0_IDENTIFICATION.md` §3). Des adresses compatibles ne permettent pas de présumer un
+  code identique.
 
 ## 2. Prérequis bloquants
 
 | N° | Prérequis | État | Responsable |
 |---|---|---|---|
-| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Ouverte.** O3 est retenue comme voie technique (2026-11-22) ; sa mise en œuvre est suspendue. Restent ouvertes la qualification juridique de trois points (déchiffrement, recompilation, dépendance contenant des clés) et la décision sur la contrainte « ne pas engager de contournement ». La distribution est exclue par le périmètre déclaré | Orchestrateur ou utilisateur, après avis juridique |
-| PJ2-2 | J0 clos : C0.5 atteint (`J0_IDENTIFICATION.md` §5) | C0.1 à C0.4 validés le 2026-11-22 ; C0.5 en attente, c'est-à-dire D-008 (PJ2-1) | Orchestrateur ou utilisateur |
-| PJ2-3 | Autorisation explicite de commencer J2 | Non donnée. L'accord personnel de l'utilisateur pour O3 (« Je l'autorise ») n'en tient pas lieu | Orchestrateur et utilisateur |
+| PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Levé au plan de la gouvernance** (2026-11-22) : décision de projet clôturée, **O3** retenue, c'est-à-dire ReXGlue v0.11.0 amont tel quel. La contrainte de mission est reformulée (D-008). **Ce n'est pas une certification juridique** : la qualification du déchiffrement, de la recompilation et du SDK contenant des clés n'est pas faite (R-01). La distribution est exclue | Porteur du projet, consigné par l'orchestrateur (ticket #8, commentaire 7086214621) |
+| PJ2-2 | J0 clos : C0.5 atteint (`J0_IDENTIFICATION.md` §5) | **Atteint** (2026-11-22) : C0.1 à C0.5 atteints, vérification au §5.2 du rapport J0 | Orchestrateur et utilisateur |
+| PJ2-3 | Autorisation explicite de commencer J2 | **Non donnée.** Elle fera l'objet d'une décision distincte. Rien de ce qui suit n'en tient lieu : ni « Je l'autorise », ni la décision O3, ni la clôture de J0, ni le ticket #12, ni le plan de J2 | Porteur du projet et orchestrateur |
 
-Aucun des travaux ci-dessous ne commence avant PJ2-3.
+Aucun fichier du jeu n'est traité avant PJ2-3, et avant les contrôles du §6. Les
+préparations sans données du jeu (phase A de `docs/J2_PLAN.md`) demandent elles aussi une
+autorisation explicite, distincte.
 
 ## 3. Établir si le code du disque est celui du projet A
 
@@ -68,14 +77,14 @@ tombent toutes dans l'image du module correspondant du disque de l'utilisateur
 
 ### 3.2 Avec l'image en clair : tests de compatibilité, puis validation des adresses
 
-Seulement si D-008 permet d'obtenir l'image en clair, et dans le dossier privé de
-l'utilisateur. Avec la voie O3 choisie, c'est ReXGlue qui déchiffrerait les modules dès
-l'étape A. Cette étape reste donc bloquée tant que les conditions de D-008 ne sont pas
-remplies. Le déchiffrement ne prouve rien à lui seul : il donne accès au code en
-clair, qui peut alors être comparé à ce que le projet A a publié de son propre code.
+Avec O3, c'est ReXGlue qui déchiffre les modules, dès le contrôle de compatibilité. Ces
+contrôles relèvent donc de la phase B du plan (`docs/J2_PLAN.md`) : ils n'ont lieu qu'après
+PJ2-3 et les contrôles du §6, dans le dossier privé de l'utilisateur. Le déchiffrement ne
+prouve rien à lui seul. Il donne accès au code en clair, qui peut alors être comparé à ce
+que le projet A a publié de son propre code.
 
-**Étape A — tests de compatibilité initiaux.** Ils détectent une incompatibilité, mais
-ne prouvent pas l'identité du code :
+**Contrôle de compatibilité (tests initiaux).** Il détecte une incompatibilité, mais ne
+prouve pas l'identité du code :
 
 1. génération de code de ReXGlue avec la configuration du projet A, sur les modules de
    l'utilisateur ;
@@ -86,17 +95,17 @@ ne prouvent pas l'identité du code :
    - les sites des correctifs du jeu (§5) contiennent les séquences d'instructions
      décrites dans leurs commentaires.
 
-Un échec à cette étape écarte la réutilisation telle quelle : nouvelle analyse (§5). Un
+Un échec à ce contrôle écarte la réutilisation telle quelle : nouvelle analyse (§5). Un
 succès **ne suffit pas** pour reprendre les milliers de pointeurs et d'adresses du projet
 A. Un analyseur peut accepter une adresse fausse, et un pointeur faux peut ne produire
 aucune erreur de génération.
 
-**Étape B — validation spécifique avant toute réutilisation des adresses.** Elle est
-exigée avant de reprendre les 663 et 17 028 lignes de pointeurs, les débuts de fonctions
-et les adresses des correctifs :
+**Validation des adresses, avant toute réutilisation.** Elle est exigée avant de
+reprendre les 663 et 17 028 lignes de pointeurs, les débuts de fonctions et les adresses
+des correctifs :
 
-1. régénérer, avec les outils du projet A, ses fichiers d'analyse à partir de l'image de
-   l'utilisateur :
+1. régénérer, avec les méthodes des outils du projet A, ses fichiers d'analyse à partir de
+   l'image de l'utilisateur. La source de cette image reste à décider (§3.3) :
    - `find_code_pointers.py` pour `*_pointers.toml` ;
    - `autofix_codegen.py` pour les débuts de fonctions ;
    - `find_setjmp.py` pour `setjmp` et `longjmp` ;
@@ -113,6 +122,33 @@ Ils établissent que la configuration d'analyse est valable pour ce disque, ce q
 au projet. Une comparaison d'images complète demanderait l'empreinte de l'image en clair
 du projet A, qui n'est pas publiée [I].
 
+### 3.3 Source de l'image en clair pour les outils d'analyse (point à décider)
+
+- **[V]** Les outils d'analyse du projet A lisent l'image en clair par `xeximage.load`,
+  qui déchiffre avec une clé écrite dans `xeximage.py`. C'est le cas de
+  `find_code_pointers.py`, `find_setjmp.py`, `autofix_codegen.py`, `ppcdis.py`, `xref.py`
+  et `callers.py`. Seuls `disc.py` et `xexinfo.py` ne l'importent pas (lecture du dépôt du
+  projet A, commit `498d18a`).
+- **[V]** `xeximage.py` est exclu (D-008, D-010). La contrainte reformulée exclut aussi
+  tout outil de déchiffrement propre au projet.
+- **[V]** ReXGlue v0.11.0 n'a aucune commande qui écrive l'image décodée d'un module. Ses
+  sous-commandes sont `init`, `codegen`, `vfs dump`, `list shim` et `recompile-tests`
+  (lecture de `src/rexglue/command/`, sans exécution).
+
+La validation des adresses ne peut donc pas utiliser les outils du projet A tels quels.
+Pistes, **à décider avant la phase B**, sans en retenir aucune ici :
+
+1. valider avec les seules sorties de la génération de code de ReXGlue : diagnostics,
+   fonctions découvertes, erreurs de validation. Ce qu'elles exposent est à établir
+   (`docs/J2_PLAN.md`, étapes A1 et A8) ;
+2. faire lire aux outils du projet A une image obtenue par une fonction du SDK, appelée
+   depuis un programme du projet. L'image décodée serait alors produite par du code du
+   projet, même si le déchiffrement reste celui du SDK. Il faut une décision explicite
+   pour dire si la contrainte reformulée le permet ;
+3. réanalyser sans la configuration du projet A, avec les seules analyses de ReXGlue.
+
+`xeximage.py` n'est pas une piste : il est exclu.
+
 ## 4. Réutilisable sans nouvelle analyse du disque
 
 | Élément | Origine | Pourquoi il ne dépend pas du disque | Statut |
@@ -121,7 +157,7 @@ du projet A, qui n'est pas publiée [I].
 | Runtime ReXGlue, pilotes Vulkan, audio et entrées SDL3 | ReXGlue v0.11.0 | Indépendants du titre | [V] |
 | Structure du manifeste : `default.xex` en point d'entrée, `fifadllzf.xex` chargé par son nom | Projet A, `pc/fifawc10_manifest.toml` | Les deux modules existent sous ces noms sur le disque de l'utilisateur, avec les mêmes adresses de chargement (§3.1) | [V] pour les noms et le chargement ; chemins à adapter au dossier privé |
 | Bibliothèques importées : `xam.xex` et `xboxkrnl.exe`, version 2.0.9328.0, minimale 2.0.8955.0 | Rapport J0 | Ce sont les services système que ReXGlue fournit | [V] noms et versions ; la liste des fonctions importées n'est pas connue avant J2 [I] |
-| Outils d'analyse en Python : `disc.py`, `xexinfo.py`, `ppcdis.py`, `find_code_pointers.py`, `find_setjmp.py`, `xref.py`, `callers.py`, `autofix_codegen.py` | Projet A, `tools/` | Ce sont des méthodes, pas des résultats ; elles s'appliquent à tout binaire, et servent aussi à la validation (§3.2, étape B) | [V] portables (audit) ; reprise avec notice (D-010). **Exclu** : `xeximage.py`, qui déchiffre (D-008) |
+| Outils d'analyse en Python : `disc.py`, `xexinfo.py`, `ppcdis.py`, `find_code_pointers.py`, `find_setjmp.py`, `xref.py`, `callers.py`, `autofix_codegen.py` | Projet A, `tools/` | Ce sont des méthodes, pas des résultats ; elles s'appliquent à tout binaire, et servent aussi à la validation des adresses (§3.2) | [V] portables (audit) ; reprise avec notice (D-010). **Exclu** : `xeximage.py`, qui déchiffre (D-008). [V] Tous sauf `disc.py` et `xexinfo.py` chargent l'image par `xeximage.load` : ils ne sont réutilisables qu'avec une autre source de l'image, à décider (§3.3) |
 | Correctifs du SDK sans adresse du jeu : 0001 (exports de la caméra USB), 0002 (module trouvé par son nom nu), 0004 (vblank), 0006 (cadence), 0007 (dialogues), 0008 (énumération des sauvegardes) | Projet A, `patches/rexglue-sdk/` | Ils modifient le SDK, pas le code du jeu | [V] sans adresse ; [H] encore utiles au même titre ; transposition vers v0.11.0 à faire (R-04, 338 commits d'écart) |
 | Réglages GPU : `execute_unclipped_draw_vs_on_cpu`, `gpu_allow_invalid_fetch_constants` | Projet A | Ils portent sur le rendu du moteur, pas sur des adresses | [H] valables pour le même moteur |
 | Savoir : Lua avec `setjmp`/`longjmp` à rediriger, fil de décodage vidéo, exports de la caméra USB | Audit (`LINUX_FEASIBILITY.md` §2.3) | Propriétés du moteur du jeu | [H] mêmes besoins ; adresses à valider (§3.2) |
@@ -131,42 +167,86 @@ du projet A, qui n'est pas publiée [I].
 
 | Élément du projet A | Valeur ou volume | Dépend de | Action |
 |---|---|---|---|
-| Débuts de fonctions ajoutés (`[functions]`, marqueur « autofix ») | Dans `pc/config/default.toml` et `fifadllzf.toml` | Adresses du code | Étape B : régénérer avec `autofix_codegen.py`, comparer, garder la sortie régénérée |
-| Pointeurs de code | 663 lignes (`default_pointers.toml`), 17 028 lignes (`fifadllzf_pointers.toml`) | Adresses du code et des données | Étape B : régénérer avec `find_code_pointers.py`, exiger l'identité |
-| `setjmp_address`, `longjmp_address` | `0x8283C680`, `0x8283C950` | Adresses du CRT dans `fifadllzf.xex` | Étape A, puis `find_setjmp.py` et vérification manuelle (étape B) |
+| Débuts de fonctions ajoutés (`[functions]`, marqueur « autofix ») | Dans `pc/config/default.toml` et `fifadllzf.toml` | Adresses du code | Validation des adresses (§3.2) : régénérer selon la méthode d'`autofix_codegen.py`, comparer, garder la sortie régénérée |
+| Pointeurs de code | 663 lignes (`default_pointers.toml`), 17 028 lignes (`fifadllzf_pointers.toml`) | Adresses du code et des données | Validation des adresses : régénérer selon la méthode de `find_code_pointers.py`, exiger l'identité |
+| `setjmp_address`, `longjmp_address` | `0x8283C680`, `0x8283C950` | Adresses du CRT dans `fifadllzf.xex` | Contrôle de compatibilité, puis méthode de `find_setjmp.py` et vérification manuelle (validation des adresses) |
 | `function_table_base` (correctif 0003) | `0x86100000` | La disposition des modules, concordante (§3.1), mais aussi des contraintes du runtime que les en-têtes ne donnent pas : taille de la table de répartition de chaque module, carte mémoire invitée de ReXGlue v0.11.0, autres réservations | **Non vérifiable par les seuls en-têtes.** À établir à J2 avec le runtime de v0.11.0, lors de la transposition du correctif 0003 |
-| `pc/fixes/boot_fixes.cpp` | Crochet sur `sub_82CBD7E0`, registre en `0x83A4648C`, emplacement `0x64` | Adresses du code et des données | Étape B : vérification manuelle ; si écart, retrouver la fonction et le registre équivalents et réécrire le crochet |
-| `pc/fixes/lua_diagnostics.cpp` | Crochet sur `sub_829655A8` (`luaD_throw`), décalages de structures Lua | Adresse de la fonction ; disposition des structures de Lua | Étape B : vérification manuelle ; les décalages sont propres à la version de Lua [H] |
+| `pc/fixes/boot_fixes.cpp` | Crochet sur `sub_82CBD7E0`, registre en `0x83A4648C`, emplacement `0x64` | Adresses du code et des données | Validation des adresses : vérification manuelle ; si écart, retrouver la fonction et le registre équivalents et réécrire le crochet |
+| `pc/fixes/lua_diagnostics.cpp` | Crochet sur `sub_829655A8` (`luaD_throw`), décalages de structures Lua | Adresse de la fonction ; disposition des structures de Lua | Validation des adresses : vérification manuelle ; les décalages sont propres à la version de Lua [H] |
 | Valeurs du manifeste | Chemins `out/game-files`, `sdk_version = "0.10.0"` | Installation du projet A | Chemins vers le dossier privé (variable d'environnement), `sdk_version` de v0.11.0 |
 
-Coût d'une nouvelle analyse, si l'étape A ou B échoue : de quelques jours à quelques
+Coût d'une nouvelle analyse, si le contrôle de compatibilité ou la validation des adresses
+échoue : de quelques jours à quelques
 semaines [H] (`ISO_REQUIREMENTS.md` §3, étape 6). Les outils du projet A la rendent
 faisable sans réécrire de méthode.
 
-## 6. Préparations sans données du jeu, après autorisation de J2
+## 6. Contrôles requis avant de traiter des fichiers du jeu
 
-Ces travaux font partie de J2, mais ne lisent aucune donnée du jeu ; ils peuvent donc
-avancer pendant que D-008 est examinée, si l'orchestrateur ouvre J2 :
+Ils conditionnent l'entrée en phase B du plan (`docs/J2_PLAN.md`). Chacun se vérifie par
+des commandes ou une procédure écrite, et son résultat est consigné sans contenu
+propriétaire. Ils sont répétés
+après chaque étape de la phase B qui lit ou produit des données du jeu.
 
-- transposer les correctifs 0001 à 0004 et 0006 à 0008 vers ReXGlue v0.11.0, avec les
-  tests du SDK. Pour 0003, établir les contraintes de placement de la table de
-  répartition dans le runtime de v0.11.0 (§5) ;
-- écrire un gabarit de manifeste qui prend ses chemins dans `$WC2010_PRIVATE_DIR`, sans
-  aucun chemin ni valeur propres au disque dans le dépôt ;
-- écrire la couche `platform/linux` : répertoires XDG, journaux, gestionnaire de
-  plantage par signaux (`ROADMAP.md`, J2) ;
-- prévoir l'extraction de la racine du jeu dans le dossier privé par
-  `rexglue vfs dump`, qui ne déchiffre rien. En v0.11.0, `title.game_root` doit être un
-  dossier.
+| N° | Contrôle | Vérification |
+|---|---|---|
+| CP-1 | **Confinement du dossier privé.** `$WC2010_PRIVATE_DIR` est défini et absolu. Il n'est ni dans le dépôt, ni dans `/nix/store`. Ses droits sont `0700`. Les sous-dossiers prévus existent, et `iso/` est en lecture seule (`ISO_REQUIREMENTS.md` §6) | `realpath`, `stat -c %a` ; `git -C "$WC2010_PRIVATE_DIR" rev-parse` doit échouer. Script à écrire en phase A (étape A4) |
+| CP-2 | **Aucune entrée du jeu dans Nix.** Ni l'ISO, ni les XEX, ni un chemin du dossier privé ne sont une entrée du flake ou d'une dérivation. Les chemins sont donnés à l'exécution seulement | Lecture de `flake.nix` et de `nix/` ; `nix flake check` sur une copie propre, sans le dossier privé |
+| CP-3 | **Magasin Nix vérifié avant et après.** Recherches de `docs/J0_ISO_IDENTIFICATION.md` §6, avec la procédure non destructive : constater, vérifier, conserver les preuves, ne rien supprimer sans décision explicite | **Aucune nouvelle correspondance suspecte imputable aux opérations du jeu.** Le magasin peut changer pour des raisons sans rapport avec le projet : les différences sont comparées et replacées dans leur contexte, sans rien supprimer. Le fichier `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude` déjà relevé n'est pas examiné plus avant. Si rien ne change, on note simplement le résultat. Ces recherches sont limitées et non exhaustives (C0.4) |
+| CP-4 | **Sorties, journaux et caches confinés.** Toute sortie de ReXGlue et des outils d'analyse est écrite sous `$WC2010_PRIVATE_DIR` : code généré, journal par `--log-file`, caches, fichiers temporaires | Un contrôle avant l'invocation, puis un contrôle après (§6.1). `git status --porcelain` n'en est qu'un complément |
+| CP-5 | **Aucun contenu du jeu dans ce qui est partagé.** Un journal ou un rapport n'est partagé qu'après relecture. Il ne contient ni clé, ni vidage mémoire, ni code généré, ni chaînes ou ressources du jeu au-delà de quelques lignes de contexte | `check_proprietary_data.py tree` sur le dossier de ce qui est partagé, puis relecture ; aucun envoi en CI |
+| CP-6 | **Dépôt protégé.** Le crochet de pré-commit est actif et le dépôt est propre | `git config core.hooksPath` vaut `.githooks` ; `check_proprietary_data.py repo` et `staged` passent |
+| CP-7 | **Pas d'identité présumée avec le projet A.** Sa configuration n'est qu'une entrée de test tant que la validation des adresses (§3.2) n'est pas faite | Aucun fichier d'adresses du projet A n'est repris dans le dépôt avant cette validation |
 
-## 7. Ordre proposé pour J2 (à valider)
+### 6.1 CP-4 en détail : confinement des sorties
 
-1. D-008 tranchée (PJ2-1), J0 clos (PJ2-2), J2 autorisé (PJ2-3).
-2. ~~Comparaison en clair de la disposition (§3.1).~~ Faite : concordante, condition
-   nécessaire seulement.
-3. Préparations sans données du jeu (§6).
-4. Extraction de la racine du jeu dans le dossier privé.
-5. Selon D-008 : tests de compatibilité (§3.2, étape A), puis validation des adresses
-   (étape B). La configuration du projet A n'est reprise que pour ce qui passe l'étape B ;
-   le reste est réanalysé (§5).
-6. Édition de liens et critères C2.1 à C2.4 (`ROADMAP.md` §4).
+**Avant chaque invocation** :
+
+1. **Lister toutes les destinations d'écriture de la commande** :
+   - le dossier de sortie du code généré et le fichier `--log-file` ;
+   - les caches et les fichiers temporaires ;
+   - le répertoire de travail courant ;
+   - les chemins relatifs du fichier de configuration.
+
+   Ce que ReXGlue écrit, et où, sera établi par l'inventaire A1 de `docs/J2_PLAN.md`. Ce
+   n'est pas encore connu [I].
+2. Résoudre chaque destination en **chemin canonique**, liens symboliques compris
+   (`realpath -m`).
+3. Exiger que chacune soit **sous `$WC2010_PRIVATE_DIR`**, dossier lui-même vérifié par
+   CP-1.
+4. Lancer la commande depuis un **répertoire de travail du dossier privé**. Diriger aussi
+   vers des sous-dossiers du dossier privé :
+   - `TMPDIR` ;
+   - `XDG_DATA_HOME` et `XDG_CONFIG_HOME` : [V] le SDK y place ses dossiers d'utilisateur,
+     et à défaut sous `~/.local/share` et `~/.config` (`docs/J2_PLAN.md` §3.1) ;
+   - `XDG_CACHE_HOME`, par précaution.
+
+**Après chaque invocation** :
+
+1. Juste avant l'invocation, **créer un fichier repère** dans le dossier privé.
+2. Ensuite, rechercher les **fichiers créés ou modifiés depuis ce repère** dans les
+   emplacements surveillés hors du dossier privé :
+   - le dépôt ;
+   - le répertoire personnel, dont `~/.local/share`, `~/.config` et `~/.cache` ;
+   - `/tmp` et le `TMPDIR` d'origine.
+
+   Commande type, pour chaque emplacement :
+   `find <emplacement> -xdev -newer <repère> -type f -not -path "$WC2010_PRIVATE_DIR/*"`.
+3. Un fichier trouvé est **examiné localement, sans être partagé**. S'il peut contenir
+   des données du jeu, l'étape s'arrête (arrêt immédiat de `docs/J2_PLAN.md` §2). Il n'est
+   supprimé qu'après une décision explicite.
+4. `git status --porcelain`, qui ne doit montrer aucun fichier nouveau, complète ce
+   contrôle. Il ne suffit pas : il n'inspecte que le dépôt.
+
+**Limite** : ces contrôles couvrent les destinations déclarées et les emplacements
+surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs. Le script qui
+les automatise est à réaliser à l'étape A4 du plan.
+
+## 7. Plan de J2
+
+Le plan d'exécution est dans `docs/J2_PLAN.md`. Il a deux phases séparées :
+
+- **phase A** : préparations génériques, sans données du jeu ;
+- **phase B** : traitement local des données privées, seulement après PJ2-3 et les
+  contrôles du §6.
+
+Le plan seul n'autorise aucune exécution.

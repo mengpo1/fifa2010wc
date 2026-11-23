@@ -26,6 +26,8 @@
    avec des clés intégrées, à la génération de code et à chaque lancement. Cela heurte
    la contrainte « ne pas engager de contournement des protections techniques ».
    Décision **D-008** requise avant toute génération de code. [V]/[I]
+   *2026-11-22 : D-008 est une décision de projet clôturée, O3 retenue ; la contrainte
+   est reformulée ; le risque juridique résiduel reste ouvert (`../DECISIONS.md`).*
 6. **Première inconnue de données** : la version de l'ISO de l'utilisateur. La
    configuration d'analyse du projet A (environ 17 700 lignes) ne vaut que pour le
    disque Europe (En, Es, Nl), identifié par deux SHA-256. On peut le vérifier **sans
@@ -46,7 +48,7 @@
 
 | Décision | Question | Recommandation de l'audit | Bloque |
 |---|---|---|---|
-| **D-008** | Comment traiter le déchiffrement des XEX ? | Attendre un avis juridique (O1) ; aucune clé ni code de déchiffrement dans le projet. *2026-11-22 : l'utilisateur a choisi la voie technique O3, sous réserves ; D-008 reste ouverte (`docs/DECISIONS.md`)* | J2 et suivants |
+| **D-008** | Comment traiter le déchiffrement des XEX ? | Attendre un avis juridique (O1) ; aucune clé ni code de déchiffrement dans le projet. *Recommandation historique. 2026-11-22 : décision de projet clôturée, O3 retenue par le porteur du projet ; le risque juridique résiduel reste ouvert (`docs/DECISIONS.md`)* | Ne bloque plus J2 au plan de la gouvernance ; PJ2-3 n'est pas donné |
 | **D-011** | Quelle base de SDK ? | Tranchée par l'orchestrateur : ReXGlue v0.11.0 | — |
 | — | Qui fournit l'identification de l'ISO (J0) ? | L'utilisateur, avec la procédure sans déchiffrement | J2 |
 
@@ -82,16 +84,18 @@ graphique.
 ## 5. Ce qui suit J1
 
 J2 (génération de code et édition de liens) dès que D-008 est tranchée et l'ISO
-identifiée ; J3 (écran-titre sous Vulkan) ; J4 (**premier match jouable**, 11 critères
-mesurables : trois matchs complets sans plantage, ≥ 30 i/s, audio sans
-sous-alimentation notable, manette et clavier, persistance, hygiène des données) ;
+identifiée. *2026-11-22 : les deux sont faits ; J2 attend l'autorisation PJ2-3, et son
+plan est dans `../J2_PLAN.md`.* Puis viennent J3 (écran-titre sous Vulkan) ; J4
+(**premier match jouable**, 11 critères mesurables : trois matchs complets sans
+plantage, ≥ 30 i/s, audio sans sous-alimentation notable, manette et clavier,
+persistance, hygiène des données) ;
 J5 (stabilisation Linux) ; J6 (macOS ARM64).
 
 ## 6. Principaux risques (registre complet dans `RISKS.md`)
 
 | Risque | Niveau | Parade |
 |---|---|---|
-| R-01 Déchiffrement et protections techniques | Élevé, bloquant ; chiffrement des deux modules constaté à J0 | D-008 avant J2 |
+| R-01 Déchiffrement et protections techniques | Élevé ; chiffrement des deux modules constaté à J0. Risque juridique résiduel, accepté par le porteur du projet | D-008 tranchée (O3) ; aucune clé ni aucun outil de déchiffrement propres au projet ; D-007 ; aucune distribution |
 | R-02 Disque différent de celui du projet A (empreintes différentes, constat de J0) | Élevé | Configuration à revalider, puis à refaire si nécessaire ; outils du projet A réutilisables (`docs/J2_PREREQUISITES.md`) |
 | R-03 Rendu sous Vulkan jamais essayé avec ce jeu | Élevé | J3 dédié ; deux pilotes GPU ; deux chemins de cibles de rendu |
 | R-06 Longue traîne de défauts du code recompilé | Élevé | Critères par parcours ; outils et correctifs du projet A |
