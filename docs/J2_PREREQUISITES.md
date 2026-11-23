@@ -160,7 +160,13 @@ Pistes, **à décider avant la phase B**, sans en retenir aucune ici :
   une image décodée n'est autorisé implicitement ;
 - la méthode est décidée après A8, avant PB-0.
 
-Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`.
+Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`. Comparaison des pistes :
+`docs/J2_A8_ADDRESS_VALIDATION.md`. *Arbitrage du 2026-11-23 :*
+- *M1, c'est-à-dire la piste 1, d'abord ;*
+- *M3, c'est-à-dire la piste 3, en repli ;*
+- *la piste 2 n'est pas autorisée.*
+
+*M1 n'établit pas la valeur des données, qui reste non vérifiée.*
 
 ## 4. Réutilisable sans nouvelle analyse du disque
 
