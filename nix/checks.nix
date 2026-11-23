@@ -8,6 +8,7 @@
   iso-identify,
   private-guard,
   private-project,
+  address-compare,
 }:
 
 let
@@ -303,6 +304,45 @@ in
       echo "project/ link refused; the outside folder and generated/ stay empty" >> "$out/links.txt"
     '';
 
+  # J2 step A8-bis (#22): the address comparator, on synthetic fixtures only (0x8C01xxxx
+  # addresses, formats of the ReXGlue v0.11.0 source). Its unit tests cover the false
+  # positives of docs/J2_A8_ADDRESS_VALIDATION.md section 4; then the packaged command runs
+  # on a synthetic private folder: aggregated output with no address, the report in the
+  # private folder only, and a report path outside it refused with nothing written.
+  address-compare-selftest = pkgs.runCommand "address-compare-selftest" { } ''
+    set -euo pipefail
+    mkdir -p "$out"
+    ${python}/bin/python3 -I ${self}/tools/test_address_compare.py > "$out/selftest.txt" 2>&1 \
+      || { cat "$out/selftest.txt"; exit 1; }
+    tail -n 3 "$out/selftest.txt"
+    for t in test_entry_in_configuration_only_stays_n0 test_invalid_data_offset_stays_unverified \
+             test_function_collision_is_reported test_absent_diagnostics_are_refused \
+             test_unknown_or_partial_mappings_are_refused \
+             test_paths_outside_the_private_folder_are_refused; do
+      grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }
+    done
+
+    P="$TMPDIR/private"
+    mkdir -m 700 "$P"
+    printf '[functions]\n0x8C010000 = {}\n0x8C010080 = {}\n' > "$P/entries.toml"
+    printf '%s\n' 'const PPCFuncMapping kPPCFuncMappings[] = {' \
+      '	{ 0x8C010000, sub_8C010000 },' '	{ 0, nullptr }' '};' > "$P/init.cpp"
+    printf 'info: generation done\n' > "$P/codegen.log"
+    AC=${address-compare}/bin/fifa2010wc-address-compare
+    $AC --private-dir "$P" --entries function="$P/entries.toml" --mappings-with "$P/init.cpp" \
+      --log "$P/codegen.log" --out "$P/report.json" > "$out/run.txt"
+    cat "$out/run.txt"
+    grep -q "function: refused 0, N0 1, N1 1, N2 0" "$out/run.txt"
+    if grep -q "0x" "$out/run.txt"; then echo "addresses on standard output"; exit 1; fi
+    [ -f "$P/report.json" ] || { echo "no report in the private folder"; exit 1; }
+    status=0
+    $AC --private-dir "$P" --entries function="$P/entries.toml" --mappings-with "$P/init.cpp" \
+      --log "$P/codegen.log" --out "$TMPDIR/outside.json" > "$out/refused.txt" || status=$?
+    cat "$out/refused.txt"
+    [ "$status" -eq 2 ] && [ ! -e "$TMPDIR/outside.json" ] \
+      || { echo "a report outside the private folder was not refused"; exit 1; }
+  '';
+
   # D-007: no proprietary data among the tracked files of the repository.
   # The self-test needs git: the staged mode tests build a throwaway repository.
   proprietary-data-source = pkgs.runCommand "proprietary-data-source" { nativeBuildInputs = [ pkgs.git ]; } ''
@@ -327,6 +367,7 @@ in
           iso-identify
           private-guard
           private-project
+          address-compare
         ];
       };
     in
