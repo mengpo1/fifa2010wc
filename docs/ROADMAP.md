@@ -98,7 +98,7 @@
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
   0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite. *Analyse de
   l'étape A2 (`docs/J2_A2_SDK_PATCHES.md`) :*
-  - *pour J2 lui-même, seul 0003 est nécessaire ;*
+  - *pour J2 lui-même, seul 0003 est candidat, à confirmer en A3 ;*
   - *0002 sert au démarrage (J3), peut-être par configuration seule ;*
   - *0008 sert aux sauvegardes (J4).*
 - Couche `platform/linux` : répertoires XDG, journaux, gestionnaire de plantage par

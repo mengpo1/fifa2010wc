@@ -33,20 +33,22 @@
 | Correctif | Besoin du jeu | État en v0.11.0 | Verdict | Jalon concerné |
 |---|---|---|---|---|
 | 0001 exports de la caméra USB | Le jeu importe les exports `XUsbcam*` | **Fourni** : `xboxkrnl_usbcam.cpp` est compilé (`src/kernel/CMakeLists.txt:136`), avec des bouchons (`src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp:25-48`) | **Déjà en amont** | — |
-| 0002 module trouvé par son nom nu | `default.xex` charge `fifadllzf.xex` par son seul nom | **Non fourni** : le nom nu est joint au chemin de périphérique de l'exécutable (`src/kernel/module_registry.cpp:385-393`), et la recherche exige une égalité exacte (`:620-630`) | **Nécessaire**, par configuration ou par correctif (§3.1) | J3 (démarrage) |
-| 0003 table de répartition | Les tables de `default.xex` et de `fifadllzf.xex` se chevauchent | **Non fourni** (`docs/J2_A1_SDK_INVENTORY.md` §5.4) | **Nécessaire, probablement** [H] : étape A3 | J2 (gabarits de génération), J3 |
+| 0002 module trouvé par son nom nu | `default.xex` charge `fifadllzf.xex` par son seul nom | **Non fourni** : le nom nu est joint au chemin de périphérique de l'exécutable (`src/kernel/module_registry.cpp:385-393`), et la recherche exige une égalité exacte (`:620-630`) | **Compatibilité à vérifier en phase B** : la configuration d'abord, le correctif seulement si elle échoue (§3.1) | J3 (démarrage) |
+| 0003 table de répartition | Les tables de `default.xex` et de `fifadllzf.xex` se chevauchent | **Non fourni** (`docs/J2_A1_SDK_INVENTORY.md` §5.4) | **Candidat à une intervention**, à confirmer à l'étape A3 [H] | J2 (gabarits de génération), J3 |
 | 0004 vblank précis | Des vblanks réguliers à 60 Hz | **Fourni** : sommeil jusqu'au prochain vblank par `SleepFor`, rattrapage limité à 4 (`src/gpu/xenos/xenos_graphics_driver_base.cpp:157-180`, `src/gpu/xenos/vblank_pacing.h:19-51`). Sous Linux, `SleepFor` est une boucle `nanosleep` (`src/base/threading_posix.cpp:264-273`) | **Déjà en amont**. Le correctif visait Windows | — |
 | 0005 ISO comme racine du jeu | Lancer directement sur l'image | **En partie** : un lecteur d'images GDFX existe (`include/rex/filesystem/mount.h:31-36`), mais la racine doit être un dossier (`src/filesystem/file_system.cpp:337-345`, `src/app/title_app.cpp:122-124`) | **Non nécessaire** : le plan extrait la racine du jeu (B1, `rexglue vfs dump`) | — |
 | 0006 limite de cadence et compteur d'images | Option « 30 i/s », et compteur pour l'affichage des i/s | **Compteur fourni** : `IGraphicsSystem::GetFrameStats` (`include/rex/gpu/graphics_system.h:23-27,67-68`). **Limiteur absent** pour l'invité : `gpu.frame_limit` ne limite que les présentations de l'hôte (`src/gpu/present_thread.cpp:72-84`), et `VdSwap` n'est pas freiné (`src/kernel/xboxkrnl/xboxkrnl_video.cpp:377-433`) | Compteur : **déjà en amont**. Limiteur : **seulement si l'option 30 i/s est voulue** | J5 (réglages) |
 | 0007 dialogues sans repeinture continue | Ne pas repeindre à la fréquence de l'écran entre deux images du jeu | **Fourni par la conception** : les incrustations sont dessinées à chaque présentation (`src/gpu/present_thread.cpp:64-69`), et `RequestPaint` ne fait rien (`src/gpu/xenos/host/xenos_presentation.h:78`) | **Sans objet** | — |
-| 0008 énumération des sauvegardes | Le jeu demande ses sauvegardes avec un identifiant tronqué (`00000000BABEBABE`) et n'en trouve aucune. Le projet A a constaté une sauvegarde nouvelle à chaque lancement | **Non fourni** : l'identifiant brut est transmis (`src/xam/xam_content_aggregate.cpp:98-99`), avec un seul type de contenu (`:84`) | **Nécessaire, probablement** [H] | J4 et J5 (sauvegardes) |
+| 0008 énumération des sauvegardes | Le jeu demande ses sauvegardes avec un identifiant tronqué (`00000000BABEBABE`) et n'en trouve aucune. Le projet A a constaté une sauvegarde nouvelle à chaque lancement | **Non fourni** : l'identifiant brut est transmis (`src/xam/xam_content_aggregate.cpp:98-99`), avec un seul type de contenu (`:84`) | **Besoin probable, à vérifier à l'exécution** [H] | J4 et J5 (sauvegardes) |
 
-**Conséquences pour J2** (génération de code et édition de liens, C2.1 à C2.4) :
-- seul 0003 touche la génération de code, par le gabarit `_indirect_call.inja` ;
+**Conséquences pour J2** (génération de code et édition de liens, C2.1 à C2.4). Aucun
+essai n'a encore eu lieu avec les fichiers du jeu ; ce sont des constats de lecture :
+- seul 0003 est **candidat** à une intervention pour J2, par le gabarit
+  `_indirect_call.inja`. Le besoin est à confirmer à l'étape A3 ;
 - 0002 et 0008 touchent l'exécution, à J3 et après ;
 - l'édition de liens n'attend aucun de ces correctifs [H].
 
-## 3. Détail des correctifs nécessaires
+## 3. Détail des correctifs à traiter
 
 ### 3.1 0002 — module trouvé par son nom nu
 
@@ -119,14 +121,20 @@ pas nécessaire à J2.
 
 1. **Rien à transposer** pour 0001, 0004, 0005 et 0007. Pour 0006, seul le compteur est
    fourni : `GetFrameStats` remplace `VdSwapCount`.
-2. **0003** : traité à l'étape A3, nécessaire dès J2.
+2. **0003** : traité à l'étape A3, qui confirmera ou non le besoin pour J2, avec un test
+   synthétique et une analyse du placement.
 3. **0002** :
    - d'abord la configuration (§3.1, voie 1), dans le gabarit A5 ;
    - le correctif seulement si le journal de la phase B montre qu'elle ne suffit pas.
 4. **0008** : à transposer avant J4. Ce n'est pas un prérequis de PB-0 ni de J2.
 5. **Limiteur de 0006** : seulement si le porteur du projet veut l'option 30 i/s (J5).
 
-**Décisions demandées** à l'orchestrateur et au porteur du projet :
-- valider ces verdicts ;
-- choisir, pour 0002, de commencer par la configuration ;
-- reporter 0008 et le limiteur de 0006 après J2.
+**Décision de l'orchestrateur** (revue 6021690260 de la PR #17, 2026-11-23) :
+- **0002** : retenir d'abord le `guest_path` configuré, sans modifier ReXGlue. Cette
+  configuration reste une hypothèse, à essayer localement après PB-0. Aucun correctif
+  0002 n'est autorisé par ce seul résultat ;
+- **0003** : réservé à l'étape A3, avec un test synthétique et une analyse du placement ;
+- **0008** reporté à J4, et le limiteur de l'invité de 0006 reporté à J5, sauf besoin
+  démontré plus tôt ;
+- **0001, 0004 et 0007** : ne pas les transposer, puisqu'ils sont en amont ;
+- les correctifs du déchiffrement restent exclus.

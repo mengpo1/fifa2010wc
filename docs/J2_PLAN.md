@@ -117,7 +117,9 @@ décision explicite) :
   (`docs/J2_A2_SDK_PATCHES.md`). Elle est soumise à la revue.
   - Déjà en amont : 0001, 0004 et 0007.
   - En partie : 0006, dont le compteur est fourni.
-  - Nécessaires : 0002, peut-être par configuration seule, et 0008 avant J4.
+  - 0002 : compatibilité à vérifier en phase B, la configuration d'abord.
+  - 0008 : besoin probable, reporté à J4.
+  - 0003 : candidat pour J2, à confirmer en A3.
   - Non nécessaire : 0005, puisque la racine du jeu est extraite.
 
   Les correctifs ne seront écrits qu'après la validation de ces verdicts.

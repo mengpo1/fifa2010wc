@@ -282,8 +282,8 @@
   - v0.11.0 : compilation sous Nix vérifiée [V], API actuelle ; correctifs du projet A à
     transposer (0003 et 0002 au minimum ; 0001 et 0006 semblent déjà en amont [V]).
     *Établi à l'étape A2 (`docs/J2_A2_SDK_PATCHES.md`) : 0001, 0004 et 0007 sont déjà en
-    amont, et 0006 l'est en partie. 0002, 0003 et 0008 restent nécessaires ; 0002 peut
-    l'être par configuration seule ;*
+    amont, et 0006 l'est en partie. 0003 est candidat pour J2, à confirmer en A3.
+    0002 sera d'abord essayé par configuration en phase B. 0008 est reporté à J4 ;*
   - `bd833a2` avec les correctifs du projet A : base Windows connue, mais compilation
     Linux non vérifiée et API ancienne.
 - **Règle commune** : commit exact épinglé ; correctifs numérotés dans
