@@ -15,9 +15,10 @@ Commands:
 It reads no XEX and runs no ReXGlue command. Only `init` writes, in two phases:
 
 1. Checks, with no write: the private folder passes CP-1 (private_guard check-dir); the
-   template passes the rules of `check` as installed under project/; project/, the manifest
-   and every existing folder on the way to an output folder are real folders and files,
-   not symbolic links. Any finding stops init before it writes anything.
+   template file is read once, and that parsed content passes the template rules and the
+   rules of `check` as installed under project/; project/, the manifest and every existing
+   folder on the way to an output folder are real folders and files, not symbolic links.
+   Any finding stops init before it writes anything. Phase 2 writes the bytes read here.
 2. Writes, anchored to the private folder: every folder below its root is opened with
    O_NOFOLLOW from the descriptor of its parent, folders are created relative to that
    descriptor, and the manifest is created with O_CREAT | O_EXCL | O_NOFOLLOW. A link put
@@ -25,8 +26,10 @@ It reads no XEX and runs no ReXGlue command. Only `init` writes, in two phases:
    through a link below the root of the private folder.
 
 The root itself is resolved once, by its real path; CP-1 checks that it belongs to the
-user and is closed to group and others. A process of the same user that replaces folders
-of the private folder while init runs can make it stop half way, never write elsewhere.
+user and is closed to group and others. A link put in place below the root while init
+runs makes it stop half way. Not covered: a process of the same user that renames, while
+init runs, a real folder init has already opened to a place outside the private folder;
+a descriptor does not pin where its folder is.
 
 Exit status: 0 when nothing is found, 1 when something is found, 2 on bad usage.
 """
@@ -255,11 +258,17 @@ def check_manifest(manifest_path, private):
 
 
 def check_template(template_path, sdk_version=SDK_VERSION):
-    """The template as installed in <private folder>/project/: the rules of `check` in a
-    virtual private folder, plus the template only rules."""
+    """Reads the template file once and checks it (the `template` command)."""
     _, table, findings = load_template(template_path)
     if table is None:
         return findings
+    return check_template_table(table, sdk_version)
+
+
+def check_template_table(table, sdk_version=SDK_VERSION):
+    """The template, already parsed, as installed in <private folder>/project/: the rules of
+    `check` in a virtual private folder, plus the template only rules (keys, SDK)."""
+    findings = []
     base = os.path.join(VIRTUAL_PRIVATE, PROJECT_DIR)
     found, _ = check_table(table, base, VIRTUAL_PRIVATE, resolve_path=os.path.normpath)
     findings += [finding.replace(VIRTUAL_PRIVATE, "<private folder>") for finding in found]
@@ -350,10 +359,12 @@ def init(private, template, guard_path, repo=None, git="git", before_writes=None
     if findings:
         return findings + ["nothing was written: fix the private folder first "
                            "(private_guard check-dir)"], []
+    # The template is read once: the bytes written in phase 2 are the bytes parsed here, and
+    # every rule (keys, SDK version, paths) is checked on this same parsed table.
     data, table, load = load_template(template)
     if table is None:
         return [f"template: {finding}" for finding in load] + ["nothing was written"], []
-    findings += [f"template: {finding}" for finding in check_template(template)]
+    findings += [f"template: {finding}" for finding in check_template_table(table)]
     real_private = canonical(private)
     project_base = os.path.join(real_private, PROJECT_DIR)
     # Links first: with a link in place, the paths below would resolve through it.

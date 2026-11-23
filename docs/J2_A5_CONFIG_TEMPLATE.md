@@ -96,15 +96,22 @@ d'abord par l'orchestrateur (§5 du même document).
      de `project/`.
    - Un lien mis en place entre les deux phases fait échouer l'ouverture, et `init`
      s'arrête : il **ne peut pas écrire au travers d'un lien situé sous la racine**.
-   - Le contenu écrit est celui qui a été contrôlé : le gabarit n'est lu qu'une fois.
+   - Le contenu écrit est celui qui a été contrôlé : le gabarit n'est lu qu'une fois, et
+     toutes ses règles (clés permises, version, chemins installés) portent sur ce même
+     contenu (P-42, revue 6025506461 ; la première correction relisait le fichier pour la
+     liste des clés).
 
 **Modèle de menace, et ses limites** :
 - les écritures se font sous la racine du dossier privé. Celle-ci appartient à
   l'utilisateur et elle est fermée au groupe et aux autres (CP-1) ;
 - la protection vise une erreur de configuration (un lien laissé dans le dossier privé),
-  et un remplacement fait pendant `init` par un processus du même utilisateur ;
-- un tel remplacement peut arrêter `init` à mi-chemin. Les écritures déjà faites restent
-  alors dans le dossier privé ;
+  et un lien mis en place pendant `init` ;
+- un tel lien peut arrêter `init` à mi-chemin. Les écritures déjà faites restent alors
+  dans le dossier privé ;
+- **non couvert** : un processus du même utilisateur qui, pendant `init`, **renomme** un
+  vrai dossier déjà ouvert par `init` vers un emplacement hors du dossier privé. Un
+  descripteur ne fixe pas l'emplacement de son dossier dans l'arborescence. La protection
+  ne vaut donc pas contre un processus malveillant du même utilisateur ;
 - la racine elle-même n'est résolue qu'une fois. Un remplacement des dossiers **au-dessus**
   de la racine, pendant l'exécution, n'est pas couvert : ils sont hors du dossier privé,
   donc hors du périmètre de l'outil ;
@@ -112,7 +119,7 @@ d'abord par l'orchestrateur (§5 du même document).
 
 ## 5. Vérifications
 
-**Tests unitaires** (`tools/test_private_project.py`, 30 tests, dans le contrôle Nix
+**Tests unitaires** (`tools/test_private_project.py`, 32 tests, dans le contrôle Nix
 `private-project-selftest`) :
 - le gabarit du dépôt passe, et sa version est la version épinglée ;
 - un gabarit avec `function_table_base`, `setjmp_address`, `[functions]` ou une clé
@@ -133,6 +140,11 @@ d'abord par l'orchestrateur (§5 du même document).
   dossier extérieur reste vide. La copie déjà écrite, dans le second cas, est dans le
   dossier privé ;
 - `check` refuse une copie, ou son dossier, qui est un lien ;
+- **gabarit remplacé juste après sa lecture (P-42)** : lu avec une adresse, puis remplacé
+  par un fichier propre, il est refusé et rien n'est écrit ; lu propre, puis remplacé par
+  un fichier avec une adresse, la copie reçoit le contenu lu et contrôlé. Le fichier n'est
+  lu qu'une fois. Avec l'ancien comportement, qui relisait le fichier pour la liste des
+  clés, le premier test échoue : la copie reçoit l'adresse ;
 - `check` refuse chacun des cas du tableau §4, dont un lien `game` vers l'extérieur ;
 - `check` accepte une copie privée qui a reçu des adresses de phase B ;
 - les codes de sortie de la ligne de commande.

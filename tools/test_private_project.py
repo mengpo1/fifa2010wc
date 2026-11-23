@@ -260,6 +260,47 @@ class InitTests(Folder):
         self.assertTrue(os.path.isfile(self.manifest_path()))
         self.assertFalse(os.path.islink(self.manifest_path()))
 
+    def swap_template_after_read(self, first, second):
+        """The template file holds `first`; right after init reads it, it is replaced with
+        `second`. Returns the path and restores load_template on cleanup."""
+        path = self.write_template(first)
+        real = pp.load_template
+        reads = []
+
+        def load_then_swap(template):
+            result = real(template)
+            reads.append(template)
+            write(template, second)
+            return result
+
+        pp.load_template = load_then_swap
+        self.addCleanup(setattr, pp, "load_template", real)
+        return path, reads
+
+    def test_init_refuses_a_template_replaced_by_a_clean_one_after_reading(self):
+        # P-42: the bytes read hold an address (CP-7), the file is then made clean. init
+        # checks the bytes it read, the ones it would copy, and refuses before writing.
+        forbidden = self.template_text.replace(
+            'out_directory_path = "../generated/default"\n',
+            'out_directory_path = "../generated/default"\nfunction_table_base = 0x8C000000\n')
+        path, reads = self.swap_template_after_read(forbidden, self.template_text)
+        findings, _ = self.run_init(template=path)
+        self.assertEqual(len(reads), 1)
+        self.assertFound(findings, "function_table_base")
+        self.assertFound(findings, "nothing was written")
+        self.assertFalse(os.path.exists(os.path.join(self.private, pp.PROJECT_DIR)))
+
+    def test_init_copies_only_the_content_it_checked(self):
+        # The bytes read are clean, the file then gets an address: the copy holds the clean,
+        # checked bytes, never the later content.
+        forbidden = self.template_text + "\n[functions]\n0x8C000000 = {}\n"
+        path, reads = self.swap_template_after_read(self.template_text, forbidden)
+        findings, _ = self.run_init(template=path)
+        self.assertEqual(findings, [])
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(read(self.manifest_path()), self.template_text)
+        self.assertNotIn("[functions]", read(self.manifest_path()))
+
     def test_init_with_a_bad_template_writes_nothing(self):
         bad = self.write_template(self.template_text.replace(
             'file_path = "../game/default.xex"', 'file_path = "/srv/default.xex"'))
