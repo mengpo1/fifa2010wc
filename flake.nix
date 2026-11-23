@@ -47,10 +47,28 @@
         runtimeInputs = [ pkgs.python3 ];
         text = ''exec python3 -I ${./tools/iso_identify.py} "$@"'';
       };
+
+      # J2, step A4: the CP-1 and CP-4 controls run before and after every phase B step on
+      # the user's private files (docs/J2_PHASE_B_CONTROLS.md). It reads paths, modes and
+      # timestamps only, and is run on the user's machine; the private folder is a run time
+      # argument and never enters the store.
+      private-guard = pkgs.writeShellApplication {
+        name = "fifa2010wc-private-guard";
+        runtimeInputs = [
+          pkgs.python3
+          pkgs.git
+        ];
+        text = ''exec python3 -I ${./tools/private_guard.py} "$@"'';
+      };
     in
     {
       packages.${system} = {
-        inherit rexglue-sdk vulkan-probe iso-identify;
+        inherit
+          rexglue-sdk
+          vulkan-probe
+          iso-identify
+          private-guard
+          ;
         default = rexglue-sdk;
       };
 
@@ -65,6 +83,11 @@
           program = "${iso-identify}/bin/fifa2010wc-iso-identify";
           meta.description = "Identify the disc image from its plaintext metadata (J0)";
         };
+        private-guard = {
+          type = "app";
+          program = "${private-guard}/bin/fifa2010wc-private-guard";
+          meta.description = "CP-1 and CP-4 controls around phase B steps (J2)";
+        };
       };
 
       checks.${system} = import ./nix/checks.nix {
@@ -75,6 +98,7 @@
           rexglue-sdk
           vulkan-probe
           iso-identify
+          private-guard
           ;
       };
 

@@ -202,7 +202,7 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
 
 | N° | Contrôle | Vérification |
 |---|---|---|
-| CP-1 | **Confinement du dossier privé.** `$WC2010_PRIVATE_DIR` est défini et absolu. Il n'est ni dans le dépôt, ni dans `/nix/store`. Ses droits sont `0700`. Les sous-dossiers prévus existent, et `iso/` est en lecture seule (`ISO_REQUIREMENTS.md` §6) | `realpath`, `stat -c %a` ; `git -C "$WC2010_PRIVATE_DIR" rev-parse` doit échouer. Script à écrire en phase A (étape A4) |
+| CP-1 | **Confinement du dossier privé.** `$WC2010_PRIVATE_DIR` est défini et absolu. Il n'est ni dans le dépôt, ni dans `/nix/store`. Ses droits sont `0700`. Les sous-dossiers prévus existent, et `iso/` est en lecture seule (`ISO_REQUIREMENTS.md` §6) | `realpath`, `stat -c %a` ; `git -C "$WC2010_PRIVATE_DIR" rev-parse` doit échouer. Outil : `private_guard check-dir` (A4, `docs/J2_PHASE_B_CONTROLS.md`) |
 | CP-2 | **Aucune entrée du jeu dans Nix.** Ni l'ISO, ni les XEX, ni un chemin du dossier privé ne sont une entrée du flake ou d'une dérivation. Les chemins sont donnés à l'exécution seulement | Lecture de `flake.nix` et de `nix/` ; `nix flake check` sur une copie propre, sans le dossier privé |
 | CP-3 | **Magasin Nix vérifié avant et après.** Recherches de `docs/J0_ISO_IDENTIFICATION.md` §6, avec la procédure non destructive : constater, vérifier, conserver les preuves, ne rien supprimer sans décision explicite | **Aucune nouvelle correspondance suspecte imputable aux opérations du jeu.** Le magasin peut changer pour des raisons sans rapport avec le projet : les différences sont comparées et replacées dans leur contexte, sans rien supprimer. Le fichier `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude` déjà relevé n'est pas examiné plus avant. Si rien ne change, on note simplement le résultat. Ces recherches sont limitées et non exhaustives (C0.4) |
 | CP-4 | **Sorties, journaux et caches confinés.** Toute sortie de ReXGlue et des outils d'analyse est écrite sous `$WC2010_PRIVATE_DIR` : code généré, journal par `--log-file`, caches, fichiers temporaires | Un contrôle avant l'invocation, puis un contrôle après (§6.1). `git status --porcelain` n'en est qu'un complément |
@@ -268,8 +268,9 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
    contrôle. Il ne suffit pas : il n'inspecte que le dépôt.
 
 **Limite** : ces contrôles couvrent les destinations déclarées et les emplacements
-surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs. Le script qui
-les automatise est à réaliser à l'étape A4 du plan.
+surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs. Ils sont
+automatisés par `tools/private_guard.py`, commandes `preflight` et `postflight` (étape A4).
+La procédure est dans `docs/J2_PHASE_B_CONTROLS.md`.
 
 ## 7. Plan de J2
 

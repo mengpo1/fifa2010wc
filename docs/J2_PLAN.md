@@ -139,6 +139,9 @@ décision explicite) :
 
 - **But** : automatiser ce qui peut l'être des contrôles CP-1 à CP-6
   (`J2_PREREQUISITES.md` §6).
+- **État (2026-11-23)** : `tools/private_guard.py` et ses tests
+  (`tools/test_private_guard.py`, contrôle Nix `private-guard-selftest`) sont rédigés, ainsi
+  que la procédure `docs/J2_PHASE_B_CONTROLS.md`. Ils sont soumis à la revue.
 - **Livrable** :
   - un script qui vérifie le confinement de `$WC2010_PRIVATE_DIR` (CP-1). Il refuse un
     dossier situé dans le dépôt ou dans `/nix/store`, un chemin relatif et des droits
