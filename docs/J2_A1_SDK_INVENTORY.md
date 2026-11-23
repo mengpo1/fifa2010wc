@@ -159,15 +159,20 @@ sans appel au décodage des XEX.
 
 ## 4. Journalisation et mémoire pendant le décodage et l'analyse
 
-### 4.1 Ce qui n'est jamais journalisé [V]
+### 4.1 Non trouvé dans les chemins d'exécution du SDK examinés [V]
 
-- Aucune clé : ni maîtresse, ni de session, ni de fichier.
-- Aucun octet de l'image. Le décodage est une boucle en mémoire sans journal
+Ce constat est **limité au code de ReXGlue lu pour cet inventaire**. Les bibliothèques
+tierces et le jeu lui-même n'ont pas été examinés (§1, §9). Il ne dispense donc d'aucune
+relecture : CP-5 exige que **tout journal** soit relu localement avant d'être partagé.
+
+Dans les chemins examinés, il n'a été trouvé :
+- aucune clé journalisée : ni maîtresse, ni de session, ni de fichier ;
+- aucun octet de l'image journalisé. Le décodage est une boucle en mémoire sans journal
   (`src/filesystem/xex.cpp:313-339`). Sa seule ligne de journal signale une empreinte de
-  correctif discordante (`xex.cpp:477`).
-- Côté chargeur, seul le **type** de clé est journalisé, sous forme d'indice, et seulement
-  s'il n'est pas « retail » (`src/kernel/xex_module.cpp:242-244`).
-- Il n'existe aucune fonction de vidage hexadécimal dans `src/`.
+  correctif discordante (`xex.cpp:477`) ;
+- côté chargeur, rien d'autre que le **type** de clé, sous forme d'indice, et seulement
+  s'il n'est pas « retail » (`src/kernel/xex_module.cpp:242-244`) ;
+- aucune fonction de vidage hexadécimal dans `src/`.
 
 ### 4.2 Ce qui peut venir du jeu dans les sorties [V]
 
@@ -283,7 +288,13 @@ A8 doit chiffrer ces limites.
 
 ## 6. Exigences pour les contrôles CP-1 à CP-5
 
-Ces destinations s'ajoutent à celles du `J2_PREREQUISITES.md` §6.1 :
+Ces destinations s'ajoutent à celles du `J2_PREREQUISITES.md` §6.1.
+
+Les mesures ci-dessous sont **proposées**, et **aucune n'est encore vérifiée sur la
+machine de l'utilisateur**. Seules les redirections `REX_APP_ROOT`, `REX_APP_LOG_ROOT` et
+`REX_LOG_FILE` ont été essayées, dans le conteneur et sur des données synthétiques (§2).
+Le masque `077` et `ulimit -c 0` réduisent le risque de l'objet `/dev/shm` et des *core
+dumps*, sans le supprimer : ce risque reste **sensible** (§4.3).
 
 | Destination ou risque | Mesure avant l'invocation | Contrôle après l'invocation |
 |---|---|---|
