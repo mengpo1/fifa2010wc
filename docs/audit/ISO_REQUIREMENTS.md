@@ -209,6 +209,9 @@ $WC2010_PRIVATE_DIR            # hors dépôt, par défaut ~/.local/share/wc2010
 
 - Les chemins sont lus dans une variable d'environnement ou dans un fichier TOML local,
   jamais en dur dans le dépôt.
+- *J2, étape A5 : la génération de code exige les deux XEX sous `game_root`. Elle les lit
+  donc dans `game/`, et `xex/` ne lui sert pas. Le manifeste est copié dans `project/`
+  (`docs/J2_A5_CONFIG_TEMPLATE.md`).*
 - Le `.gitignore` du futur projet doit bloquer au minimum `*.iso`, `*.xex`, `*.xexp`,
   `*.bin`, `*.big`, `generated/`, `out/` et `*.dmp`. Le projet A bloque ces motifs et
   d'autres [V].

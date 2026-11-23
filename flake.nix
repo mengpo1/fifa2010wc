@@ -60,6 +60,24 @@
         ];
         text = ''exec python3 -I ${./tools/private_guard.py} "$@"'';
       };
+
+      # J2, step A5: sets up and checks the codegen project in the private folder from the
+      # manifest template (docs/J2_A5_CONFIG_TEMPLATE.md). The template holds relative paths
+      # and no game data; the private folder is a run time argument and never enters the
+      # store. The guard and the template are given by path: in the store, the script is a
+      # lone file.
+      private-project = pkgs.writeShellApplication {
+        name = "fifa2010wc-private-project";
+        runtimeInputs = [
+          pkgs.python3
+          pkgs.git
+        ];
+        text = ''
+          exec python3 -I ${./tools/private_project.py} \
+            --guard ${./tools/private_guard.py} \
+            --template ${./config/private-template/wc2010_manifest.toml} "$@"
+        '';
+      };
     in
     {
       packages.${system} = {
@@ -68,6 +86,7 @@
           vulkan-probe
           iso-identify
           private-guard
+          private-project
           ;
         default = rexglue-sdk;
       };
@@ -88,6 +107,11 @@
           program = "${private-guard}/bin/fifa2010wc-private-guard";
           meta.description = "CP-1 and CP-4 controls around phase B steps (J2)";
         };
+        private-project = {
+          type = "app";
+          program = "${private-project}/bin/fifa2010wc-private-project";
+          meta.description = "Set up and check the codegen project in the private folder (J2)";
+        };
       };
 
       checks.${system} = import ./nix/checks.nix {
@@ -99,6 +123,7 @@
           vulkan-probe
           iso-identify
           private-guard
+          private-project
           ;
       };
 
