@@ -160,7 +160,9 @@ Pistes, **à décider avant la phase B**, sans en retenir aucune ici :
   une image décodée n'est autorisé implicitement ;
 - la méthode est décidée après A8, avant PB-0.
 
-Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`.
+Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`. Comparaison des pistes et
+proposition (M1 retenue, M3 en repli, M2 exclue sauf dérogation) :
+`docs/J2_A8_ADDRESS_VALIDATION.md`. Elle attend la décision.
 
 ## 4. Réutilisable sans nouvelle analyse du disque
 

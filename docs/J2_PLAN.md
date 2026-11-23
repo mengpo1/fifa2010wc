@@ -199,6 +199,15 @@ décision explicite) :
   - aucun programme nouveau produisant une image décodée n'est autorisé implicitement.
 - **Livrable** : une note qui compare les pistes, sans en exécuter aucune. **La décision
   revient à l'orchestrateur et au porteur du projet.**
+- **État (2026-11-23)** : la note est rédigée, `docs/J2_A8_ADDRESS_VALIDATION.md`. Elle
+  propose :
+  - la piste M1, fondée sur les diagnostics, les listes d'adresses et la désassemblée en
+    commentaire du code généré ;
+  - M3, une nouvelle analyse avec ReXGlue seul, en repli ;
+  - M2, une image produite par le projet, exclue sauf dérogation ;
+  - une étape A8-bis pour l'outil de comparaison, avec des tests synthétiques.
+
+  La note attend la décision.
 
 ### 3.9 Sortie de la phase A (PA-1)
 
