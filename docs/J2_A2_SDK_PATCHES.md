@@ -34,7 +34,7 @@
 |---|---|---|---|---|
 | 0001 exports de la caméra USB | Le jeu importe les exports `XUsbcam*` | **Fourni** : `xboxkrnl_usbcam.cpp` est compilé (`src/kernel/CMakeLists.txt:136`), avec des bouchons (`src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp:25-48`) | **Déjà en amont** | — |
 | 0002 module trouvé par son nom nu | `default.xex` charge `fifadllzf.xex` par son seul nom | **Non fourni** : le nom nu est joint au chemin de périphérique de l'exécutable (`src/kernel/module_registry.cpp:385-393`), et la recherche exige une égalité exacte (`:620-630`) | **Compatibilité à vérifier en phase B** : la configuration d'abord, le correctif seulement si elle échoue (§3.1) | J3 (démarrage) |
-| 0003 table de répartition | Les tables de `default.xex` et de `fifadllzf.xex` se chevauchent | **Non fourni** (`docs/J2_A1_SDK_INVENTORY.md` §5.4) | **Candidat à une intervention**, à confirmer à l'étape A3 [H] | J2 (gabarits de génération), J3 |
+| 0003 table de répartition | Les tables de `default.xex` et de `fifadllzf.xex` se chevauchent | **Non fourni** (`docs/J2_A1_SDK_INVENTORY.md` §5.4) | **Candidat à une intervention**, à confirmer à l'étape A3 [H]. *A3 : correctif écrit et testé sur images synthétiques ; le besoin réel dépend de tailles de code connues en phase B [I] (`docs/J2_A3_FUNCTION_TABLE.md`)* | J2 (gabarits de génération), J3 |
 | 0004 vblank précis | Des vblanks réguliers à 60 Hz | **Fourni** : sommeil jusqu'au prochain vblank par `SleepFor`, rattrapage limité à 4 (`src/gpu/xenos/xenos_graphics_driver_base.cpp:157-180`, `src/gpu/xenos/vblank_pacing.h:19-51`). Sous Linux, `SleepFor` est une boucle `nanosleep` (`src/base/threading_posix.cpp:264-273`) | **Déjà en amont**. Le correctif visait Windows | — |
 | 0005 ISO comme racine du jeu | Lancer directement sur l'image | **En partie** : un lecteur d'images GDFX existe (`include/rex/filesystem/mount.h:31-36`), mais la racine doit être un dossier (`src/filesystem/file_system.cpp:337-345`, `src/app/title_app.cpp:122-124`) | **Non nécessaire** : le plan extrait la racine du jeu (B1, `rexglue vfs dump`) | — |
 | 0006 limite de cadence et compteur d'images | Option « 30 i/s », et compteur pour l'affichage des i/s | **Compteur fourni** : `IGraphicsSystem::GetFrameStats` (`include/rex/gpu/graphics_system.h:23-27,67-68`). **Limiteur absent** pour l'invité : `gpu.frame_limit` ne limite que les présentations de l'hôte (`src/gpu/present_thread.cpp:72-84`), et `VdSwap` n'est pas freiné (`src/kernel/xboxkrnl/xboxkrnl_video.cpp:377-433`) | Compteur : **déjà en amont**. Limiteur : **seulement si l'option 30 i/s est voulue** | J5 (réglages) |
@@ -92,7 +92,9 @@ Il fait l'objet de l'étape A3 (`docs/J2_PLAN.md` §3.3). Ce qu'il faut toucher 
 - les appelants (`src/kernel/title_state.cpp:332`, `src/kernel/module_registry.cpp:481-483`).
 
 Le correctif 0002 du projet A contient aussi une partie de 0003 : le passage de
-`function_table_base`. Les deux sont à séparer.
+`function_table_base`. Les deux sont à séparer. *Fait en A3 : ce passage, dans
+`src/kernel/module_registry.cpp`, est inclus dans le correctif 0003 transposé ; rien
+d'autre de 0002 ne l'est.*
 
 ### 3.3 0008 — énumération des sauvegardes
 
@@ -122,7 +124,7 @@ pas nécessaire à J2.
 1. **Rien à transposer** pour 0001, 0004, 0005 et 0007. Pour 0006, seul le compteur est
    fourni : `GetFrameStats` remplace `VdSwapCount`.
 2. **0003** : traité à l'étape A3, qui confirmera ou non le besoin pour J2, avec un test
-   synthétique et une analyse du placement.
+   synthétique et une analyse du placement. *Fait : `docs/J2_A3_FUNCTION_TABLE.md`.*
 3. **0002** :
    - d'abord la configuration (§3.1, voie 1), dans le gabarit A5 ;
    - le correctif seulement si le journal de la phase B montre qu'elle ne suffit pas.

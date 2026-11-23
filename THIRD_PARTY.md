@@ -13,7 +13,7 @@
 
 | Élément repris | Fichier du projet A | Fichier ici | Adaptation |
 |---|---|---|---|
-| Correctif du SDK 0003 « function-table-base » | `patches/rexglue-sdk/0003-function-table-base.patch` (pour `rexglue-sdk` `bd833a2`) | `patches/rexglue-sdk/0001-function-table-base.patch` | Réécrit pour ReXGlue v0.11.0. Ajouts : fins de plages sur 64 bits, contrôle de la table face à sa propre image, contrôle des pages libres, validation de la clé, tests unitaires (`docs/J2_A3_FUNCTION_TABLE.md` §5) |
+| Correctif du SDK 0003 « function-table-base », et la partie de 0002 qui transmet la base au chargement d'un module | `patches/rexglue-sdk/0003-function-table-base.patch` et `0002-find-module-by-file-name.patch` (pour `rexglue-sdk` `bd833a2`) | `patches/rexglue-sdk/0001-function-table-base.patch` | Réécrit pour ReXGlue v0.11.0. Ajouts : fins de plages sur 64 bits, contrôle de la table face à sa propre image, contrôle des pages libres, validation de la clé, tests unitaires (`docs/J2_A3_FUNCTION_TABLE.md` §5) |
 
 Aucune adresse ni aucune valeur de la configuration d'analyse du projet A n'est reprise
 (CP-7, `docs/J2_PREREQUISITES.md` §6).

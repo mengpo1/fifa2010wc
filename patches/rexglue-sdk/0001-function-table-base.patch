@@ -18,6 +18,8 @@ Provenance: adapted from patch 0003-function-table-base.patch of
 CalinGraphics/fifa-world-cup-2010-recompiled, commit 498d18a, written for rexglue-sdk
 bd833a2. BSD 3-Clause License, Copyright (c) 2026, Miertescu Stefan-Calin; the notice is
 reproduced in THIRD_PARTY.md. Rewritten for v0.11.0 (other file layout and names).
+The base passed for a module loaded later (src/kernel/module_registry.cpp) was in
+project A's patch 0002; only that part of 0002 is taken here.
 Added here: 64 bit range ends, the check of a table against its own image, the free page
 check, codegen validation and the unit tests.
 

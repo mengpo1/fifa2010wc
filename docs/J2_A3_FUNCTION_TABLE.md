@@ -116,7 +116,10 @@ contrôle échoue sinon, et il est d'abord essayé sur un correctif synthétique
 
 **Provenance** : correctif 0003 du projet A (BSD 3-Clause), notice dans
 `THIRD_PARTY.md`. Repris du projet A : la clé, son passage au runtime et le contrôle des
-chevauchements deux à deux. Ajouté ici : fins sur 64 bits, contrôle face à sa propre
+chevauchements deux à deux. Le passage de la base pour un module chargé ensuite
+(`src/kernel/module_registry.cpp`) figurait dans le correctif 0002 du projet A ; il est
+séparé ici, comme le demandait A2 (`docs/J2_A2_SDK_PATCHES.md` §3.2). Rien d'autre de
+0002 n'est repris. Ajouté ici : fins sur 64 bits, contrôle face à sa propre
 image, contrôle des pages libres, validation de la clé, tests.
 
 ### 5.2 Comportement sans la clé [V]

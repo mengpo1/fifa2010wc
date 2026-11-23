@@ -119,7 +119,7 @@ décision explicite) :
   - En partie : 0006, dont le compteur est fourni.
   - 0002 : compatibilité à vérifier en phase B, la configuration d'abord.
   - 0008 : besoin probable, reporté à J4.
-  - 0003 : candidat pour J2, à confirmer en A3.
+  - 0003 : candidat pour J2, à confirmer en A3. *Transposé en A3 (§3.3).*
   - Non nécessaire : 0005, puisque la racine du jeu est extraite.
 
   Les correctifs ne seront écrits qu'après la validation de ces verdicts.
@@ -306,7 +306,8 @@ décision explicite) :
 
 ### 4.5 B5 — Génération de code complète et édition de liens
 
-- **Action** : le manifeste à deux modules, les correctifs 0002 et 0003 transposés, et
+- **Action** : le manifeste à deux modules, les correctifs 0002 et 0003 transposés (0003 :
+  A3 ; 0002 : seulement si la configuration échoue, `docs/J2_A2_SDK_PATCHES.md` §5), et
   l'édition de liens avec `-DREXGLUE_LLD` et un RUNPATH corrigé.
 - **Critère de sortie** : C2.1 à C2.4 (`ROADMAP.md` §4) :
   - `readelf -h` montre un ELF x86-64, sans dépendance à Wine ni à Windows ;
