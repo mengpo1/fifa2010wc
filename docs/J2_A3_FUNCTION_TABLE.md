@@ -206,7 +206,7 @@ jeu.
 | Tests du SDK en Release (CTest) | **2 232 tests : 2 222 réussis, 10 sautés, 0 échec**. Les 10 sautés le sont aussi sans le correctif : tests d'ordre des verrous, réservés au mode Debug, et deux tests propres à l'hôte |
 | Les 9 tests du correctif (§5.3) | Tous réussis |
 | Contrôle `sdk-patches` | Réussi : 18 fichiers listés, aucun des XEX ni du déchiffrement ; le correctif synthétique de `xex.cpp` est refusé |
-| `nix flake check`, dont les tests du SDK en Debug | En cours |
+| `nix flake check -L --no-update-lock-file`, dont les tests du SDK en Debug | « all checks passed! ». En Debug : **2 243 tests, 2 241 réussis, 2 sautés (propres à l'hôte), 0 échec** ; les 9 tests du correctif réussis |
 
 Le journal CTest et le rapport JUnit sont installés avec le SDK, sous
 `share/rexglue-sdk/test-results/`.
