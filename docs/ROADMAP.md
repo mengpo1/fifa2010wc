@@ -67,8 +67,8 @@
   - C0.5 est atteint au sens de la gouvernance. **J0 est clos**, après vérification de
     tous ses critères (`docs/reports/J0_IDENTIFICATION.md` §5.2).
   - Ni la validation de C0.4, ni la clôture de J0 n'autorisent à traiter les
-    exécutables. Cela relève de l'autorisation de commencer J2 (PJ2-3), qui n'est pas
-    donnée.
+    exécutables. Cela relève de l'autorisation de commencer J2 (PJ2-3), accordée le
+    2026-11-23 (D-015). Le traitement attend PB-0 (`docs/J2_PLAN.md` §2).
 
 ### J1 — Chaîne de compilation Linux et NixOS (sans le jeu)
 
@@ -90,15 +90,22 @@
   depuis J0, sans que cela prouve un code différent. Prérequis, éléments réutilisables
   et éléments à refaire : `docs/J2_PREREQUISITES.md`.
 - **Plan d'exécution** : `docs/J2_PLAN.md`. Il a deux phases séparées : la phase A, sans
-  données du jeu, puis la phase B, sur les données privées, seulement après PJ2-3 et
-  les contrôles préalables. Le plan seul n'autorise aucune exécution.
+  données du jeu, puis la phase B, sur les données privées et sur la machine de
+  l'utilisateur, seulement après PB-0. Le plan seul n'autorise aucune exécution.
+- **État (2026-11-23)** : PA-0 et PJ2-3 sont accordées (D-015), et PB-0 n'est pas
+  franchi. J2 commence par l'étape A1 : `docs/J2_A1_SDK_INVENTORY.md`.
 - Correctifs du SDK nécessaires à ce jeu transposés vers le commit retenu. Au minimum
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
   0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite.
 - Couche `platform/linux` : répertoires XDG, journaux, gestionnaire de plantage par
-  signaux, limitée à ce que ReXGlue ne fournit pas. Le SDK suit déjà `XDG_DATA_HOME` et
-  `XDG_CONFIG_HOME`, et il a un rapporteur de plantage POSIX et un journal dans un
-  fichier [V] (`docs/J2_PLAN.md`, étape A1).
+  signaux, limitée à ce que ReXGlue ne fournit pas. [V] Le SDK fournit déjà :
+  - le dossier de l'application sous `XDG_CONFIG_HOME`, quand celui de l'exécutable n'est
+    pas inscriptible ;
+  - un rapporteur de plantage POSIX ;
+  - l'arrêt propre sur SIGINT et SIGTERM ;
+  - un journal dans un fichier.
+
+  La couche ne fait donc que régler ces chemins (`docs/J2_A1_SDK_INVENTORY.md` §2 et §7).
 
 ### J3 — Écran-titre sous Vulkan
 

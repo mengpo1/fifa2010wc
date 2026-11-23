@@ -187,7 +187,8 @@ restait ouverte.
 Clôture (2026-11-22) : D-008 est une **décision de projet clôturée — O3 retenue**.
 - Le porteur du projet a levé le préalable interne de l'avis juridique formel.
 - La qualification juridique reste **[I]** : le risque résiduel est ouvert (R-01).
-- L'autorisation de commencer J2 (PJ2-3) n'est pas donnée.
+- L'autorisation de commencer J2 (PJ2-3) n'était pas donnée. *Elle l'est le 2026-11-23
+  (D-015) ; le traitement des fichiers du jeu attend PB-0.*
 
 Détails : `docs/DECISIONS.md`, D-008.
 

@@ -11,5 +11,5 @@ Règles :
 - ce qui dépend du système passe par `platform/common/`.
 
 État : vide jusqu'au jalon J2. Le code de cette couche n'a de sens qu'avec la génération
-de code du jeu. Elle suit la voie retenue par D-008 (O3), et attend l'autorisation de
-commencer J2 (PJ2-3, `docs/J2_PREREQUISITES.md`).
+de code du jeu. Elle suit la voie retenue par D-008 (O3). J2 est autorisé (D-015) ; la
+génération de code attend la phase B, après PB-0 (`docs/J2_PLAN.md`).

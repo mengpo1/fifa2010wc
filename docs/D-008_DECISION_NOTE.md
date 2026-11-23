@@ -13,7 +13,8 @@
 >   D-008).
 >
 > Ces suites datent du 2026-11-22. L'analyse des §1 à §8 et l'addendum du §9 leur sont
-> antérieurs ; ils ne sont pas modifiés.
+> antérieurs ; ils ne sont pas modifiés. Le 2026-11-23, PJ2-3 est accordée
+> (`docs/DECISIONS.md`, D-015) : les statuts du §10 sont ceux de leur date.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 >
 > Méthode :

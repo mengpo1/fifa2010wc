@@ -84,8 +84,8 @@ graphique.
 ## 5. Ce qui suit J1
 
 J2 (génération de code et édition de liens) dès que D-008 est tranchée et l'ISO
-identifiée. *2026-11-22 : les deux sont faits ; J2 attend l'autorisation PJ2-3, et son
-plan est dans `../J2_PLAN.md`.* Puis viennent J3 (écran-titre sous Vulkan) ; J4
+identifiée. *2026-11-22 : les deux sont faits, et le plan de J2 est dans
+`../J2_PLAN.md`. 2026-11-23 : J2 est autorisé (D-015) ; la phase B attend PB-0.* Puis viennent J3 (écran-titre sous Vulkan) ; J4
 (**premier match jouable**, 11 critères mesurables : trois matchs complets sans
 plantage, ≥ 30 i/s, audio sans sous-alimentation notable, manette et clavier,
 persistance, hygiène des données) ;

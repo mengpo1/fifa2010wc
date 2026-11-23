@@ -5,8 +5,9 @@
 > dont J2 aura besoin, ce qui peut être repris du projet A et ce qui demande une
 > nouvelle analyse.
 > Mis à jour le 2026-11-22 après la clôture de D-008 (O3 retenue) et de J0. Le plan
-> d'exécution de J2 est dans `docs/J2_PLAN.md`. **L'autorisation PJ2-3 n'est pas
-> donnée.**
+> d'exécution de J2 est dans `docs/J2_PLAN.md`.
+> Mis à jour le 2026-11-23 (D-015) : **PA-0 et PJ2-3 sont accordées. PB-0 n'est pas
+> franchi.** Aucun fichier du jeu n'est encore traité.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Point de départ
@@ -35,11 +36,15 @@
 |---|---|---|---|
 | PJ2-1 | D-008 tranchée. Toute génération de code a besoin de l'image en clair des deux modules. Éléments de décision : `docs/D-008_DECISION_NOTE.md` | **Levé au plan de la gouvernance** (2026-11-22) : décision de projet clôturée, **O3** retenue, c'est-à-dire ReXGlue v0.11.0 amont tel quel. La contrainte de mission est reformulée (D-008). **Ce n'est pas une certification juridique** : la qualification du déchiffrement, de la recompilation et du SDK contenant des clés n'est pas faite (R-01). La distribution est exclue | Porteur du projet, consigné par l'orchestrateur (ticket #8, commentaire 7086214621) |
 | PJ2-2 | J0 clos : C0.5 atteint (`J0_IDENTIFICATION.md` §5) | **Atteint** (2026-11-22) : C0.1 à C0.5 atteints, vérification au §5.2 du rapport J0 | Orchestrateur et utilisateur |
-| PJ2-3 | Autorisation explicite de commencer J2 | **Non donnée.** Elle fera l'objet d'une décision distincte. Rien de ce qui suit n'en tient lieu : ni « Je l'autorise », ni la décision O3, ni la clôture de J0, ni le ticket #12, ni le plan de J2 | Porteur du projet et orchestrateur |
+| PJ2-3 | Autorisation explicite de commencer J2 | **Accordée sur le principe** le 2026-11-23 : « oui je l'autorise et AVEC les fichiers du jeu » (ticket #14, D-015). Elle vaut pour J2, phase B comprise, pour l'exemplaire privé de l'utilisateur et sur sa machine uniquement. Elle ne vaut ni autorisation des titulaires de droits, ni avis juridique (R-01) | Porteur du projet, consigné par l'orchestrateur |
 
-Aucun fichier du jeu n'est traité avant PJ2-3, et avant les contrôles du §6. Les
-préparations sans données du jeu (phase A de `docs/J2_PLAN.md`) demandent elles aussi une
-autorisation explicite, distincte.
+La phase A, sans données du jeu, a sa propre autorisation (PA-0), accordée le 2026-11-23.
+**Aucun fichier du jeu n'est traité avant PB-0** (`docs/J2_PLAN.md` §2). Il faut d'abord :
+- PA-1 ;
+- les contrôles du §6, exécutés et consignés ;
+- la décision sur la méthode de validation des adresses (§3.3).
+
+Ce sont des conditions d'exécution, et non un nouveau consentement.
 
 ## 3. Établir si le code du disque est celui du projet A
 
@@ -79,7 +84,7 @@ tombent toutes dans l'image du module correspondant du disque de l'utilisateur
 
 Avec O3, c'est ReXGlue qui déchiffre les modules, dès le contrôle de compatibilité. Ces
 contrôles relèvent donc de la phase B du plan (`docs/J2_PLAN.md`) : ils n'ont lieu qu'après
-PJ2-3 et les contrôles du §6, dans le dossier privé de l'utilisateur. Le déchiffrement ne
+PB-0, dans le dossier privé de l'utilisateur et sur sa machine. Le déchiffrement ne
 prouve rien à lui seul. Il donne accès au code en clair, qui peut alors être comparé à ce
 que le projet A a publié de son propre code.
 
@@ -149,6 +154,14 @@ Pistes, **à décider avant la phase B**, sans en retenir aucune ici :
 
 `xeximage.py` n'est pas une piste : il est exclu.
 
+**Arbitrage du 2026-11-23 (D-015)** :
+- la priorité va à la piste 1, à évaluer par lecture du code en A1 et A8 ;
+- la piste 2 demanderait une dérogation explicite : aucun programme nouveau produisant
+  une image décodée n'est autorisé implicitement ;
+- la méthode est décidée après A8, avant PB-0.
+
+Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`.
+
 ## 4. Réutilisable sans nouvelle analyse du disque
 
 | Élément | Origine | Pourquoi il ne dépend pas du disque | Statut |
@@ -170,7 +183,7 @@ Pistes, **à décider avant la phase B**, sans en retenir aucune ici :
 | Débuts de fonctions ajoutés (`[functions]`, marqueur « autofix ») | Dans `pc/config/default.toml` et `fifadllzf.toml` | Adresses du code | Validation des adresses (§3.2) : régénérer selon la méthode d'`autofix_codegen.py`, comparer, garder la sortie régénérée |
 | Pointeurs de code | 663 lignes (`default_pointers.toml`), 17 028 lignes (`fifadllzf_pointers.toml`) | Adresses du code et des données | Validation des adresses : régénérer selon la méthode de `find_code_pointers.py`, exiger l'identité |
 | `setjmp_address`, `longjmp_address` | `0x8283C680`, `0x8283C950` | Adresses du CRT dans `fifadllzf.xex` | Contrôle de compatibilité, puis méthode de `find_setjmp.py` et vérification manuelle (validation des adresses) |
-| `function_table_base` (correctif 0003) | `0x86100000` | La disposition des modules, concordante (§3.1), mais aussi des contraintes du runtime que les en-têtes ne donnent pas : taille de la table de répartition de chaque module, carte mémoire invitée de ReXGlue v0.11.0, autres réservations | **Non vérifiable par les seuls en-têtes.** À établir à J2 avec le runtime de v0.11.0, lors de la transposition du correctif 0003 |
+| `function_table_base` (correctif 0003) | `0x86100000` | La disposition des modules, concordante (§3.1), mais aussi des contraintes du runtime que les en-têtes ne donnent pas : taille de la table de répartition de chaque module, carte mémoire invitée de ReXGlue v0.11.0, autres réservations | **Non vérifiable par les seuls en-têtes.** À établir à J2 avec le runtime de v0.11.0, lors de la transposition du correctif 0003. *A1 (2026-11-23) : la clé n'existe pas en v0.11.0, qui place chaque table juste après son image. Pour `default.xex`, elle chevaucherait `fifadllzf.xex` si son code dépasse `0x78000` octets ; cette taille est inconnue (`docs/J2_A1_SDK_INVENTORY.md` §5.4)* |
 | `pc/fixes/boot_fixes.cpp` | Crochet sur `sub_82CBD7E0`, registre en `0x83A4648C`, emplacement `0x64` | Adresses du code et des données | Validation des adresses : vérification manuelle ; si écart, retrouver la fonction et le registre équivalents et réécrire le crochet |
 | `pc/fixes/lua_diagnostics.cpp` | Crochet sur `sub_829655A8` (`luaD_throw`), décalages de structures Lua | Adresse de la fonction ; disposition des structures de Lua | Validation des adresses : vérification manuelle ; les décalages sont propres à la version de Lua [H] |
 | Valeurs du manifeste | Chemins `out/game-files`, `sdk_version = "0.10.0"` | Installation du projet A | Chemins vers le dossier privé (variable d'environnement), `sdk_version` de v0.11.0 |
@@ -207,8 +220,9 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
    - le répertoire de travail courant ;
    - les chemins relatifs du fichier de configuration.
 
-   Ce que ReXGlue écrit, et où, sera établi par l'inventaire A1 de `docs/J2_PLAN.md`. Ce
-   n'est pas encore connu [I].
+   Ce que ReXGlue écrit, et où, est établi par l'inventaire A1, par lecture du code
+   (`docs/J2_A1_SDK_INVENTORY.md` §3 et §6). Ce que le jeu lui-même écrit reste
+   inconnu [I].
 2. Résoudre chaque destination en **chemin canonique**, liens symboliques compris
    (`realpath -m`).
 3. Exiger que chacune soit **sous `$WC2010_PRIVATE_DIR`**, dossier lui-même vérifié par
@@ -216,9 +230,22 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
 4. Lancer la commande depuis un **répertoire de travail du dossier privé**. Diriger aussi
    vers des sous-dossiers du dossier privé :
    - `TMPDIR` ;
-   - `XDG_DATA_HOME` et `XDG_CONFIG_HOME` : [V] le SDK y place ses dossiers d'utilisateur,
-     et à défaut sous `~/.local/share` et `~/.config` (`docs/J2_PLAN.md` §3.1) ;
-   - `XDG_CACHE_HOME`, par précaution.
+   - `XDG_CONFIG_HOME` : [V] le SDK y place le dossier de l'application quand celui de
+     l'exécutable n'est pas inscriptible, et à défaut sous `~/.config`
+     (`docs/J2_A1_SDK_INVENTORY.md` §2) ;
+   - `XDG_DATA_HOME`, par précaution : [V] le SDK ne le lit que dans une fonction sans
+     appelant ;
+   - `XDG_CACHE_HOME`, par précaution ;
+   - `REX_APP_ROOT`, pour le dossier de l'application de ReXGlue (journaux, `user`,
+     réglages) : [V] essai sans données du jeu (`docs/J2_A1_SDK_INVENTORY.md` §2).
+5. Vérifier aussi les autres mesures relevées par l'inventaire A1
+   (`docs/J2_A1_SDK_INVENTORY.md` §6) :
+   - aucun `rexglue.toml` parasite ;
+   - aucune exécution en root ;
+   - masque `077` ;
+   - `ulimit -c 0` ;
+   - aucun `.xexp` imprévu ;
+   - un dossier de sortie dédié.
 
 **Après chaque invocation** :
 
@@ -227,7 +254,10 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
    emplacements surveillés hors du dossier privé :
    - le dépôt ;
    - le répertoire personnel, dont `~/.local/share`, `~/.config` et `~/.cache` ;
-   - `/tmp` et le `TMPDIR` d'origine.
+   - `/tmp` et le `TMPDIR` d'origine ;
+   - `/dev/shm`, où aucun objet `xenia_memory_*` ne doit rester après l'arrêt ;
+   - le chemin du SDK dans le magasin, avec `nix store verify` ;
+   - les *core dumps* (`coredumpctl list`, si systemd-coredump est actif).
 
    Commande type, pour chaque emplacement :
    `find <emplacement> -xdev -newer <repère> -type f -not -path "$WC2010_PRIVATE_DIR/*"`.
@@ -246,7 +276,7 @@ les automatise est à réaliser à l'étape A4 du plan.
 Le plan d'exécution est dans `docs/J2_PLAN.md`. Il a deux phases séparées :
 
 - **phase A** : préparations génériques, sans données du jeu ;
-- **phase B** : traitement local des données privées, seulement après PJ2-3 et les
-  contrôles du §6.
+- **phase B** : traitement local des données privées, seulement après PB-0, c'est-à-dire
+  PA-1, les contrôles du §6 et la méthode de validation des adresses.
 
 Le plan seul n'autorise aucune exécution.

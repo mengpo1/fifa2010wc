@@ -106,8 +106,8 @@
 - **Mitigation** (`docs/J2_PREREQUISITES.md` §3) :
   - comparaison de la disposition en mémoire, sans déchiffrement : **faite**,
     concordante ;
-  - puis, à la phase B du plan de J2 (`docs/J2_PLAN.md`), après PJ2-3 et les contrôles
-    préalables (`docs/J2_PREREQUISITES.md` §6) :
+  - puis, à la phase B du plan de J2 (`docs/J2_PLAN.md`), après PB-0, qui comprend les
+    contrôles préalables (`docs/J2_PREREQUISITES.md` §6) :
     - tests de compatibilité initiaux : C2.1 et contrôles ciblés. Ce n'est pas une
       preuve d'identité ;
     - validation spécifique avant toute réutilisation des adresses : régénérer avec les
@@ -128,6 +128,17 @@
   de jeu dans une dérivation Nix pure, CI sans jeu, relecture des journaux avant partage.
   Avant de traiter des fichiers du jeu, les contrôles CP-1 à CP-7 sont exécutés, puis
   répétés après chaque étape (`docs/J2_PREREQUISITES.md` §6).
+- **[V] (A1, 2026-11-23)** Vecteurs propres à ReXGlue v0.11.0
+  (`docs/J2_A1_SDK_INVENTORY.md` §2, §4.3 et §6) :
+  - journal créé par défaut à côté de l'exécutable. Lancé en root sur un magasin
+    inscriptible, il est écrit dans le magasin Nix (constaté avec des données
+    synthétiques) ;
+  - image décodée dans `/dev/shm/xenia_memory_*`, en mode `0777` moins le masque ;
+  - *core dumps* non désactivés ;
+  - manifeste réécrit, et `codegen.d` avec des chemins absolus.
+
+  Parades : `REX_APP_ROOT` dans le dossier privé, jamais de root, masque `077`,
+  `ulimit -c 0`.
 
 ### R-12 — Conformité des licences tierces
 

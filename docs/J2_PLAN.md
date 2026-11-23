@@ -1,9 +1,15 @@
 # Plan du jalon J2 — génération de code et édition de liens
 
 > Préparé le 2026-11-22 pour le ticket [#12](https://github.com/mengpo1/fifa2010wc/issues/12).
-> **Ce plan n'autorise aucune exécution, et ne commence pas J2.** L'autorisation de
-> commencer J2 (PJ2-3) n'est pas donnée. Chaque phase demande sa propre autorisation
-> explicite (§2).
+> **Ce plan n'autorise à lui seul aucune exécution.** Chaque phase demande sa propre
+> autorisation explicite (§2).
+>
+> Mise à jour du 2026-11-23 (D-015, ticket #14) :
+> - PA-0 et PJ2-3 sont accordées ;
+> - PB-0 n'est pas franchi : la phase B attend PA-1, les contrôles CP-1 à CP-7 et la
+>   décision sur la méthode A8 ;
+> - les points du §6 sont tranchés, sauf la méthode de validation des adresses ;
+> - J2 est commencé par l'étape A1, dont l'inventaire est `docs/J2_A1_SDK_INVENTORY.md`.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Cadre
@@ -19,7 +25,9 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 | J0 | Clos : C0.1 à C0.5 atteints | `reports/J0_IDENTIFICATION.md` §5.2 |
 | PJ2-1 | Levé au plan de la gouvernance, sans certification juridique | `J2_PREREQUISITES.md` §2 |
 | PJ2-2 | Atteint | `J2_PREREQUISITES.md` §2 |
-| PJ2-3 | **Non donnée** | `J2_PREREQUISITES.md` §2 |
+| PA-0 | **Accordée** le 2026-11-23 | `DECISIONS.md`, D-015 |
+| PJ2-3 | **Accordée sur le principe** le 2026-11-23, phase B comprise, sur la machine de l'utilisateur | `DECISIONS.md`, D-015 ; `J2_PREREQUISITES.md` §2 |
+| PB-0 | **Non franchi** | §2 |
 
 **Règles qui valent pour toutes les étapes** :
 
@@ -43,17 +51,16 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 
 | Point | Quand | Qui décide | Condition |
 |---|---|---|---|
-| **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A |
+| **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A. **Accordée le 2026-11-23** (D-015) |
 | **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9 |
-| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse**, PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), source de l'image décidée (`J2_PREREQUISITES.md` §3.3) |
+| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Non franchi** : les trois dernières conditions restent à remplir |
 | **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0 |
 | **PB-2** | Après le contrôle de compatibilité (B2) | Orchestrateur, puis porteur du projet | Validation des adresses ou nouvelle analyse |
 | **PB-3** | Avant de versionner un fichier tiré du disque | Orchestrateur, puis porteur du projet | Seules des adresses et des métadonnées, autorisées par D-007, après le contrôle des données |
 | **PB-4** | Fin de J2 | Orchestrateur, puis porteur du projet | C2.1 à C2.4. J3 ne commence pas sans décision |
 
-**Proposition, à confirmer** : la phase A ne lit aucune donnée du jeu. Elle demande donc
-une autorisation propre (PA-0), et non PJ2-3. Si l'orchestrateur préfère la rattacher à
-PJ2-3, l'ordre des étapes ne change pas.
+**Confirmé (D-015)** : PA-0 est distincte de PJ2-3. La phase A ne lit aucune donnée du
+jeu.
 
 **Arrêts immédiats, à toute étape** (on suspend, on consigne, on ne supprime rien sans
 décision explicite) :
@@ -66,7 +73,7 @@ décision explicite) :
 
 ## 3. Phase A — préparations génériques, sans données du jeu
 
-**Entrée** : PA-0.
+**Entrée** : PA-0, accordée le 2026-11-23.
 
 **Règles de la phase** :
 
@@ -80,14 +87,18 @@ décision explicite) :
 - **But** : ne rien réécrire de ce que le SDK fournit, et savoir où il écrit ses sorties.
 - **Faits déjà relevés** (lecture de la source à `a3e1d82`, sans exécution) :
   - [V] `GetUserFolder` suit `XDG_DATA_HOME`, et à défaut `~/.local/share`
-    (`src/base/platform/file_posix.cpp`) ;
+    (`src/base/platform/file_posix.cpp`). L'inventaire A1 a établi qu'aucun code de `src/`
+    ne l'appelle ;
   - [V] `GetUserConfigFolder` suit `XDG_CONFIG_HOME`, et à défaut `~/.config/<nom>` ;
   - [V] `XDG_STATE_HOME` n'est utilisé nulle part dans `src/` ;
   - [V] un rapporteur de plantage POSIX par signaux existe (`src/base/crash_posix.cpp`) ;
   - [V] `rexglue` écrit son journal dans un fichier avec `--log-file`
     (`src/rexglue/main.cpp`).
-- **Livrable** : un inventaire versionné. Pour chaque point, le fichier source et sa
-  ligne, et le statut « fourni » ou « à écrire ». Points couverts :
+- **État (2026-11-23)** : l'inventaire est rédigé, `docs/J2_A1_SDK_INVENTORY.md`. Il
+  est soumis à la revue de l'orchestrateur.
+- **Livrable** : un inventaire versionné, `docs/J2_A1_SDK_INVENTORY.md`. Pour chaque
+  point, le fichier source et sa ligne, et le statut « fourni » ou « à écrire ». Points
+  couverts :
   - chemins, journaux et plantages ;
   - fichiers écrits par `rexglue codegen` et par le runtime ;
   - ce qui est journalisé pendant le décodage d'un XEX ;
@@ -108,12 +119,12 @@ décision explicite) :
   - `nix build .#rexglue-sdk` passe, avec les tests du SDK ;
   - aucun correctif ne touche `src/filesystem/xex.cpp`, `thirdparty/excrypt` ni les
     clés ; une commande de vérification sur la série le montre.
-- **Point à confirmer** : O3 dit « ReXGlue v0.11.0 amont tel quel ». Ce plan le lit ainsi :
-  - le traitement des XEX (décodage et déchiffrement) reste celui de l'amont ;
-  - les correctifs fonctionnels que prévoient D-011 et `ROADMAP.md` (J2) restent permis.
-
-  Si « tel quel » veut dire « sans aucun correctif », A2 et A3 sont à revoir, alors que
-  0002 et 0003 sont nécessaires au jeu.
+- **Tranché (D-015)** : « O3 tel quel » désigne le mécanisme de décodage et de
+  déchiffrement des XEX de l'amont, inchangé.
+  - Les correctifs fonctionnels sans lien avec le déchiffrement restent permis, avec des
+    tests.
+  - Aucun correctif ancien n'est présumé compatible : chaque besoin est confirmé avant la
+    transposition, et son impact est examiné.
 
 ### 3.3 A3 — Correctif 0003 : table de répartition des fonctions
 
@@ -160,9 +171,8 @@ décision explicite) :
 
 - **But** : n'écrire que ce que l'inventaire A1 donne comme manquant, en respectant les
   règles de D-006.
-- **Lien avec le ticket #11** (J1-bis, proposé, non démarré) : il couvre les chemins XDG,
-  les journaux et les signaux. S'il est autorisé, A6 est faite dans son cadre. Le constat
-  de A1 vaut aussi pour lui.
+- **Ticket #11** (J1-bis) : il est remplacé par la phase A (D-015). La couche Linux
+  générique relève de A1, puis de A6, et rien n'est engagé sous #11.
 - **Critère de sortie** : des tests Linux sans données du jeu.
 
 ### 3.7 A7 — Essai de la chaîne sans données du jeu (facultatif)
@@ -181,6 +191,12 @@ décision explicite) :
 - **But** : préparer la décision du `J2_PREREQUISITES.md` §3.3, à partir de A1. Les outils
   du projet A chargent l'image par `xeximage.py`, qui est exclu. ReXGlue n'a aucune
   commande qui écrive l'image décodée.
+- **Arbitrage (D-015)** :
+  - la note évalue d'abord une validation fondée sur les diagnostics, les sorties et les
+    interfaces existants de ReXGlue ;
+  - si elle ne suffit pas, la note compare les autres méthodes, avec leurs risques,
+    leurs limites et les dérogations qu'elles demanderaient ;
+  - aucun programme nouveau produisant une image décodée n'est autorisé implicitement.
 - **Livrable** : une note qui compare les pistes, sans en exécuter aucune. **La décision
   revient à l'orchestrateur et au porteur du projet.**
 
@@ -194,13 +210,13 @@ décision explicite) :
 - La série de correctifs ne touche ni le décodage des XEX, ni `excrypt`, ni les clés.
 - La source de l'image est décidée par le porteur du projet, sur la proposition A8. À
   défaut, PB-0 n'est pas franchi et la phase B ne commence pas.
-- Un rapport de phase A est rédigé. Ensuite, la décision PJ2-3 appartient au porteur
-  du projet.
+- Un rapport de phase A est rédigé. PJ2-3 est déjà accordée (D-015) : PA-1 n'en est
+  pas un nouveau consentement, seulement un point de revue.
 
-## 4. Phase B — traitement local des données privées, après PJ2-3
+## 4. Phase B — traitement local des données privées, après PB-0
 
-**Entrée** : PB-0 (§2). L'autorisation PJ2-3 est citée, et reliée à sa source, dans
-`DECISIONS.md` et `J2_PREREQUISITES.md`.
+**Entrée** : PB-0 (§2). L'autorisation PJ2-3 est citée et reliée à sa source dans
+`DECISIONS.md` (D-015) et `J2_PREREQUISITES.md` §2.
 
 **Règles de la phase** :
 
@@ -280,13 +296,20 @@ décision explicite) :
 
 - J3 et la suite, ainsi que toute distribution.
 - Le correctif « sans clé » d'O2, et `xeximage.py`.
-- Le ticket #11 (J1-bis), qui reste une option distincte.
+- Le ticket #11 (J1-bis), remplacé par la phase A (D-015).
 - La mise à jour du titre et les DLC.
 
 ## 6. Points à trancher
 
-1. **L'autorisation de la phase A** (PA-0). Faut-il la rattacher à PJ2-3, ou non (§2) ?
-2. **La lecture de « O3 tel quel »** face aux correctifs fonctionnels du SDK (§3.2).
-3. **La source de l'image en clair** pour valider les adresses
-   (`J2_PREREQUISITES.md` §3.3, étape A8).
-4. **L'articulation avec le ticket #11** pour la couche Linux (§3.6).
+Points tranchés le 2026-11-23 (D-015) :
+
+1. **L'autorisation de la phase A** : PA-0 est distincte de PJ2-3, et accordée.
+2. **La lecture de « O3 tel quel »** : le déchiffrement de l'amont reste inchangé, et les
+   correctifs fonctionnels sont permis (§3.2).
+3. **L'articulation avec le ticket #11** : il est remplacé par la phase A (§3.6).
+
+Point encore ouvert :
+
+4. **La méthode de validation des adresses**, et la source de l'image si elle en
+   demande une (`J2_PREREQUISITES.md` §3.3). Elle est décidée après A8, avant PB-0 ; la
+   priorité va aux diagnostics existants de ReXGlue.
