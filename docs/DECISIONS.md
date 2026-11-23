@@ -280,7 +280,10 @@
   arbre source (`bd12f1aa8e972f0f4c608a7d23a6971acfaf6c35`) [V].
 - **Options examinées** :
   - v0.11.0 : compilation sous Nix vérifiée [V], API actuelle ; correctifs du projet A à
-    transposer (0003 et 0002 au minimum ; 0001 et 0006 semblent déjà en amont [V]) ;
+    transposer (0003 et 0002 au minimum ; 0001 et 0006 semblent déjà en amont [V]).
+    *Établi à l'étape A2 (`docs/J2_A2_SDK_PATCHES.md`) : 0001, 0004 et 0007 sont déjà en
+    amont, et 0006 l'est en partie. 0002, 0003 et 0008 restent nécessaires ; 0002 peut
+    l'être par configuration seule ;*
   - `bd833a2` avec les correctifs du projet A : base Windows connue, mais compilation
     Linux non vérifiée et API ancienne.
 - **Règle commune** : commit exact épinglé ; correctifs numérotés dans

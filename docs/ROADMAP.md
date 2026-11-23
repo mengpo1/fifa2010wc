@@ -96,7 +96,11 @@
   franchi. J2 commence par l'étape A1 : `docs/J2_A1_SDK_INVENTORY.md`.
 - Correctifs du SDK nécessaires à ce jeu transposés vers le commit retenu. Au minimum
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
-  0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite.
+  0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite. *Analyse de
+  l'étape A2 (`docs/J2_A2_SDK_PATCHES.md`) :*
+  - *pour J2 lui-même, seul 0003 est nécessaire ;*
+  - *0002 sert au démarrage (J3), peut-être par configuration seule ;*
+  - *0008 sert aux sauvegardes (J4).*
 - Couche `platform/linux` : répertoires XDG, journaux, gestionnaire de plantage par
   signaux, limitée à ce que ReXGlue ne fournit pas. [V] Le SDK fournit déjà :
   - le dossier de l'application sous `XDG_CONFIG_HOME`, quand celui de l'exécutable n'est

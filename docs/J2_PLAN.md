@@ -113,6 +113,14 @@ décision explicite) :
 - **But** : transposer vers v0.11.0 les correctifs 0001, 0002, 0004, 0006, 0007 et 0008
   du projet A (`J2_PREREQUISITES.md` §4). Avant cela, établir ceux qui sont déjà en
   amont : 0001 et 0006 semblent l'être (D-011).
+- **État (2026-11-23)** : l'analyse des besoins est rédigée, sans aucun correctif
+  (`docs/J2_A2_SDK_PATCHES.md`). Elle est soumise à la revue.
+  - Déjà en amont : 0001, 0004 et 0007.
+  - En partie : 0006, dont le compteur est fourni.
+  - Nécessaires : 0002, peut-être par configuration seule, et 0008 avant J4.
+  - Non nécessaire : 0005, puisque la racine du jeu est extraite.
+
+  Les correctifs ne seront écrits qu'après la validation de ces verdicts.
 - **Livrable** : une série numérotée dans `patches/rexglue-sdk/`, appliquée par
   `nix/rexglue-sdk.nix`, et la provenance de chaque correctif (D-010).
 - **Critère de sortie** :
