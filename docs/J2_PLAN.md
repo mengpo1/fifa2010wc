@@ -147,7 +147,9 @@ décision explicite) :
 - **État (2026-11-23)** : correctif et analyse rédigés, soumis à la revue
   (`docs/J2_A3_FUNCTION_TABLE.md`, `patches/rexglue-sdk/0001-function-table-base.patch`).
   - Sans la clé, la table reste où l'amont la place.
-  - Une table déplacée doit tomber sur des pages libres : v0.11.0 ne le vérifie pas.
+  - Une table déplacée doit tomber sur des pages libres : v0.11.0 ne le vérifie pas. Le
+    correctif l'alloue par une allocation exclusive, sans fenêtre entre la vérification et
+    la prise des pages (P-38), et calcule tailles et fins sur 64 bits (P-39).
   - `0x86100000` n'est valable que si le code de `fifadllzf.xex` ne dépasse pas
     `0x12C8000` octets [I]. `0x86C10000` l'est pour toute taille de code. Le choix
     revient à la phase B.

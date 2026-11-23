@@ -10,8 +10,12 @@ and carries it to the runtime:
   REX_FUNC_TABLE_BASE in the generated header, the lookup in _indirect_call.inja and
   PPCImage::function_table_base in the generated init;
 - runtime: FunctionDispatcher and GuestAddressSpace::InitializeFunctionTable take the
-  table base; the dispatcher refuses any overlap between images and tables, and a moved
-  table must land on free pages of the XEX heap;
+  table base; the dispatcher refuses any overlap between images and tables; every begin,
+  end and size is computed in 64 bits and checked to fit (32 bit guest addresses, the XEX
+  heap) before 32 bit fields are filled;
+- heap: BaseHeap::AllocFixedExclusive checks that every page is free and takes the pages
+  under one hold of the heap lock, and changes nothing on a conflict. A moved table is
+  allocated with it, since AllocFixed with reserve and commit takes over reserved pages;
 - without the key, the table stays where upstream puts it.
 
 Provenance: adapted from patch 0003-function-table-base.patch of
@@ -20,8 +24,9 @@ bd833a2. BSD 3-Clause License, Copyright (c) 2026, Miertescu Stefan-Calin; the n
 reproduced in THIRD_PARTY.md. Rewritten for v0.11.0 (other file layout and names).
 The base passed for a module loaded later (src/kernel/module_registry.cpp) was in
 project A's patch 0002; only that part of 0002 is taken here.
-Added here: 64 bit range ends, the check of a table against its own image, the free page
-check, codegen validation and the unit tests.
+Added here: 64 bit ranges and sizes, the check of a table against its own image, the
+exclusive allocation, a test hook in GuestAddressSpace, codegen validation and the unit
+tests.
 
 Not touched: XEX loading and decryption (src/filesystem/xex.cpp, src/kernel/xex_module.cpp,
 thirdparty/excrypt). Check: grep '^diff --git' on this file.
@@ -62,10 +67,50 @@ index b46b20df..94c11f15 100644
      u32 thunk_limit;
    };
 diff --git a/include/rex/kernel/heap.h b/include/rex/kernel/heap.h
-index f4897ddd..683b6fa8 100644
+index f4897ddd..3f740b31 100644
 --- a/include/rex/kernel/heap.h
 +++ b/include/rex/kernel/heap.h
-@@ -782,13 +782,15 @@ class REX_KERNEL_API GuestAddressSpace : public ISystemHeap {
+@@ -17,6 +17,7 @@
+ #include <cassert>
+ #include <cstddef>
+ #include <cstdint>
++#include <functional>
+ #include <memory>
+ #include <mutex>
+ #include <string>
+@@ -232,6 +233,20 @@ class REX_KERNEL_API BaseHeap {
+   virtual bool AllocFixed(u32 base_address, u32 size, u32 alignment, u32 allocation_type,
+                           u32 protect);
+ 
++  /**
++   * Allocates pages at an address only when every page of the range is free (fifa2010wc
++   * patch). AllocFixed with kMemoryAllocationReserve | kMemoryAllocationCommit takes over
++   * pages that are already reserved; this call fails instead and changes nothing. The check
++   * and the allocation are made under one hold of the heap lock, so no other allocation can
++   * come between them. Not for a physical heap, whose parent heap it would not check.
++   *
++   * @param base_address Guest address to allocate at.
++   * @param allocation_type MemoryAllocationFlag bits.
++   * @param protect MemoryProtectFlag bits.
++   */
++  bool AllocFixedExclusive(u32 base_address, u32 size, u32 alignment, u32 allocation_type,
++                           u32 protect);
++
+   /**
+    * Allocates pages within an address range. Fails when not enough contiguous pages are found.
+    *
+@@ -362,8 +377,9 @@ class REX_KERNEL_API BaseHeap {
+    */
+   u32 GetSystemRangeBase() const;
+ 
++  /** With exclusive, fails without any change when a page of the range is reserved. */
+   bool AllocFixedLocked(u32 base_address, u32 size, u32 alignment, u32 allocation_type,
+-                        u32 protect);
++                        u32 protect, bool exclusive = false);
+ 
+   bool AllocRangeLocked(u32 low_address, u32 high_address, u32 size, u32 alignment,
+                         u32 allocation_type, u32 protect, bool top_down, u32* out_address);
+@@ -782,13 +798,25 @@ class REX_KERNEL_API GuestAddressSpace : public ISystemHeap {
    void PlotProfile();
  
    /**
@@ -75,13 +120,23 @@ index f4897ddd..683b6fa8 100644
 +   * Initializes the per module function dispatch table at table_base, or at
 +   * IMAGE_BASE + IMAGE_SIZE when table_base is 0, indexed by (guest_addr - code_base) * 2. The
 +   * function table calls are internally locked and may be made from any thread.
++   *
++   * The table takes (code_size + kThunkReserveSize) * 2 bytes, computed in 64 bits; it fails
++   * when the table does not fit in the 0x80000000 heap. A table moved away from the end of its
++   * image is allocated with BaseHeap::AllocFixedExclusive, so it never takes over reserved pages.
     *
     * @param code_base The first guest address of the code.
 +   * @param table_base Guest address of the table, 0 for image_base + image_size.
-    */
--  bool InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base, u32 image_size);
++   */
 +  bool InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base, u32 image_size,
 +                               u32 table_base = 0);
++  /**
++   * Test hook, empty in normal use (fifa2010wc patch): called by InitializeFunctionTable for a
++   * moved table once its range is worked out, just before the pages are allocated. Tests use it
++   * to make another thread allocate at that moment.
+    */
+-  bool InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base, u32 image_size);
++  std::function<void(u32 table_base, u32 table_size)> function_table_alloc_hook_for_testing;
    /**
     * Removes the function table of a module and releases its pages.
     *
@@ -255,7 +310,7 @@ index 38466ab4..8b2fd614 100644
      KeySpec{"skip_msr", Type::kBoolean},
      KeySpec{"ctr_as_local", Type::kBoolean},
 diff --git a/src/kernel/function_dispatcher.cpp b/src/kernel/function_dispatcher.cpp
-index 36bf9e08..94ab1bd2 100644
+index 36bf9e08..91e1d22a 100644
 --- a/src/kernel/function_dispatcher.cpp
 +++ b/src/kernel/function_dispatcher.cpp
 @@ -160,7 +160,8 @@ void FunctionDispatcher::RaiseGraphicsInterrupt(u32 source, u32 cpu) {
@@ -268,37 +323,50 @@ index 36bf9e08..94ab1bd2 100644
    std::lock_guard<std::recursive_mutex> lock(dispatch_mutex_);
  
    if (is_entrypoint && entrypoint_code_base_ != 0) {
-@@ -168,15 +169,38 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+@@ -168,23 +169,58 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
                  entrypoint_code_base_);
    }
  
 -  u32 new_table_end = image_base + image_size + (code_size + kThunkReserveSize) * 2;
-+  if (table_base == 0) {
-+    table_base = image_base + image_size;
-+  }
-+  // 64 bit ends, so that a range ending at 4 GiB does not wrap to 0.
-+  auto table_end = [](u32 base, u32 code) {
-+    return static_cast<u64>(base) + (static_cast<u64>(code) + kThunkReserveSize) * 2;
+-  u32 new_code_end = code_base + code_size + kThunkReserveSize;
++  // Every begin and end in 64 bits, so that a range ending at or past 4 GiB cannot wrap to a
++  // small address. Each range is checked to fit in 32 bit guest addresses before the 32 bit
++  // fields below are filled.
++  auto table_end = [](u64 base, u32 code) {
++    return base + (static_cast<u64>(code) + kThunkReserveSize) * 2;
 +  };
 +  auto overlaps = [](u64 a_begin, u64 a_end, u64 b_begin, u64 b_end) {
 +    return a_begin < b_end && b_begin < a_end;
 +  };
++  constexpr u64 kAddressSpaceEnd = 0x100000000ull;
 +  const u64 new_image_end = static_cast<u64>(image_base) + image_size;
-+  const u64 new_table_end = table_end(table_base, code_size);
++  const u64 table_begin = table_base != 0 ? table_base : new_image_end;
++  const u64 new_table_end = table_end(table_begin, code_size);
++  const u64 new_code_end = static_cast<u64>(code_base) + code_size + kThunkReserveSize;
++  // The code end becomes the 32 bit thunk_limit below, so it must stay under 4 GiB.
++  if (new_image_end > kAddressSpaceEnd || new_table_end > kAddressSpaceEnd ||
++      new_code_end >= kAddressSpaceEnd) {
++    REXCPU_FAIL(false,
++                "Module image [{:08X}, {:X}), table [{:08X}, {:X}) or code [{:08X}, {:X}) does "
++                "not fit in 32 bit guest addresses",
++                image_base, new_image_end, table_begin, new_table_end, code_base, new_code_end);
++  }
++  table_base = static_cast<u32>(table_begin);
 +  if (overlaps(image_base, new_image_end, table_base, new_table_end)) {
 +    REXCPU_FAIL(false, "Module table [{:08X}, {:08X}) overlaps its own image [{:08X}, {:08X})",
 +                table_base, new_table_end, image_base, new_image_end);
 +  }
-   u32 new_code_end = code_base + code_size + kThunkReserveSize;
    for (const auto& existing : module_tables_) {
 -    u32 existing_table_end =
 -        existing.image_base + existing.image_size + (existing.code_size + kThunkReserveSize) * 2;
-+    const u64 existing_image_end = static_cast<u64>(existing.image_base) + existing.image_size;
-+    const u64 existing_table_end = table_end(existing.table_base, existing.code_size);
-     u32 existing_code_end = existing.code_base + existing.code_size + kThunkReserveSize;
+-    u32 existing_code_end = existing.code_base + existing.code_size + kThunkReserveSize;
 -    if (image_base < existing_table_end && new_table_end > existing.image_base) {
 -      REXCPU_FAIL(false, "Module image range [{:08X}, {:08X}) overlaps existing [{:08X}, {:08X})",
 -                  image_base, new_table_end, existing.image_base, existing_table_end);
++    const u64 existing_image_end = static_cast<u64>(existing.image_base) + existing.image_size;
++    const u64 existing_table_end = table_end(existing.table_base, existing.code_size);
++    const u64 existing_code_end =
++        static_cast<u64>(existing.code_base) + existing.code_size + kThunkReserveSize;
 +    // Images and tables must not overlap in any combination.
 +    if (overlaps(image_base, new_image_end, existing.image_base, existing_image_end) ||
 +        overlaps(image_base, new_image_end, existing.table_base, existing_table_end) ||
@@ -311,9 +379,10 @@ index 36bf9e08..94ab1bd2 100644
 +                  image_base, new_image_end, table_base, new_table_end, existing.image_base,
 +                  existing_image_end, existing.table_base, existing_table_end);
      }
-     if (code_base < existing_code_end && new_code_end > existing.code_base) {
+-    if (code_base < existing_code_end && new_code_end > existing.code_base) {
++    if (overlaps(code_base, new_code_end, existing.code_base, existing_code_end)) {
        REXCPU_FAIL(false, "Module code range [{:08X}, {:08X}) overlaps existing [{:08X}, {:08X})",
-@@ -184,7 +208,8 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+                   code_base, new_code_end, existing.code_base, existing_code_end);
      }
    }
  
@@ -323,15 +392,17 @@ index 36bf9e08..94ab1bd2 100644
      REXCPU_FAIL(false, "Failed to initialize guest memory function table");
    }
  
-@@ -193,6 +218,7 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+@@ -193,16 +229,20 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
        .code_size = code_size,
        .image_base = image_base,
        .image_size = image_size,
 +      .table_base = table_base,
        .next_thunk_address = code_base + code_size,
-       .thunk_limit = code_base + code_size + kThunkReserveSize,
+-      .thunk_limit = code_base + code_size + kThunkReserveSize,
++      .thunk_limit = static_cast<u32>(new_code_end),
    });
-@@ -201,8 +227,11 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+ 
+   if (is_entrypoint) {
      entrypoint_code_base_ = code_base;
    }
  
@@ -346,10 +417,10 @@ index 36bf9e08..94ab1bd2 100644
  }
  
 diff --git a/src/kernel/memory.cpp b/src/kernel/memory.cpp
-index 4ca50499..65268767 100644
+index 4ca50499..857e063a 100644
 --- a/src/kernel/memory.cpp
 +++ b/src/kernel/memory.cpp
-@@ -776,9 +776,12 @@ void GuestAddressSpace::PlotProfile() {
+@@ -776,20 +776,49 @@ void GuestAddressSpace::PlotProfile() {
  }
  
  bool GuestAddressSpace::InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base,
@@ -357,34 +428,112 @@ index 4ca50499..65268767 100644
 +                                                u32 image_size, u32 table_base) {
    constexpr u32 kThunkReserveSize = kernel::FunctionDispatcher::kThunkReserveSize;
 -  u32 table_base = image_base + image_size;
-+  const u32 default_table_base = image_base + image_size;
-+  if (table_base == 0) {
-+    table_base = default_table_base;
+-  u32 table_size = (code_size + kThunkReserveSize) * 2;
++  auto& heap = heaps_.v80000000;
++
++  // Base, size and end in 64 bits, checked against the heap before they are narrowed to the
++  // 32 bits the allocator takes: a large code_size must not wrap to a small table.
++  const u64 default_table_base = static_cast<u64>(image_base) + image_size;
++  const u64 table_begin = table_base != 0 ? table_base : default_table_base;
++  const u64 table_size64 = (static_cast<u64>(code_size) + kThunkReserveSize) * 2;
++  const u64 table_end = table_begin + table_size64;
++  const u64 heap_begin = heap.GetHeapBase();
++  const u64 heap_end = heap_begin + heap.GetHeapSize();
++  if (table_begin < heap_begin || table_end > heap_end) {
++    REXSYS_FAIL(false, "Function table {:08X}-{:08X} does not fit in the XEX heap {:08X}-{:08X}",
++                table_begin, table_end, heap_begin, heap_end);
 +  }
-   u32 table_size = (code_size + kThunkReserveSize) * 2;
++  const bool moved = table_begin != default_table_base;
++  table_base = static_cast<u32>(table_begin);
++  const u32 table_size = static_cast<u32>(table_size64);
  
    REXSYS_DEBUG(
-@@ -786,6 +789,20 @@ bool GuestAddressSpace::InitializeFunctionTable(u32 code_base, u32 code_size, u3
+       "Initializing function table at {:08X}, size {:08X} for code {:08X}-{:08X} "
        "(+{:08X} thunk reserve)",
        table_base, table_size, code_base, code_base + code_size, kThunkReserveSize);
  
-+  // AllocFixed with reserve and commit does not refuse pages that are already reserved: it
-+  // takes them over, and Zero() below would wipe them. A table moved by function_table_base
-+  // must therefore land on free pages. The default placement keeps the upstream behaviour.
-+  if (table_base != default_table_base) {
-+    auto& heap = heaps_.v80000000;
-+    HeapAllocation occupant{};
-+    if (table_base < 0x80000000u || !heap.QueryRegionInfo(table_base, &occupant) ||
-+        occupant.state != 0 ||
-+        occupant.region_size < rex::RoundUpPow2(table_size, heap.GetPageSize())) {
-+      REXSYS_FAIL(false, "Function table range {:08X}-{:08X} is not free in the XEX heap",
-+                  table_base, static_cast<u64>(table_base) + table_size);
+-  if (!heaps_.v80000000.AllocFixed(
+-          table_base, table_size, 0x10000,
+-          kernel::kMemoryAllocationReserve | kernel::kMemoryAllocationCommit,
+-          kernel::kMemoryProtectRead | kernel::kMemoryProtectWrite)) {
++  constexpr u32 kTableAllocation =
++      kernel::kMemoryAllocationReserve | kernel::kMemoryAllocationCommit;
++  constexpr u32 kTableProtect = kernel::kMemoryProtectRead | kernel::kMemoryProtectWrite;
++  bool allocated = false;
++  if (moved) {
++    // AllocFixed with reserve and commit takes over pages that are already reserved, and
++    // Zero() below would then wipe them. A table moved by function_table_base is allocated
++    // with AllocFixedExclusive, which checks and takes the pages under one hold of the heap
++    // lock and changes nothing on a conflict. The default placement keeps the upstream call.
++    if (function_table_alloc_hook_for_testing) {
++      function_table_alloc_hook_for_testing(table_base, table_size);
++    }
++    allocated =
++        heap.AllocFixedExclusive(table_base, table_size, 0x10000, kTableAllocation, kTableProtect);
++  } else {
++    allocated = heap.AllocFixed(table_base, table_size, 0x10000, kTableAllocation, kTableProtect);
++  }
++  if (!allocated) {
+     REXSYS_FAIL(false, "Failed to allocate function table at {:08X}", table_base);
+   }
+ 
+@@ -1126,8 +1155,24 @@ bool BaseHeap::AllocFixed(u32 base_address, u32 size, u32 alignment, u32 allocat
+   return true;
+ }
+ 
++bool BaseHeap::AllocFixedExclusive(u32 base_address, u32 size, u32 alignment,
++                                   u32 allocation_type, u32 protect) {
++  if (heap_type_ == HeapType::kGuestPhysical) {
++    REXSYS_FAIL(false, "BaseHeap::AllocFixedExclusive is not for a physical heap ({:08X})",
++                base_address);
++  }
++  PendingScribble scribble(allocation_type, protect);
++  auto reconcile_lock = AcquireHostPageReconcileLock();
++  if (!AllocFixedLocked(base_address, size, alignment, allocation_type, protect,
++                        /*exclusive=*/true)) {
++    return false;
++  }
++  scribble.Add(*this, base_address, size);
++  return true;
++}
++
+ bool BaseHeap::AllocFixedLocked(u32 base_address, u32 size, u32 alignment, u32 allocation_type,
+-                                u32 protect) {
++                                u32 protect, bool exclusive) {
+   const bool title_memory = (allocation_type & kernel::kMemoryAllocationTitle) != 0;
+   allocation_type &= ~static_cast<u32>(kernel::kMemoryAllocationTitle);
+   alignment = rex::RoundUpNonZero(alignment, page_size_);
+@@ -1155,6 +1200,18 @@ bool BaseHeap::AllocFixedLocked(u32 base_address, u32 size, u32 alignment, u32 a
+ 
+   std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
+ 
++  // An exclusive allocation needs every page free. It is checked under the same hold of the
++  // heap lock as the page table update below, so nothing can be reserved in between.
++  if (exclusive) {
++    for (u32 page_number = start_page_number; page_number <= end_page_number; ++page_number) {
++      if (page_table_[page_number].state) {
++        REXSYS_FAIL(false,
++                    "BaseHeap::AllocFixedExclusive range {:08X}-{:08X} holds reserved pages",
++                    base_address, static_cast<u64>(base_address) + size);
++      }
 +    }
 +  }
 +
-   if (!heaps_.v80000000.AllocFixed(
-           table_base, table_size, 0x10000,
-           kernel::kMemoryAllocationReserve | kernel::kMemoryAllocationCommit,
+   // A reserve needs the whole range unreserved, a commit may overlap committed pages.
+   for (u32 page_number = start_page_number; page_number <= end_page_number; ++page_number) {
+     u32 state = page_table_[page_number].state;
+@@ -1221,6 +1278,11 @@ bool BaseHeap::AllocFixedLocked(u32 base_address, u32 size, u32 alignment, u32 a
+   }
+ 
+   if (!SyncHostPageAccess(start_page_number, end_page_number)) {
++    if (exclusive) {
++      // The pages were all free before this call: give them back instead of leaving a range
++      // that is reserved but not usable.
++      ReleaseLocked(base_address, nullptr);
++    }
+     return false;
+   }
+ 
 diff --git a/src/kernel/module_registry.cpp b/src/kernel/module_registry.cpp
 index 5a72e84c..f30df5a1 100644
 --- a/src/kernel/module_registry.cpp
@@ -506,10 +655,18 @@ index 00000000..1d5c612a
 +  CHECK_FALSE(Generate("function_table_base = 0x100000000\n").ok);
 +}
 diff --git a/tests/unit/kernel/function_dispatcher_test.cpp b/tests/unit/kernel/function_dispatcher_test.cpp
-index 9a3a9802..0096fff4 100644
+index 9a3a9802..84fa28bd 100644
 --- a/tests/unit/kernel/function_dispatcher_test.cpp
 +++ b/tests/unit/kernel/function_dispatcher_test.cpp
-@@ -114,6 +114,95 @@ REX_TEST_CASE("SetFunction rejects image data below code_base", "[kernel][dispat
+@@ -9,6 +9,7 @@
+  *              See LICENSE file in the project root for full license text.
+  */
+ 
++#include <thread>
+ #include <type_traits>
+ #include <utility>
+ 
+@@ -114,6 +115,230 @@ REX_TEST_CASE("SetFunction rejects image data below code_base", "[kernel][dispat
    CHECK(dispatcher.GetFunction(kImageBase + 0x10) == nullptr);
  }
  
@@ -600,6 +757,141 @@ index 9a3a9802..0096fff4 100644
 +  // The same module is accepted with its table on free pages.
 +  CHECK(dispatcher.InitializeFunctionTable(kImageA, 0x10000u, kImageA, 0x100000u,
 +                                           /*is_entrypoint=*/false, 0x8E400000u));
++}
++
++namespace {
++constexpr u32 kTableAllocation =
++    rex::kernel::kMemoryAllocationReserve | rex::kernel::kMemoryAllocationCommit;
++constexpr u32 kTableProtect = rex::kernel::kMemoryProtectRead | rex::kernel::kMemoryProtectWrite;
++
++// Clears the test hook of the shared test memory when a test ends, even on a failed REQUIRE.
++struct TableHookReset {
++  rex::kernel::GuestAddressSpace& memory;
++  ~TableHookReset() { memory.function_table_alloc_hook_for_testing = nullptr; }
++};
++}  // namespace
++
++// The free page check and the allocation must be one step. The hook runs at the last moment
++// before the allocation, after the range is worked out; there another thread reserves a page of
++// the range, and is joined so that the order is fixed. A separate check made before the hook
++// would have missed that page, and the table would have taken it over and wiped it.
++REX_TEST_CASE("A page reserved by another thread just before a moved table is allocated is kept",
++              "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++  TableHookReset reset{memory};
++
++  // The table takes (0x10000 + 0x10000) * 2 = 0x40000 bytes from 0x8E600000.
++  constexpr u32 kImage = 0x8E300000u;
++  constexpr u32 kTableBase = 0x8E600000u;
++  constexpr u32 kRacer = kTableBase + 0x20000u;
++  auto* heap = memory.LookupHeap(kRacer);
++  REQUIRE(heap != nullptr);
++
++  bool hook_ran = false;
++  bool racer_allocated = false;
++  memory.function_table_alloc_hook_for_testing = [&](u32 table_base, u32 table_size) {
++    hook_ran = table_base == kTableBase && table_size == 0x40000u;
++    std::thread racer([&] {
++      racer_allocated = heap->AllocFixed(kRacer, 0x10000u, 0x10000u, kTableAllocation,
++                                         kTableProtect);
++      if (racer_allocated) {
++        *memory.TranslateVirtual<u32*>(kRacer + 0x100) = 0x12345678u;
++      }
++    });
++    racer.join();
++  };
++
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(kImage, 0x10000u, kImage, 0x100000u,
++                                                 /*is_entrypoint=*/false, kTableBase));
++  CHECK(hook_ran);
++  REQUIRE(racer_allocated);
++  // The page of the other thread keeps its owner and its content.
++  CHECK(*memory.TranslateVirtual<u32*>(kRacer + 0x100) == 0x12345678u);
++  rex::kernel::HeapAllocation info{};
++  REQUIRE(heap->QueryRegionInfo(kRacer, &info));
++  CHECK(info.allocation_base == kRacer);
++  // Nothing of the table range was taken.
++  REQUIRE(heap->QueryRegionInfo(kTableBase, &info));
++  CHECK(info.state == 0);
++  CHECK(info.region_size == 0x20000u);
++}
++
++REX_TEST_CASE("An exclusive fixed allocation takes no page when one page is reserved",
++              "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  constexpr u32 kBase = 0x8E800000u;
++  auto* heap = memory.LookupHeap(kBase);
++  REQUIRE(heap != nullptr);
++
++  // The last page of the range is reserved.
++  REQUIRE(heap->AllocFixed(kBase + 0x30000u, 0x10000u, 0x10000u, kTableAllocation,
++                           kTableProtect));
++  *memory.TranslateVirtual<u32*>(kBase + 0x30000u) = 0xCAFEF00Du;
++  CHECK_FALSE(heap->AllocFixedExclusive(kBase, 0x40000u, 0x10000u, kTableAllocation,
++                                        kTableProtect));
++
++  // The three free pages stay free, and the reserved page keeps its owner and content.
++  rex::kernel::HeapAllocation info{};
++  REQUIRE(heap->QueryRegionInfo(kBase, &info));
++  CHECK(info.state == 0);
++  CHECK(info.region_size == 0x30000u);
++  REQUIRE(heap->QueryRegionInfo(kBase + 0x30000u, &info));
++  CHECK(info.allocation_base == kBase + 0x30000u);
++  CHECK(*memory.TranslateVirtual<u32*>(kBase + 0x30000u) == 0xCAFEF00Du);
++
++  // Free pages are taken.
++  CHECK(heap->AllocFixedExclusive(kBase, 0x30000u, 0x10000u, kTableAllocation, kTableProtect));
++  REQUIRE(heap->QueryRegionInfo(kBase, &info));
++  CHECK(info.allocation_base == kBase);
++}
++
++REX_TEST_CASE("A moved table is released when it is destroyed", "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  constexpr u32 kCode = 0x8E900000u;
++  constexpr u32 kTableBase = 0x8EA00000u;
++  auto* heap = memory.LookupHeap(kTableBase);
++  REQUIRE(heap != nullptr);
++
++  REQUIRE(memory.InitializeFunctionTable(kCode, 0x10000u, kCode, 0x10000u, kTableBase));
++  rex::kernel::HeapAllocation info{};
++  REQUIRE(heap->QueryRegionInfo(kTableBase, &info));
++  CHECK(info.allocation_base == kTableBase);
++
++  REQUIRE(memory.DestroyFunctionTable(kCode));
++  REQUIRE(heap->QueryRegionInfo(kTableBase, &info));
++  CHECK(info.state == 0);
++}
++
++// Sizes and ends are computed in 64 bits. In 32 bits, (0x80000000 + 0x10000) * 2 wraps to
++// 0x20000, and a table of that size would have been allocated for a code range far larger.
++REX_TEST_CASE("A table or code range that does not fit is refused", "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++  constexpr u32 kTableBase = 0x8EC00000u;
++  auto* heap = memory.LookupHeap(kTableBase);
++  REQUIRE(heap != nullptr);
++
++  // Table size past 4 GiB, given straight to the guest memory and through the dispatcher.
++  CHECK_FALSE(memory.InitializeFunctionTable(0x10000000u, 0x80000000u, 0x10000000u, 0x10000u,
++                                             kTableBase));
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(0x10000000u, 0x80000000u, 0x8EB00000u, 0x10000u,
++                                                 /*is_entrypoint=*/false, kTableBase));
++  rex::kernel::HeapAllocation info{};
++  REQUIRE(heap->QueryRegionInfo(kTableBase, &info));
++  CHECK(info.state == 0);
++
++  // Table end past the end of the 0x80000000 heap: (0x80000 + 0x10000) * 2 = 0x120000 bytes
++  // from 0x8FF00000 end at 0x90020000.
++  CHECK_FALSE(memory.InitializeFunctionTable(0x8FE00000u, 0x80000u, 0x8FE00000u, 0x10000u,
++                                             0x8FF00000u));
++
++  // Code range, with its thunk reserve, past 4 GiB.
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(0xFFFF0000u, 0x8000u, 0x8EB00000u, 0x10000u,
++                                                 /*is_entrypoint=*/false, kTableBase));
++  // The same module with a code range that fits is accepted.
++  CHECK(dispatcher.InitializeFunctionTable(0x8EB00000u, 0x8000u, 0x8EB00000u, 0x10000u,
++                                           /*is_entrypoint=*/false, kTableBase));
 +}
 +
  namespace {

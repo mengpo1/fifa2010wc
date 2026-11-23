@@ -17,7 +17,11 @@
   reste inconnue [I] (§7).
 - **Constat sur v0.11.0** : une allocation à adresse fixe avec réservation et engagement
   ne refuse pas des pages déjà réservées [V]. Elle les reprend, et la table les met à
-  zéro. Le correctif refuse donc une table déplacée sur des pages occupées (§4.2).
+  zéro. Le correctif alloue donc une table déplacée par une **allocation exclusive** :
+  la vérification des pages et leur prise se font sous une seule prise du verrou du tas,
+  et rien n'est modifié en cas de conflit (§4.2, P-38).
+- **Tailles sur 64 bits** : la taille et la fin de la table sont calculées sur 64 bits et
+  comparées au tas avant d'être ramenées à 32 bits (§5.1, P-39).
 - **Valeur du projet A, `0x86100000`** : elle ne convient que si le code de
   `fifadllzf.xex` ne dépasse pas `0x12C8000` octets. Cette taille est inconnue [I].
 - **Valeur valable pour toute taille de code** : `0x86C10000`, calculée à partir des
@@ -96,6 +100,20 @@ l'exécution le dira (phase B).
 au moment de l'installation. Une table **déplacée** pourrait en revanche effacer une
 autre allocation sans aucune erreur. Le correctif l'interdit (§5.1).
 
+**Vérifier puis allouer ne suffit pas** (P-38, revue 6023670172). La première version du
+correctif interrogeait la plage (`QueryRegionInfo`), puis appelait `AllocFixed`. Chacun
+prend le verrou du tas pour lui seul (`src/kernel/memory.cpp:1646-1652` et `:1156`) [V].
+Un autre fil pouvait donc réserver des pages entre les deux appels, et la table les
+aurait reprises puis effacées. Le correctif ajoute `BaseHeap::AllocFixedExclusive` :
+- il vérifie que **toutes** les pages de la plage sont libres, dans `AllocFixedLocked`,
+  sous la même prise du verrou que la mise à jour de la table des pages ;
+- en cas de conflit, il échoue **avant** toute modification : aucune page n'est prise,
+  aucune n'est effacée ;
+- si une étape ultérieure échoue (synchronisation des droits de l'hôte), il rend la
+  plage, qui était libre avant l'appel. Les autres échecs possibles, refus de l'hôte et
+  budget de mémoire du titre, surviennent avant toute modification [V code] ;
+- il refuse un tas physique, dont il ne vérifierait pas le tas parent.
+
 ## 5. Le correctif
 
 ### 5.1 Contenu
@@ -105,7 +123,10 @@ autre allocation sans aucune erreur. Le correctif l'interdit (§5.1).
 | Configuration de la génération de code | Clé par binaire `function_table_base`, entier, 0 par défaut. Refusée si elle n'est pas alignée sur 64 Kio, si elle sort de `0x80000000-0x8FFFFFFF` ou si elle dépasse 32 bits. Elle n'est jamais reprise d'une couche partagée (`ClearAddressEntries`) |
 | Gabarits | `REX_FUNC_TABLE_BASE` dans l'en-tête généré. `REX_LOOKUP_FUNC` s'en sert. `PPCImage::function_table_base` est renseigné dans l'initialisation générée |
 | Runtime | `FunctionDispatcher::InitializeFunctionTable` et `GuestAddressSpace::InitializeFunctionTable` reçoivent la base. Le titre et les modules la transmettent depuis leur `PPCImage` |
-| Contrôles du runtime | Pas de chevauchement entre images et tables, dans toutes les combinaisons, y compris une table et sa propre image. Fins de plages calculées sur 64 bits. Une table déplacée doit tomber sur des pages libres de `v80000000` (§4.2) |
+| Contrôles du runtime | Pas de chevauchement entre images et tables, dans toutes les combinaisons, y compris une table et sa propre image. Débuts et fins de plages calculés sur 64 bits ; une image, une table ou un code (avec sa réserve de *thunks*) qui ne tient pas en 32 bits est refusé, avant que les champs de 32 bits ne soient remplis |
+| Mémoire invitée | Taille et fin de la table sur 64 bits, comparées aux bornes du tas `v80000000` avant la conversion en 32 bits. Une table déplacée est allouée par `AllocFixedExclusive` (§4.2) ; la place par défaut garde l'appel de l'amont |
+| Tas (`BaseHeap`) | Nouvelle allocation exclusive `AllocFixedExclusive` (§4.2) |
+| Point d'injection pour les tests | `GuestAddressSpace::function_table_alloc_hook_for_testing`, vide en usage normal : appelé juste avant l'allocation d'une table déplacée |
 | Journal | Le message de niveau *debug* donne la plage de la table de chaque module |
 
 Fichiers touchés : 18, la liste est produite par le contrôle `sdk-patches`
@@ -119,8 +140,8 @@ contrôle échoue sinon, et il est d'abord essayé sur un correctif synthétique
 chevauchements deux à deux. Le passage de la base pour un module chargé ensuite
 (`src/kernel/module_registry.cpp`) figurait dans le correctif 0002 du projet A ; il est
 séparé ici, comme le demandait A2 (`docs/J2_A2_SDK_PATCHES.md` §3.2). Rien d'autre de
-0002 n'est repris. Ajouté ici : fins sur 64 bits, contrôle face à sa propre
-image, contrôle des pages libres, validation de la clé, tests.
+0002 n'est repris. Ajouté ici : plages sur 64 bits, contrôle face à sa propre
+image, allocation exclusive, validation de la clé, tests.
 
 ### 5.2 Comportement sans la clé [V]
 
@@ -130,7 +151,9 @@ image, contrôle des pages libres, validation de la clé, tests.
   module revient à comparer leurs unions, contiguës quand la table suit l'image. Le
   résultat est donc celui de l'amont, sauf débordement au-delà de 4 Gio, désormais
   détecté.
-- Le contrôle des pages libres ne s'applique qu'à une table déplacée.
+- Une taille ou une plage qui ne tient pas en 32 bits est désormais refusée, au lieu de
+  revenir à une petite valeur. Pour des tailles valides, rien ne change.
+- L'allocation exclusive ne s'applique qu'à une table déplacée.
 - Les tests de l'amont passent toujours (§5.3).
 
 ### 5.3 Tests
@@ -144,6 +167,10 @@ Tous tournent sur des images et une mémoire synthétiques.
 | `A table moved with table_base lets the next image load` | le même cas passe une fois la table déplacée |
 | `A table that overlaps another table or its own image is refused` | les deux chevauchements sont refusés |
 | `A moved table is refused on pages that are already reserved` | une table déplacée sur une page occupée est refusée, et la page garde son contenu ; la même table passe sur des pages libres |
+| `A page reserved by another thread just before a moved table is allocated is kept` | **concurrence, de façon déterministe** (P-38) : au point d'injection, juste avant l'allocation, un autre fil réserve une page de la plage, puis il est attendu (`join`). La table est refusée ; la page garde son propriétaire et son contenu ; aucune page de la plage n'est prise. Avec la première version (vérification, puis allocation), cette page aurait été reprise et effacée |
+| `An exclusive fixed allocation takes no page when one page is reserved` | `AllocFixedExclusive` sur quatre pages, dont la dernière est réservée : échec, les trois pages libres le restent, la page réservée garde son propriétaire et son contenu ; sur les seules pages libres, l'allocation réussit |
+| `A moved table is released when it is destroyed` | la table déplacée est rendue au tas quand elle est détruite |
+| `A table or code range that does not fit is refused` | P-39 : une taille de table au-delà de 4 Gio est refusée par la mémoire invitée et par le répartiteur, sans rien allouer (en 32 bits, elle serait revenue à `0x20000`) ; une fin au-delà du tas et un code au-delà de 4 Gio sont refusés ; le même module, de taille valide, est accepté |
 | `Without function_table_base the table follows the image` | sans la clé, l'en-tête généré place la table après l'image, et la recherche passe par `REX_FUNC_TABLE_BASE` |
 | `function_table_base moves the table` | la clé est reportée dans l'en-tête et dans l'initialisation générés |
 | `A function_table_base that is not 64 KiB aligned is refused` | la génération échoue |
@@ -157,13 +184,13 @@ Résultats : voir §8.
 |---|---|---|
 | T-1 | Alignée sur 64 Kio, la taille des pages de `v80000000` | La génération de code ; `AllocFixed` à l'exécution |
 | T-2 | Début dans `0x80000000-0x8FFFFFFF` | La génération de code |
-| T-3 | Fin, `base + (code_size + 0x10000) × 2`, au plus `0x90000000` | L'exécution seulement (`AllocFixed` échoue hors du tas) : la génération ne vérifie pas la fin |
+| T-3 | Fin, `base + (code_size + 0x10000) × 2`, au plus `0x90000000` | L'exécution seulement, sur 64 bits, avant toute allocation : la génération ne vérifie pas la fin |
 | T-4 | Aucun chevauchement avec une image ou une table de module recompilé, y compris la sienne | Le runtime, à l'enregistrement de chaque module |
-| T-5 | Pages libres au moment de l'allocation : zone de démarrage `0x80000000-0x8003FFFF`, images déjà chargées, autres allocations | Le runtime, pour une table déplacée (§4.2) |
+| T-5 | Pages libres au moment de l'allocation : zone de démarrage `0x80000000-0x8003FFFF`, images déjà chargées, autres allocations, y compris celles d'un autre fil | Le runtime, pour une table déplacée, par l'allocation exclusive (§4.2) |
 | T-6 | Plage encore libre quand un module est chargé **après** la table | Le chargeur des XEX (`src/kernel/xex_module.cpp:221-229`) : erreur explicite au chargement |
 
 Chaque violation de T-1 à T-6 produit une erreur explicite au démarrage du titre ou au
-chargement du module [V code ; tests §5.3 pour T-1, T-2, T-4 et T-5]. Une seule
+chargement du module [V code ; tests §5.3 pour T-1 à T-5]. Une seule
 exception, hors du correctif : une allocation que l'invité ferait **après** la table, à
 une adresse qu'il impose (§9).
 
@@ -202,6 +229,10 @@ du SDK.
 Construction locale du 2026-11-23, dans le conteneur de Claude Code, sans données du
 jeu.
 
+*Les résultats ci-dessous sont ceux de la version d'avant les corrections P-38 et P-39,
+avec 9 tests. La nouvelle construction, avec 13 tests, est en cours ; ce tableau sera
+remplacé par ses résultats.*
+
 | Vérification | Résultat |
 |---|---|
 | Application du correctif | Les 18 fichiers sont corrigés sans décalage ni rejet |
@@ -231,3 +262,8 @@ Le journal CTest et le rapport JUnit sont installés avec le SDK, sous
   dépôt.
 - La fin de la table n'est pas vérifiée à la génération du code (T-3). Une table qui
   sortirait du tas échoue au démarrage, avec une erreur.
+- La reprise après un échec de synchronisation des droits de l'hôte (§4.2) n'est pas
+  testée : aucun moyen synthétique ne fait échouer cette étape. Elle est vérifiée par
+  lecture du code seulement.
+- Le point d'injection pour les tests est un membre public de `GuestAddressSpace`. Il
+  reste vide hors des tests ; rien dans le SDK ne le renseigne.
