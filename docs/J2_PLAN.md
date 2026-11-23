@@ -199,15 +199,17 @@ décision explicite) :
   - aucun programme nouveau produisant une image décodée n'est autorisé implicitement.
 - **Livrable** : une note qui compare les pistes, sans en exécuter aucune. **La décision
   revient à l'orchestrateur et au porteur du projet.**
-- **État (2026-11-23)** : la note est rédigée, `docs/J2_A8_ADDRESS_VALIDATION.md`. Elle
-  propose :
-  - la piste M1, fondée sur les diagnostics, les listes d'adresses et la désassemblée en
-    commentaire du code généré ;
-  - M3, une nouvelle analyse avec ReXGlue seul, en repli ;
-  - M2, une image produite par le projet, exclue sauf dérogation ;
-  - une étape A8-bis pour l'outil de comparaison, avec des tests synthétiques.
+- **État (2026-11-23)** : la note est rédigée, `docs/J2_A8_ADDRESS_VALIDATION.md`.
+  L'arbitrage de l'orchestrateur (revue 6021690700) :
+  - M1 est la méthode de première analyse : les diagnostics, les listes d'adresses et la
+    désassemblée en commentaire du code généré ;
+  - M3, une nouvelle analyse avec ReXGlue seul, est le repli de recherche ;
+  - M2, une image produite par le projet, n'est pas autorisée ;
+  - l'étape A8-bis est autorisée en phase A. Ce sera l'outil de comparaison, purement
+    analytique, avec des tests synthétiques. Elle ne franchit pas PB-0 à elle seule.
 
-  La note attend la décision.
+  M1 n'établit que des niveaux de preuve N0 à N2. Les valeurs de données restent N3,
+  non vérifiées.
 
 ### 3.9 Sortie de la phase A (PA-1)
 
@@ -319,6 +321,7 @@ Points tranchés le 2026-11-23 (D-015) :
 
 Point encore ouvert :
 
-4. **La méthode de validation des adresses**, et la source de l'image si elle en
-   demande une (`J2_PREREQUISITES.md` §3.3). Elle est décidée après A8, avant PB-0 ; la
-   priorité va aux diagnostics existants de ReXGlue.
+4. **La méthode de validation des adresses** (`J2_PREREQUISITES.md` §3.3). *Arbitrée le
+   2026-11-23 : M1 d'abord, M3 en repli, M2 non autorisée, A8-bis autorisée
+   (`docs/J2_A8_ADDRESS_VALIDATION.md` §4). L'arbitrage sera acquis à la fusion de la
+   note.*
