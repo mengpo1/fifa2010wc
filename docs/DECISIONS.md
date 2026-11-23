@@ -16,13 +16,14 @@
 | D-005 | C++23, CMake, Ninja, Clang ≥ 20 | Proposée |
 | D-006 | Isolation des systèmes et règles de portabilité | Proposée |
 | D-007 | Ressources propriétaires hors dépôt et hors magasin Nix | Acceptée |
-| D-008 | Déchiffrement des XEX et protections techniques | **Décision de projet clôturée — O3 retenue** (2026-11-22) ; risque juridique résiduel ouvert (R-01) ; J2 non autorisé (PJ2-3) |
+| D-008 | Déchiffrement des XEX et protections techniques | **Décision de projet clôturée — O3 retenue** (2026-11-22) ; risque juridique résiduel ouvert (R-01) ; J2 autorisé le 2026-11-23 (D-015) |
 | D-009 | Intégration NixOS (flake, SDK pur, jeu impur) | Proposée |
 | D-010 | Politique de réutilisation des projets existants | Proposée |
 | D-011 | Épinglage du SDK et série de correctifs | Acceptée (v0.11.0) |
 | D-012 | Hébergement du projet | Acceptée |
 | D-013 | Pas de lanceur graphique avant J5 | Proposée |
 | D-014 | Xenia seulement comme oracle de développement | Proposée |
+| D-015 | Lancement de J2 : autorisations PA-0 et PJ2-3, arbitrages de la phase A | **Acceptée** (2026-11-23) ; phase B soumise à PB-0, non franchi |
 
 ---
 
@@ -224,8 +225,10 @@
     pas une attestation de conformité juridique. Pour la clôture de J0, voir
     `docs/reports/J0_IDENTIFICATION.md` §5 ;
   - **PJ2-1** est levé au même titre (`docs/J2_PREREQUISITES.md` §2) ;
-  - **L'autorisation PJ2-3 n'est pas donnée** : cette décision ne lance pas J2. Aucun XEX n'est traité,
-    aucun code n'est généré, rien n'est déchiffré ;
+  - **L'autorisation PJ2-3 n'était pas donnée** : cette décision ne lançait pas J2.
+    Aucun XEX n'est traité, aucun code n'est généré, rien n'est déchiffré. *Suite : PJ2-3
+    est accordée le 2026-11-23 (D-015) ; le traitement des fichiers du jeu attend
+    PB-0.*
   - **R-01** reste un risque élevé (`docs/audit/RISKS.md`).
 - **Éléments de droit** : les sources officielles sont listées aux §9.2 et §10 de
   `docs/D-008_DECISION_NOTE.md`. Elles ne remplacent pas une consultation juridique.
@@ -302,3 +305,48 @@
 - **Décision** : Xenia peut servir, sur la machine du développeur, à produire des
   comportements et des captures de référence. Il n'est jamais lancé par le portage, ni
   distribué avec lui. Cela respecte l'exigence « sans émulateur lors de son utilisation ».
+
+## D-015 — Lancement de J2 : autorisations PA-0 et PJ2-3, arbitrages de la phase A
+
+- **Statut** : **Acceptée** (2026-11-23). Sources :
+  - [ticket #14](https://github.com/mengpo1/fifa2010wc/issues/14) et son
+    [commentaire 7099561807](https://github.com/mengpo1/fifa2010wc/issues/14#issuecomment-7099561807) ;
+  - instruction directe du porteur du projet à Claude Code.
+- **Déclaration citée** : « oui je l'autorise et AVEC les fichiers du jeu ».
+- **Autorisations**. Une autorisation enregistrée n'est pas un prérequis technique
+  satisfait.
+
+  | Point | État | Portée |
+  |---|---|---|
+  | **PA-0** | **Accordée** | Phase A (A1 à A8), sans ISO, XEX, ressource du jeu, code généré ni donnée propriétaire |
+  | **PJ2-3** | **Accordée sur le principe** | J2, phase B comprise : traitement local de l'exemplaire privé de l'utilisateur, **sur sa machine uniquement** |
+  | **PB-0** | **Non franchi** | Conditions techniques d'entrée en phase B, sans nouveau consentement : PA-1, CP-1 à CP-7 exécutés et consignés, méthode de validation des adresses décidée après A8 (`docs/J2_PLAN.md` §2) |
+
+- **Arbitrages de l'orchestrateur sur `docs/J2_PLAN.md` §6** (ticket #14) :
+  1. **Image en clair et validation des adresses** :
+     - on ne choisit ni n'exécute de nouveau moyen de produire une image ;
+     - la priorité va à une méthode fondée sur les diagnostics, les sorties et les
+       interfaces existants de ReXGlue, évaluée par lecture du code en A1 et A8 ;
+     - si elle ne suffit pas, A8 compare les autres méthodes, leurs risques et les
+       dérogations qu'elles demanderaient ;
+     - **aucun programme nouveau produisant une image décodée n'est autorisé
+       implicitement**. La méthode est décidée après A8, avant PB-0.
+  2. **« O3 tel quel »** désigne le mécanisme de décodage et de déchiffrement des XEX
+     de l'amont, inchangé.
+     - Les correctifs fonctionnels sans lien avec le déchiffrement sont permis, avec des
+       tests. C'est le cas de 0002 et 0003 s'ils sont nécessaires.
+     - Toute modification de `src/filesystem/xex.cpp`, de `thirdparty/excrypt`, des clés
+       ou du comportement de déchiffrement est exclue.
+     - Aucun correctif ancien n'est présumé compatible.
+  3. **PA-0 est distinct de PJ2-3.**
+  4. **Le ticket #11 (J1-bis) est remplacé par la phase A.** La couche Linux générique
+     relève de A1, puis de A6. Rien n'est réimplémenté de ce que fournit ReXGlue sans
+     inventaire ni besoin démontré.
+- **Ce qui ne change pas** :
+  - D-007 est impérative : tout contenu ou artefact privé reste sous
+    `$WC2010_PRIVATE_DIR`, et rien ne va dans GitHub, en CI, dans le cloud ni dans
+    `/nix/store` ;
+  - R-01 reste une incertitude juridique non résolue. Ce consentement n'est ni une
+    autorisation des titulaires de droits, ni un avis juridique ;
+  - la fusion de chaque PR, le choix de la méthode A8 et les points d'arrêt PA-1, puis
+    PB-1 à PB-4, restent des actes de revue distincts.

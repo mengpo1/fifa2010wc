@@ -116,8 +116,8 @@ identique ou non. **[I]** L'identité ou la différence du code machine reste do
   l'image en clair, ce qui permettrait de comparer le code, par exemple à la
   configuration d'analyse publiée par le projet A ;
 - **aucun déchiffrement n'est engagé**. D-008 retient O3 : ReXGlue déchiffrera les
-  modules localement, mais seulement à la phase B du plan de J2, après l'autorisation
-  PJ2-3 (`docs/J2_PLAN.md`).
+  modules localement, mais seulement à la phase B du plan de J2, après PB-0. PJ2-3 est
+  accordée depuis le 2026-11-23 (D-015 ; `docs/J2_PLAN.md`).
 
 Les méthodes de validation sont décrites dans `docs/J2_PREREQUISITES.md` §3.
 
@@ -305,4 +305,5 @@ après la revue de cohérence demandée dans le ticket #8.
 - Plan de J2 en deux phases, avec critères de sortie et points d'arrêt :
   `docs/J2_PLAN.md`.
 - J2 ne commence pas avant l'autorisation explicite PJ2-3. Ni la décision D-008, ni la
-  clôture de J0, ni le plan n'en tiennent lieu.
+  clôture de J0, ni le plan n'en tiennent lieu. *Elle est accordée le 2026-11-23
+  (D-015) ; le traitement des fichiers du jeu attend PB-0.*
