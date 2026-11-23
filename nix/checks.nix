@@ -243,7 +243,10 @@ in
       tail -n 3 "$out/selftest.txt"
       for t in test_repository_template_passes test_template_with_an_address_is_refused \
                test_init_refuses_a_folder_that_fails_cp1_and_writes_nothing \
-               test_link_out_of_the_private_folder_is_refused; do
+               test_link_out_of_the_private_folder_is_refused \
+               test_init_refuses_a_project_link_and_writes_nothing_outside \
+               test_init_stops_on_a_link_put_in_place_during_init \
+               test_template_paths_that_leave_the_private_root_are_refused_before_install; do
         grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }
       done
       ${private-project}/bin/fifa2010wc-private-project template > "$out/template.txt"
@@ -281,6 +284,22 @@ in
         echo "a guest memory object is left in /dev/shm"; exit 1
       fi
       echo "ReXGlue read the template copy and wrote nothing" >> "$out/rexglue.txt"
+
+      # P-40: with project/ a link to a folder outside the private folder, init must refuse
+      # before writing anything, through the packaged command.
+      L="$TMPDIR/linked"
+      E="$TMPDIR/outside"
+      mkdir -m 700 "$L" "$E"
+      (cd "$L" && mkdir -m 700 iso game xex generated cache saves logs)
+      ln -s "$E" "$L/project"
+      status=0
+      ${private-project}/bin/fifa2010wc-private-project --private-dir "$L" init \
+        > "$out/links.txt" 2>&1 || status=$?
+      cat "$out/links.txt"
+      [ "$status" -eq 1 ] || { echo "init must refuse a project/ link"; exit 1; }
+      [ -z "$(ls -A "$E")" ] || { echo "init wrote outside the private folder"; exit 1; }
+      [ -z "$(ls -A "$L/generated")" ] || { echo "init created output folders"; exit 1; }
+      echo "project/ link refused; the outside folder and generated/ stay empty" >> "$out/links.txt"
     '';
 
   # D-007: no proprietary data among the tracked files of the repository.

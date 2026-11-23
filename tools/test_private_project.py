@@ -106,6 +106,24 @@ class TemplateTests(Folder):
                 self.assertFound(pp.check_template(self.write_template(text)),
                                  "not a relative POSIX path")
 
+    def test_template_paths_that_leave_the_private_root_are_refused_before_install(self):
+        # P-41: the template is checked as installed in <private folder>/project/.
+        cases = {
+            "file_path": ('file_path = "../game/default.xex"',
+                          'file_path = "../../game/default.xex"'),
+            "out_directory_path": ('out_directory_path = "../generated/default"',
+                                   'out_directory_path = "../../generated/default"'),
+            "game_root": ('game_root = "../game"', 'game_root = "../.."'),
+            "hook_sources": ('name = "wc2010"\n', 'name = "wc2010"\nhook_sources = ["../../h"]\n'),
+            "includes": ('out_directory_path = "../generated/default"\nincludes = []',
+                         'out_directory_path = "../generated/default"\nincludes = ["../../x.toml"]'),
+        }
+        for label, (old, new) in cases.items():
+            with self.subTest(label):
+                self.assertIn(old, self.template_text)
+                findings = pp.check_template(self.write_template(self.template_text.replace(old, new)))
+                self.assertFound(findings, "outside the private folder")
+
     def test_template_paths_leave_the_project_folder(self):
         text = self.template_text.replace('out_directory_path = "../generated/default"',
                                           'out_directory_path = "generated/default"')
@@ -168,6 +186,79 @@ class InitTests(Folder):
         self.assertEqual(findings, [])
         self.assertEqual(read(self.manifest_path()), changed)
         self.assertTrue(any("left as it is" in note for note in notes))
+
+    def outside(self):
+        folder = os.path.join(self.top, "outside")
+        os.mkdir(folder)
+        return folder
+
+    def assertNothingWritten(self, outside):
+        self.assertEqual(os.listdir(outside), [])
+        self.assertFalse(os.path.lexists(os.path.join(self.private, "generated", "default")))
+        self.assertFalse(os.path.lexists(os.path.join(self.private, "generated", "fifadllzf")))
+
+    def test_init_refuses_a_project_link_and_writes_nothing_outside(self):
+        # P-40: project/ is a link to a folder outside the private folder.
+        outside = self.outside()
+        os.symlink(outside, os.path.join(self.private, pp.PROJECT_DIR))
+        findings, _ = self.run_init()
+        self.assertFound(findings, "symbolic link")
+        self.assertFound(findings, "nothing was written")
+        self.assertNothingWritten(outside)
+
+    def test_init_refuses_a_generated_link_and_writes_nothing_outside(self):
+        # CP-1 follows the link (generated/ is a folder for os.path.isdir); init does not.
+        outside = self.outside()
+        os.rmdir(os.path.join(self.private, "generated"))
+        os.symlink(outside, os.path.join(self.private, "generated"))
+        findings, _ = self.run_init()
+        self.assertFound(findings, "symbolic link")
+        self.assertEqual(os.listdir(outside), [])
+        self.assertFalse(os.path.lexists(os.path.join(self.private, pp.PROJECT_DIR)))
+
+    def test_init_refuses_an_output_folder_link_before_any_write(self):
+        outside = self.outside()
+        os.symlink(outside, os.path.join(self.private, "generated", "fifadllzf"))
+        findings, _ = self.run_init()
+        self.assertFound(findings, "symbolic link")
+        self.assertEqual(os.listdir(outside), [])
+        self.assertFalse(os.path.lexists(os.path.join(self.private, pp.PROJECT_DIR)))
+        self.assertFalse(os.path.lexists(os.path.join(self.private, "generated", "default")))
+
+    def test_init_refuses_a_manifest_link(self):
+        outside = self.outside()
+        os.mkdir(os.path.join(self.private, pp.PROJECT_DIR), 0o700)
+        target = os.path.join(outside, "manifest.toml")
+        os.symlink(target, self.manifest_path())
+        findings, _ = self.run_init()
+        self.assertFound(findings, "symbolic link")
+        self.assertEqual(os.listdir(outside), [])
+
+    def test_init_stops_on_a_link_put_in_place_during_init(self):
+        # A link swapped in between the checks and the writes: the anchored writes refuse to
+        # follow it, so nothing lands outside the private folder.
+        outside = self.outside()
+
+        def swap():
+            os.symlink(outside, os.path.join(self.private, pp.PROJECT_DIR))
+
+        findings, _ = pp.init(self.private, TEMPLATE, GUARD, before_writes=swap)
+        self.assertFound(findings, "changed during init")
+        self.assertEqual(os.listdir(outside), [])
+        self.assertNothingWritten(outside)
+
+    def test_init_stops_on_an_output_link_put_in_place_during_init(self):
+        outside = self.outside()
+
+        def swap():
+            os.symlink(outside, os.path.join(self.private, "generated", "default"))
+
+        findings, notes = pp.init(self.private, TEMPLATE, GUARD, before_writes=swap)
+        self.assertFound(findings, "changed during init")
+        self.assertEqual(os.listdir(outside), [])
+        # The manifest, written before, is inside the private folder.
+        self.assertTrue(os.path.isfile(self.manifest_path()))
+        self.assertFalse(os.path.islink(self.manifest_path()))
 
     def test_init_with_a_bad_template_writes_nothing(self):
         bad = self.write_template(self.template_text.replace(
@@ -234,6 +325,19 @@ class CheckTests(Folder):
         self.assertFound(self.check(self.template_text.replace('name = "wc2010"',
                                                                'name = "2010-wc"')),
                          "identifier")
+
+    def test_check_refuses_a_project_or_manifest_link(self):
+        outside = os.path.join(self.top, "outside")
+        os.mkdir(outside)
+        write(os.path.join(outside, pp.MANIFEST_NAME), self.template_text)
+        os.symlink(outside, os.path.join(self.private, pp.PROJECT_DIR))
+        findings, _ = pp.check_manifest(self.manifest_path(), self.private)
+        self.assertFound(findings, "symbolic link")
+        os.remove(os.path.join(self.private, pp.PROJECT_DIR))
+        os.mkdir(os.path.join(self.private, pp.PROJECT_DIR), 0o700)
+        os.symlink(os.path.join(outside, pp.MANIFEST_NAME), self.manifest_path())
+        findings, _ = pp.check_manifest(self.manifest_path(), self.private)
+        self.assertFound(findings, "symbolic link")
 
     def test_invalid_toml_is_reported(self):
         self.assertFound(self.check("[project\nname = 1\n"), "not valid TOML")

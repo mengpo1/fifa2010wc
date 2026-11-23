@@ -2,20 +2,31 @@
 """Sets up and checks the ReXGlue codegen project in the private folder (J2 step A5).
 
 Commands:
-  template  checks the manifest template of the repository: the rules of `check`, plus
-            the pinned SDK version and only the keys a template may hold, so no address of
-            the game (CP-7).
+  template  checks the manifest template of the repository as it would be installed in
+            <private folder>/project/: the rules of `check`, plus the pinned SDK version and
+            only the keys a template may hold, so no address of the game (CP-7).
   init      copies the template into $WC2010_PRIVATE_DIR/project/ and creates the output
-            folders it names. The private folder must pass CP-1 (private_guard check-dir)
-            first. A manifest already there is never overwritten.
+            folders it names. A manifest already there is never overwritten.
   check     checks the manifest of the private folder: every host path is relative and
             resolves inside the private folder, both XEX files lie under game_root, and
             every output folder is a dedicated folder under generated/, shared with no
             other binary. Keys added in phase B (addresses) are allowed here.
 
-It reads no XEX and runs no ReXGlue command. `init` writes only in the private folder.
-Paths that exist are resolved with their symbolic links, so a link that leaves the private
-folder is refused.
+It reads no XEX and runs no ReXGlue command. Only `init` writes, in two phases:
+
+1. Checks, with no write: the private folder passes CP-1 (private_guard check-dir); the
+   template passes the rules of `check` as installed under project/; project/, the manifest
+   and every existing folder on the way to an output folder are real folders and files,
+   not symbolic links. Any finding stops init before it writes anything.
+2. Writes, anchored to the private folder: every folder below its root is opened with
+   O_NOFOLLOW from the descriptor of its parent, folders are created relative to that
+   descriptor, and the manifest is created with O_CREAT | O_EXCL | O_NOFOLLOW. A link put
+   in place between the two phases makes the open fail, and init stops: it cannot write
+   through a link below the root of the private folder.
+
+The root itself is resolved once, by its real path; CP-1 checks that it belongs to the
+user and is closed to group and others. A process of the same user that replaces folders
+of the private folder while init runs can make it stop half way, never write elsewhere.
 
 Exit status: 0 when nothing is found, 1 when something is found, 2 on bad usage.
 """
@@ -24,6 +35,7 @@ import argparse
 import importlib.util
 import os
 import re
+import stat
 import sys
 import tomllib
 
@@ -35,6 +47,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TEMPLATE = os.path.join(os.path.dirname(HERE), "config", "private-template",
                                 MANIFEST_NAME)
 DEFAULT_GUARD = os.path.join(HERE, "private_guard.py")
+# Root of the virtual private folder in which `template` places the template. Paths are
+# only computed under it, never looked up.
+VIRTUAL_PRIVATE = "/fifa2010wc-virtual-private-folder"
 
 # Keys a template may hold. Anything else (function starts, pointers, setjmp, hooks,
 # function_table_base, analysis tables) belongs to the private copy only.
@@ -51,9 +66,13 @@ def canonical(path):
     return os.path.realpath(path)
 
 
-def within(path, folder):
-    path, folder = canonical(path), canonical(folder)
+def inside(path, folder):
+    """Path comparison only: both must already be resolved."""
     return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def within(path, folder):
+    return inside(canonical(path), canonical(folder))
 
 
 def load_manifest(path):
@@ -67,8 +86,19 @@ def load_manifest(path):
         return None, [f"the manifest {path} is not valid TOML: {error}"]
 
 
+def load_template(path):
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+        return data, tomllib.loads(data.decode("utf-8")), []
+    except OSError as error:
+        return None, None, [f"cannot read the template {path}: {error.strerror}"]
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        return None, None, [f"the template {path} is not valid TOML: {error}"]
+
+
 def host_path_findings(label, value):
-    """A host path of the manifest must be a relative string; returns its findings."""
+    """A host path of the manifest must be a relative POSIX string; returns its findings."""
     if not isinstance(value, str) or not value:
         return [f"{label} must be a non empty string"]
     if os.path.isabs(value) or value.startswith("~") or re.match(r"^[A-Za-z]:", value) \
@@ -89,22 +119,25 @@ def binaries(table):
                 yield f"[[modules]] #{index}", module
 
 
-def check_manifest(manifest_path, private):
-    """The rules of `check`. Returns (findings, resolved) with resolved paths by label."""
-    table, findings = load_manifest(manifest_path)
-    if table is None:
-        return findings, {}
-    base = os.path.dirname(os.path.abspath(manifest_path))
+def check_table(table, base, private, resolve_path=canonical):
+    """The path rules of `check` on a parsed manifest whose folder is base.
+
+    resolve_path turns base + relative value into a resolved path: the real path for a
+    manifest on disk, a plain normalised path for the template placed in the virtual
+    private folder. Returns (findings, resolved paths by label).
+    """
+    findings = []
     resolved = {}
+    private = resolve_path(private)
 
     def resolve(label, value):
         problems = host_path_findings(label, value)
         if problems:
             findings.extend(problems)
             return None
-        path = canonical(os.path.join(base, value))
+        path = resolve_path(os.path.join(base, value))
         resolved[label] = path
-        if private and not within(path, private):
+        if not inside(path, private):
             findings.append(f"{label} resolves outside the private folder: {path}")
             return None
         return path
@@ -132,19 +165,19 @@ def check_manifest(manifest_path, private):
     if "modules" in table and not isinstance(table["modules"], list):
         findings.append("modules must be an array of tables ([[modules]])")
 
-    generated = os.path.join(canonical(private), GENERATED_DIR) if private else None
+    generated = os.path.join(private, GENERATED_DIR)
     outputs = []
     guest_paths = set()
     for label, binary in binaries(table):
         xex = resolve(f"{label}.file_path", binary.get("file_path"))
-        if xex and game_root and (xex == game_root or not within(xex, game_root)):
+        if xex and game_root and (xex == game_root or not inside(xex, game_root)):
             findings.append(f"{label}.file_path is not under game_root: ReXGlue refuses it")
         out = resolve(f"{label}.out_directory_path", binary.get("out_directory_path"))
         if out:
-            if generated and (not within(out, generated) or out == generated):
+            if not inside(out, generated) or out == generated:
                 findings.append(f"{label}.out_directory_path must be a folder inside "
                                 f"{GENERATED_DIR}/, one per binary: {out}")
-            if game_root and (within(out, game_root) or within(game_root, out)):
+            if game_root and (inside(out, game_root) or inside(game_root, out)):
                 findings.append(f"{label}.out_directory_path overlaps game_root")
             outputs.append((label, out))
         includes = binary.get("includes", [])
@@ -163,18 +196,73 @@ def check_manifest(manifest_path, private):
                 guest_paths.add(normalize_guest_path(guest))
     for index, (label, out) in enumerate(outputs):
         for other_label, other in outputs[index + 1:]:
-            if within(out, other) or within(other, out):
+            if inside(out, other) or inside(other, out):
                 findings.append(f"{label} and {other_label} share an output folder: codegen "
                                 "deletes the outputs it did not write")
     return findings, resolved
 
 
+def link_findings(private, relative_parts, label):
+    """Every existing component below the private root must be a real folder (the last one
+    may be a file): no symbolic link. Stops at the first missing component."""
+    findings = []
+    path = canonical(private)
+    for index, part in enumerate(relative_parts):
+        path = os.path.join(path, part)
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            break
+        except OSError as error:
+            findings.append(f"{label}: cannot inspect {path}: {error.strerror}")
+            break
+        last = index == len(relative_parts) - 1
+        if stat.S_ISLNK(mode):
+            findings.append(f"{label}: {path} is a symbolic link; init and check follow none")
+            break
+        if not last and not stat.S_ISDIR(mode):
+            findings.append(f"{label}: {path} is not a folder")
+            break
+    return findings
+
+
+def output_parts(private, project_base, value):
+    """The components of an output folder below the private root, or None if it leaves it."""
+    target = os.path.normpath(os.path.join(project_base, value))
+    rel = os.path.relpath(target, canonical(private))
+    parts = rel.split(os.sep)
+    if rel == os.curdir or parts[0] == os.pardir:
+        return None
+    return parts
+
+
+def check_manifest(manifest_path, private):
+    """The rules of `check` on the manifest file. Returns (findings, resolved)."""
+    findings = []
+    path = os.path.abspath(manifest_path)
+    for candidate in (path, os.path.dirname(path)):
+        if os.path.islink(candidate):
+            findings.append(f"manifest: {candidate} is a symbolic link; init and check "
+                            "follow none")
+    if findings:
+        return findings, {}
+    table, load = load_manifest(manifest_path)
+    if table is None:
+        return load, {}
+    base = os.path.dirname(os.path.abspath(manifest_path))
+    found, resolved = check_table(table, base, private)
+    return found, resolved
+
+
 def check_template(template_path, sdk_version=SDK_VERSION):
-    """The rules of `check` without a private folder, plus the template only rules."""
-    findings, _ = check_manifest(template_path, private=None)
-    table, _ = load_manifest(template_path)
+    """The template as installed in <private folder>/project/: the rules of `check` in a
+    virtual private folder, plus the template only rules."""
+    _, table, findings = load_template(template_path)
     if table is None:
         return findings
+    base = os.path.join(VIRTUAL_PRIVATE, PROJECT_DIR)
+    found, _ = check_table(table, base, VIRTUAL_PRIVATE, resolve_path=os.path.normpath)
+    findings += [finding.replace(VIRTUAL_PRIVATE, "<private folder>") for finding in found]
     for key in table:
         if key not in TEMPLATE_TOP_KEYS:
             findings.append(f"the template holds [{key}]: game data belongs to the private "
@@ -228,41 +316,104 @@ def load_guard(guard_path):
     return module
 
 
-def init(private, template, guard_path, repo=None, git="git"):
-    """Returns (findings, notes)."""
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def open_below(root_fd, parts, create):
+    """Opens the folder root/parts[0]/.../parts[-1] without following any link, creating the
+    missing folders (mode 0700) relative to their parent's descriptor when create is set.
+    Returns a descriptor; raises OSError (ELOOP for a link, ENOTDIR, ...) otherwise."""
+    fd = os.dup(root_fd)
+    try:
+        for part in parts:
+            try:
+                child = os.open(part, DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o700, dir_fd=fd)
+                child = os.open(part, DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def init(private, template, guard_path, repo=None, git="git", before_writes=None):
+    """Returns (findings, notes). before_writes, for tests only, runs between the two
+    phases."""
+    # Phase 1: checks, no write.
     guard = load_guard(guard_path)
-    findings = guard.check_dir(private, repo=repo, git=git)
+    findings = [f"CP-1: {finding}" for finding in guard.check_dir(private, repo=repo, git=git)]
     if findings:
-        return [f"CP-1: {finding}" for finding in findings] + \
-            ["nothing was written: fix the private folder first (private_guard check-dir)"], []
-    template_findings = check_template(template)
-    if template_findings:
-        return [f"template: {finding}" for finding in template_findings], []
+        return findings + ["nothing was written: fix the private folder first "
+                           "(private_guard check-dir)"], []
+    data, table, load = load_template(template)
+    if table is None:
+        return [f"template: {finding}" for finding in load] + ["nothing was written"], []
+    findings += [f"template: {finding}" for finding in check_template(template)]
+    real_private = canonical(private)
+    project_base = os.path.join(real_private, PROJECT_DIR)
+    # Links first: with a link in place, the paths below would resolve through it.
+    findings += link_findings(real_private, [PROJECT_DIR, MANIFEST_NAME], "manifest")
+    outputs = []
+    for label, binary in binaries(table):
+        value = binary.get("out_directory_path")
+        parts = output_parts(real_private, project_base, value) if isinstance(value, str) \
+            else None
+        if parts is None:
+            continue
+        findings += link_findings(real_private, parts, f"{label}.out_directory_path")
+        outputs.append((label, parts))
+    if not findings:
+        installed, _ = check_table(table, project_base, real_private)
+        findings += [f"template, installed: {finding}" for finding in installed]
+    if findings:
+        return findings + ["nothing was written"], []
+    if before_writes:
+        before_writes()
+
+    # Phase 2: writes, anchored to the root of the private folder.
     notes = []
-    private = canonical(private)
-    project = os.path.join(private, PROJECT_DIR)
-    os.makedirs(project, mode=0o700, exist_ok=True)
-    manifest = os.path.join(project, MANIFEST_NAME)
-    if os.path.lexists(manifest):
-        notes.append(f"{manifest} already exists: left as it is")
-    else:
-        with open(template, "rb") as source:
-            data = source.read()
-        fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as target:
-            target.write(data)
-        notes.append(f"wrote {manifest}")
-    table, _ = load_manifest(manifest)
-    if table is not None:
-        for label, binary in binaries(table):
-            value = binary.get("out_directory_path")
-            if isinstance(value, str) and not host_path_findings(label, value):
-                out = os.path.normpath(os.path.join(project, value))
-                if within(out, os.path.join(private, GENERATED_DIR)) and not os.path.lexists(out):
-                    os.makedirs(out, mode=0o700)
-                    notes.append(f"created {out}")
-    check_findings, _ = check_manifest(manifest, private)
-    return check_findings, notes
+    manifest = os.path.join(project_base, MANIFEST_NAME)
+    try:
+        root_fd = os.open(real_private, DIR_FLAGS)
+    except OSError as error:
+        return [f"cannot open the private folder {real_private}: {error.strerror}"], notes
+    try:
+        try:
+            project_fd = open_below(root_fd, [PROJECT_DIR], create=True)
+        except OSError as error:
+            return [f"{project_base} changed during init ({error.strerror}): stopped before "
+                    "writing the manifest"], notes
+        try:
+            fd = os.open(MANIFEST_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                         | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=project_fd)
+        except FileExistsError:
+            notes.append(f"{manifest} already exists: left as it is")
+        except OSError as error:
+            return [f"cannot create {manifest} ({error.strerror}): stopped"], notes
+        else:
+            with os.fdopen(fd, "wb") as target:
+                target.write(data)
+            notes.append(f"wrote {manifest}")
+        finally:
+            os.close(project_fd)
+        for label, parts in outputs:
+            out = os.path.join(real_private, *parts)
+            existed = os.path.lexists(out)
+            try:
+                os.close(open_below(root_fd, parts, create=True))
+            except OSError as error:
+                return [f"{label}: {out} changed during init ({error.strerror}): stopped"], notes
+            if not existed:
+                notes.append(f"created {out}")
+    finally:
+        os.close(root_fd)
+    check, _ = check_manifest(manifest, private)
+    return check, notes
 
 
 def report(findings, notes=(), ok_message="nothing found"):

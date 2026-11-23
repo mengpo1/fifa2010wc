@@ -57,29 +57,82 @@ d'abord par l'orchestrateur (§5 du même document).
 
 | Commande | Ce qu'elle fait | Ce qu'elle refuse |
 |---|---|---|
-| `template` | Contrôle le gabarit du dépôt | Les règles de `check`, et en plus : une autre version du SDK ; toute clé hors de la liste du gabarit (adresses, `function_table_base`, `setjmp_address`, tables `[functions]` et autres) ; un chemin qui ne sort pas de `project/` |
-| `init` | Contrôle le dossier privé par `private_guard check-dir` (CP-1), puis le gabarit. Copie le gabarit en `project/wc2010_manifest.toml` (mode `0600`, dossier `0700`) et crée les dossiers de sortie (`0700`). Contrôle enfin la copie | Un dossier privé qui échoue à CP-1 : **rien n'est écrit**. Un gabarit qui échoue à `template` : rien n'est écrit. **Une copie déjà présente n'est jamais écrasée** |
-| `check` | Contrôle la copie privée et affiche où chaque chemin se résout | Un chemin absolu, avec `~`, une lettre de lecteur ou des `\` ; un chemin qui se résout hors du dossier privé, liens symboliques suivis ; un XEX hors de `game_root` ; un dossier de sortie hors de `generated/`, égal à `generated/`, partagé ou imbriqué ; un `guest_path` en double ; un nom de projet invalide ; un `game_root` absent ; un TOML invalide |
+| `template` | Contrôle le gabarit du dépôt **tel qu'il serait installé** dans `<dossier privé>/project/`, dans un dossier privé virtuel : les chemins y sont calculés, jamais consultés | Les règles de `check`, dont un chemin qui sortirait du dossier privé une fois installé, `hook_sources` et `includes` compris (P-41). En plus : une autre version du SDK ; toute clé hors de la liste du gabarit (adresses, `function_table_base`, `setjmp_address`, tables `[functions]` et autres) ; un chemin qui ne sort pas de `project/` |
+| `init` | En deux phases (§4.1). **Contrôles, sans écriture** : CP-1 par `private_guard check-dir` ; le gabarit, par `template` puis dans le vrai dossier privé ; `project/`, la copie et chaque dossier existant vers un dossier de sortie, qui ne doivent pas être des liens symboliques. **Écritures, ancrées au dossier privé** : la copie en `project/wc2010_manifest.toml` (mode `0600`, dossier `0700`) et les dossiers de sortie (`0700`). Contrôle enfin la copie | Le moindre constat de la première phase : **rien n'est écrit**. Un lien mis en place entre les deux phases : arrêt, sans écrire au travers. **Une copie déjà présente n'est jamais écrasée** |
+| `check` | Contrôle la copie privée et affiche où chaque chemin se résout | Une copie, ou son dossier, qui est un lien symbolique ; un chemin absolu, avec `~`, une lettre de lecteur ou des `\` ; un chemin qui se résout hors du dossier privé, liens symboliques suivis ; un XEX hors de `game_root` ; un dossier de sortie hors de `generated/`, égal à `generated/`, partagé ou imbriqué ; un `guest_path` en double ; un nom de projet invalide ; un `game_root` absent ; un TOML invalide |
 
 - `check` accepte les clés ajoutées en phase B, notamment les adresses : la copie privée
   doit pouvoir les recevoir. Seul `template` les refuse.
 - L'outil ne lit aucun XEX et ne lance aucune commande de ReXGlue. Seul `init` écrit,
-  et seulement dans le dossier privé.
+  et seulement dans le dossier privé (§4.1).
 - Code de sortie : 0 sans constat, 1 avec constat, 2 pour un mauvais usage.
+
+### 4.1 `init` et les liens symboliques (P-40)
+
+**Le défaut de la première version** (revue 6025055384) :
+- CP-1 contrôle la racine du dossier privé et ses sous-dossiers prévus, mais pas
+  `project/`. Pour les sous-dossiers, `os.path.isdir` suit les liens ;
+- `init` créait `project/` avec `exist_ok`, ce qui accepte un lien vers un dossier, puis y
+  créait la copie, et ne contrôlait qu'ensuite ;
+- un lien `project/` ou `generated/` vers l'extérieur faisait donc écrire **hors du dossier
+  privé**. Les tests de mutation le confirment : sans `O_NOFOLLOW`, les tests du §5
+  échouent, et une copie est écrite hors du dossier privé.
+
+**Ce qui est fait maintenant** :
+1. **Contrôles, sans aucune écriture.**
+   - CP-1 d'abord.
+   - Puis `project/`, la copie et chaque dossier existant sur le chemin d'un dossier de
+     sortie, examinés par `lstat` : aucun ne doit être un lien symbolique, et les dossiers
+     doivent être de vrais dossiers.
+   - Enfin, le gabarit dans le vrai dossier privé.
+
+   Le moindre constat arrête `init` avant toute écriture.
+2. **Écritures, ancrées à la racine.**
+   - La racine est ouverte une fois, par son chemin réel.
+   - Chaque dossier en dessous est ouvert avec `O_DIRECTORY | O_NOFOLLOW`, relativement
+     au descripteur de son parent ; un dossier manquant est créé de même (`mkdir` avec
+     `dir_fd`).
+   - La copie est créée avec `O_CREAT | O_EXCL | O_NOFOLLOW`, relativement au descripteur
+     de `project/`.
+   - Un lien mis en place entre les deux phases fait échouer l'ouverture, et `init`
+     s'arrête : il **ne peut pas écrire au travers d'un lien situé sous la racine**.
+   - Le contenu écrit est celui qui a été contrôlé : le gabarit n'est lu qu'une fois.
+
+**Modèle de menace, et ses limites** :
+- les écritures se font sous la racine du dossier privé. Celle-ci appartient à
+  l'utilisateur et elle est fermée au groupe et aux autres (CP-1) ;
+- la protection vise une erreur de configuration (un lien laissé dans le dossier privé),
+  et un remplacement fait pendant `init` par un processus du même utilisateur ;
+- un tel remplacement peut arrêter `init` à mi-chemin. Les écritures déjà faites restent
+  alors dans le dossier privé ;
+- la racine elle-même n'est résolue qu'une fois. Un remplacement des dossiers **au-dessus**
+  de la racine, pendant l'exécution, n'est pas couvert : ils sont hors du dossier privé,
+  donc hors du périmètre de l'outil ;
+- `check` ne fait que lire. Il refuse une copie, ou son dossier, qui serait un lien.
 
 ## 5. Vérifications
 
-**Tests unitaires** (`tools/test_private_project.py`, 22 tests, dans le contrôle Nix
+**Tests unitaires** (`tools/test_private_project.py`, 30 tests, dans le contrôle Nix
 `private-project-selftest`) :
 - le gabarit du dépôt passe, et sa version est la version épinglée ;
 - un gabarit avec `function_table_base`, `setjmp_address`, `[functions]` ou une clé
   inconnue est refusé ;
 - un gabarit avec un chemin absolu, `~`, une lettre de lecteur ou des `\` est refusé ;
+- un gabarit dont `file_path`, `out_directory_path`, `game_root`, `hook_sources` ou
+  `includes` sortirait du dossier privé une fois installé est refusé avant `init` (P-41) ;
 - le `guest_path` du module se normalise comme le chemin du runtime ;
 - `init` écrit une copie identique au gabarit, avec ses droits, et les dossiers de
   sortie ; les chemins se résolvent dans `game/` et `generated/` ;
 - `init` n'écrit rien pour un dossier en `0755`, ni pour un dossier privé dans le dépôt,
   ni avec un mauvais gabarit, et il n'écrase pas une copie existante ;
+- **liens (P-40)** : `init` refuse, **avant toute écriture**, un `project/`, un
+  `generated/`, un dossier de sortie ou une copie qui est un lien vers un dossier extérieur.
+  Le dossier extérieur reste vide et aucun dossier de sortie n'est créé ;
+- **lien mis en place pendant `init`** : un point d'injection de test, entre les deux
+  phases, remplace `project/` ou un dossier de sortie par un lien. `init` s'arrête, et le
+  dossier extérieur reste vide. La copie déjà écrite, dans le second cas, est dans le
+  dossier privé ;
+- `check` refuse une copie, ou son dossier, qui est un lien ;
 - `check` refuse chacun des cas du tableau §4, dont un lien `game` vers l'extérieur ;
 - `check` accepte une copie privée qui a reçu des adresses de phase B ;
 - les codes de sortie de la ligne de commande.
@@ -98,6 +151,13 @@ d'abord par l'orchestrateur (§5 du même document).
 
 Le même essai, fait d'abord dans le conteneur de Claude Code, a montré le même résultat ;
 `nix store verify` du SDK passait ensuite.
+
+**Refus d'un lien, par la commande empaquetée** (même contrôle Nix) [V] :
+- `project/` est un lien vers un dossier extérieur ;
+- `fifa2010wc-private-project init` sort avec le code 1, avec le constat « is a symbolic
+  link » et « nothing was written » ;
+- le dossier extérieur et `generated/` restent vides. La sortie du contrôle le consigne
+  (`links.txt`).
 
 ## 6. Destinations d'écriture de la génération de code (CP-4)
 
