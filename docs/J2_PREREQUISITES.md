@@ -160,7 +160,13 @@ Pistes, **à décider avant la phase B**, sans en retenir aucune ici :
   une image décodée n'est autorisé implicitement ;
 - la méthode est décidée après A8, avant PB-0.
 
-Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`.
+Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`. Comparaison des pistes :
+`docs/J2_A8_ADDRESS_VALIDATION.md`. *Arbitrage du 2026-11-23 :*
+- *M1, c'est-à-dire la piste 1, d'abord ;*
+- *M3, c'est-à-dire la piste 3, en repli ;*
+- *la piste 2 n'est pas autorisée.*
+
+*M1 n'établit pas la valeur des données, qui reste non vérifiée.*
 
 ## 4. Réutilisable sans nouvelle analyse du disque
 
@@ -171,7 +177,7 @@ Premiers constats sur la piste 1 : `docs/J2_A1_SDK_INVENTORY.md`.
 | Structure du manifeste : `default.xex` en point d'entrée, `fifadllzf.xex` chargé par son nom | Projet A, `pc/fifawc10_manifest.toml` | Les deux modules existent sous ces noms sur le disque de l'utilisateur, avec les mêmes adresses de chargement (§3.1) | [V] pour les noms et le chargement ; chemins à adapter au dossier privé |
 | Bibliothèques importées : `xam.xex` et `xboxkrnl.exe`, version 2.0.9328.0, minimale 2.0.8955.0 | Rapport J0 | Ce sont les services système que ReXGlue fournit | [V] noms et versions ; la liste des fonctions importées n'est pas connue avant J2 [I] |
 | Outils d'analyse en Python : `disc.py`, `xexinfo.py`, `ppcdis.py`, `find_code_pointers.py`, `find_setjmp.py`, `xref.py`, `callers.py`, `autofix_codegen.py` | Projet A, `tools/` | Ce sont des méthodes, pas des résultats ; elles s'appliquent à tout binaire, et servent aussi à la validation des adresses (§3.2) | [V] portables (audit) ; reprise avec notice (D-010). **Exclu** : `xeximage.py`, qui déchiffre (D-008). [V] Tous sauf `disc.py` et `xexinfo.py` chargent l'image par `xeximage.load` : ils ne sont réutilisables qu'avec une autre source de l'image, à décider (§3.3) |
-| Correctifs du SDK sans adresse du jeu : 0001 (exports de la caméra USB), 0002 (module trouvé par son nom nu), 0004 (vblank), 0006 (cadence), 0007 (dialogues), 0008 (énumération des sauvegardes) | Projet A, `patches/rexglue-sdk/` | Ils modifient le SDK, pas le code du jeu | [V] sans adresse ; [H] encore utiles au même titre ; transposition vers v0.11.0 à faire (R-04, 338 commits d'écart) |
+| Correctifs du SDK sans adresse du jeu : 0001 (exports de la caméra USB), 0002 (module trouvé par son nom nu), 0004 (vblank), 0006 (cadence), 0007 (dialogues), 0008 (énumération des sauvegardes) | Projet A, `patches/rexglue-sdk/` | Ils modifient le SDK, pas le code du jeu | [V] sans adresse ; [H] encore utiles au même titre ; transposition vers v0.11.0 à faire (R-04, 338 commits d'écart). *A2 (2026-11-23) : 0001, 0004 et 0007 sont déjà en amont, et 0006 l'est en partie ; 0002 est à vérifier en phase B, par configuration d'abord, et 0008 est reporté à J4 (`docs/J2_A2_SDK_PATCHES.md`)* |
 | Réglages GPU : `execute_unclipped_draw_vs_on_cpu`, `gpu_allow_invalid_fetch_constants` | Projet A | Ils portent sur le rendu du moteur, pas sur des adresses | [H] valables pour le même moteur |
 | Savoir : Lua avec `setjmp`/`longjmp` à rediriger, fil de décodage vidéo, exports de la caméra USB | Audit (`LINUX_FEASIBILITY.md` §2.3) | Propriétés du moteur du jeu | [H] mêmes besoins ; adresses à valider (§3.2) |
 | Constats de J1 : `-DREXGLUE_LLD` vers le `ld.lld` enveloppé, RUNPATH, durcissement | `docs/reports/J1_VALIDATION.md` §6 | Propriétés de la chaîne de compilation | [V] |
@@ -202,7 +208,7 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
 
 | N° | Contrôle | Vérification |
 |---|---|---|
-| CP-1 | **Confinement du dossier privé.** `$WC2010_PRIVATE_DIR` est défini et absolu. Il n'est ni dans le dépôt, ni dans `/nix/store`. Ses droits sont `0700`. Les sous-dossiers prévus existent, et `iso/` est en lecture seule (`ISO_REQUIREMENTS.md` §6) | `realpath`, `stat -c %a` ; `git -C "$WC2010_PRIVATE_DIR" rev-parse` doit échouer. Script à écrire en phase A (étape A4) |
+| CP-1 | **Confinement du dossier privé.** `$WC2010_PRIVATE_DIR` est défini et absolu. Il n'est ni dans le dépôt, ni dans `/nix/store`. Ses droits sont `0700`. Les sous-dossiers prévus existent, et `iso/` est en lecture seule (`ISO_REQUIREMENTS.md` §6) | `realpath`, `stat -c %a` ; `git -C "$WC2010_PRIVATE_DIR" rev-parse` doit échouer. Outil : `private_guard check-dir` (A4, `docs/J2_PHASE_B_CONTROLS.md`) |
 | CP-2 | **Aucune entrée du jeu dans Nix.** Ni l'ISO, ni les XEX, ni un chemin du dossier privé ne sont une entrée du flake ou d'une dérivation. Les chemins sont donnés à l'exécution seulement | Lecture de `flake.nix` et de `nix/` ; `nix flake check` sur une copie propre, sans le dossier privé |
 | CP-3 | **Magasin Nix vérifié avant et après.** Recherches de `docs/J0_ISO_IDENTIFICATION.md` §6, avec la procédure non destructive : constater, vérifier, conserver les preuves, ne rien supprimer sans décision explicite | **Aucune nouvelle correspondance suspecte imputable aux opérations du jeu.** Le magasin peut changer pour des raisons sans rapport avec le projet : les différences sont comparées et replacées dans leur contexte, sans rien supprimer. Le fichier `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude` déjà relevé n'est pas examiné plus avant. Si rien ne change, on note simplement le résultat. Ces recherches sont limitées et non exhaustives (C0.4) |
 | CP-4 | **Sorties, journaux et caches confinés.** Toute sortie de ReXGlue et des outils d'analyse est écrite sous `$WC2010_PRIVATE_DIR` : code généré, journal par `--log-file`, caches, fichiers temporaires | Un contrôle avant l'invocation, puis un contrôle après (§6.1). `git status --porcelain` n'en est qu'un complément |
@@ -268,8 +274,9 @@ après chaque étape de la phase B qui lit ou produit des données du jeu.
    contrôle. Il ne suffit pas : il n'inspecte que le dépôt.
 
 **Limite** : ces contrôles couvrent les destinations déclarées et les emplacements
-surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs. Le script qui
-les automatise est à réaliser à l'étape A4 du plan.
+surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs. Ils sont
+automatisés par `tools/private_guard.py`, commandes `preflight` et `postflight` (étape A4).
+La procédure est dans `docs/J2_PHASE_B_CONTROLS.md`.
 
 ## 7. Plan de J2
 

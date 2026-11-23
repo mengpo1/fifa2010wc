@@ -113,6 +113,16 @@ décision explicite) :
 - **But** : transposer vers v0.11.0 les correctifs 0001, 0002, 0004, 0006, 0007 et 0008
   du projet A (`J2_PREREQUISITES.md` §4). Avant cela, établir ceux qui sont déjà en
   amont : 0001 et 0006 semblent l'être (D-011).
+- **État (2026-11-23)** : l'analyse des besoins est rédigée, sans aucun correctif
+  (`docs/J2_A2_SDK_PATCHES.md`). Elle est soumise à la revue.
+  - Déjà en amont : 0001, 0004 et 0007.
+  - En partie : 0006, dont le compteur est fourni.
+  - 0002 : compatibilité à vérifier en phase B, la configuration d'abord.
+  - 0008 : besoin probable, reporté à J4.
+  - 0003 : candidat pour J2, à confirmer en A3.
+  - Non nécessaire : 0005, puisque la racine du jeu est extraite.
+
+  Les correctifs ne seront écrits qu'après la validation de ces verdicts.
 - **Livrable** : une série numérotée dans `patches/rexglue-sdk/`, appliquée par
   `nix/rexglue-sdk.nix`, et la provenance de chaque correctif (D-010).
 - **Critère de sortie** :
@@ -146,6 +156,9 @@ décision explicite) :
 
 - **But** : automatiser ce qui peut l'être des contrôles CP-1 à CP-6
   (`J2_PREREQUISITES.md` §6).
+- **État (2026-11-23)** : `tools/private_guard.py` et ses tests
+  (`tools/test_private_guard.py`, contrôle Nix `private-guard-selftest`) sont rédigés, ainsi
+  que la procédure `docs/J2_PHASE_B_CONTROLS.md`. Ils sont soumis à la revue.
 - **Livrable** :
   - un script qui vérifie le confinement de `$WC2010_PRIVATE_DIR` (CP-1). Il refuse un
     dossier situé dans le dépôt ou dans `/nix/store`, un chemin relatif et des droits
@@ -206,6 +219,17 @@ décision explicite) :
   - aucun programme nouveau produisant une image décodée n'est autorisé implicitement.
 - **Livrable** : une note qui compare les pistes, sans en exécuter aucune. **La décision
   revient à l'orchestrateur et au porteur du projet.**
+- **État (2026-11-23)** : la note est rédigée, `docs/J2_A8_ADDRESS_VALIDATION.md`.
+  L'arbitrage de l'orchestrateur (revue 6021690700) :
+  - M1 est la méthode de première analyse : les diagnostics, les listes d'adresses et la
+    désassemblée en commentaire du code généré ;
+  - M3, une nouvelle analyse avec ReXGlue seul, est le repli de recherche ;
+  - M2, une image produite par le projet, n'est pas autorisée ;
+  - l'étape A8-bis est autorisée en phase A. Ce sera l'outil de comparaison, purement
+    analytique, avec des tests synthétiques. Elle ne franchit pas PB-0 à elle seule.
+
+  M1 n'établit que des niveaux de preuve N0 à N2. Les valeurs de données restent N3,
+  non vérifiées.
 
 ### 3.9 Sortie de la phase A (PA-1)
 
@@ -317,6 +341,7 @@ Points tranchés le 2026-11-23 (D-015) :
 
 Point encore ouvert :
 
-4. **La méthode de validation des adresses**, et la source de l'image si elle en
-   demande une (`J2_PREREQUISITES.md` §3.3). Elle est décidée après A8, avant PB-0 ; la
-   priorité va aux diagnostics existants de ReXGlue.
+4. **La méthode de validation des adresses** (`J2_PREREQUISITES.md` §3.3). *Arbitrée le
+   2026-11-23 : M1 d'abord, M3 en repli, M2 non autorisée, A8-bis autorisée
+   (`docs/J2_A8_ADDRESS_VALIDATION.md` §4). L'arbitrage sera acquis à la fusion de la
+   note.*
