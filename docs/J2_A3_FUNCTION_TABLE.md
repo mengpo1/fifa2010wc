@@ -196,7 +196,20 @@ exclut les adresses (`docs/J2_PLAN.md` §3.5).
 Construction : `nix build .#rexglue-sdk`, qui applique le correctif puis lance les tests
 du SDK.
 
-*En cours : les résultats seront consignés ici dès la fin de la construction.*
+Construction locale du 2026-11-23, dans le conteneur de Claude Code, sans données du
+jeu.
+
+| Vérification | Résultat |
+|---|---|
+| Application du correctif | Les 18 fichiers sont corrigés sans décalage ni rejet |
+| Compilation du SDK en Release, avec `-Werror` | Réussie |
+| Tests du SDK en Release (CTest) | **2 232 tests : 2 222 réussis, 10 sautés, 0 échec**. Les 10 sautés le sont aussi sans le correctif : tests d'ordre des verrous, réservés au mode Debug, et deux tests propres à l'hôte |
+| Les 9 tests du correctif (§5.3) | Tous réussis |
+| Contrôle `sdk-patches` | Réussi : 18 fichiers listés, aucun des XEX ni du déchiffrement ; le correctif synthétique de `xex.cpp` est refusé |
+| `nix flake check`, dont les tests du SDK en Debug | En cours |
+
+Le journal CTest et le rapport JUnit sont installés avec le SDK, sous
+`share/rexglue-sdk/test-results/`.
 
 ## 9. Limites
 
