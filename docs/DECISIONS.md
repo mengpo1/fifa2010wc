@@ -285,6 +285,11 @@
     Linux non vérifiée et API ancienne.
 - **Règle commune** : commit exact épinglé ; correctifs numérotés dans
   `patches/rexglue-sdk/` ; montée de version seulement à un jalon validé.
+- **Série (2026-11-23, soumise à la revue)** : `0001-function-table-base.patch`, le 0003
+  du projet A réécrit pour v0.11.0 (étape A3, `docs/J2_A3_FUNCTION_TABLE.md`). Sa
+  provenance est dans son en-tête et dans `THIRD_PARTY.md` (D-010). Le contrôle
+  `sdk-patches` de `nix flake check` liste les fichiers touchés et refuse tout fichier
+  des XEX ou du déchiffrement (O3, D-015).
 
 ## D-012 — Hébergement du projet
 

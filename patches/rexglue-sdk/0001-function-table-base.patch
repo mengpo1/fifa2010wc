@@ -1,0 +1,605 @@
+fifa2010wc patch 0001 for ReXGlue v0.11.0 (a3e1d82): configurable function table base
+
+Project A numbering: 0003 function-table-base (J2 step A3, docs/J2_A3_FUNCTION_TABLE.md).
+
+v0.11.0 puts the dispatch table of every module right after its image, at
+image_base + image_size. The table of default.xex can then run into the image of the
+module loaded after it. This patch adds the per binary codegen key function_table_base
+and carries it to the runtime:
+- codegen: the key, its validation (64 KiB aligned, inside 0x80000000-0x8FFFFFFF),
+  REX_FUNC_TABLE_BASE in the generated header, the lookup in _indirect_call.inja and
+  PPCImage::function_table_base in the generated init;
+- runtime: FunctionDispatcher and GuestAddressSpace::InitializeFunctionTable take the
+  table base; the dispatcher refuses any overlap between images and tables, and a moved
+  table must land on free pages of the XEX heap;
+- without the key, the table stays where upstream puts it.
+
+Provenance: adapted from patch 0003-function-table-base.patch of
+CalinGraphics/fifa-world-cup-2010-recompiled, commit 498d18a, written for rexglue-sdk
+bd833a2. BSD 3-Clause License, Copyright (c) 2026, Miertescu Stefan-Calin; the notice is
+reproduced in THIRD_PARTY.md. Rewritten for v0.11.0 (other file layout and names).
+Added here: 64 bit range ends, the check of a table against its own image, the free page
+check, codegen validation and the unit tests.
+
+Not touched: XEX loading and decryption (src/filesystem/xex.cpp, src/kernel/xex_module.cpp,
+thirdparty/excrypt). Check: grep '^diff --git' on this file.
+
+diff --git a/include/rex/kernel/function_dispatcher.h b/include/rex/kernel/function_dispatcher.h
+index b46b20df..94c11f15 100644
+--- a/include/rex/kernel/function_dispatcher.h
++++ b/include/rex/kernel/function_dispatcher.h
+@@ -95,15 +95,20 @@ class REX_KERNEL_API FunctionDispatcher : public IFunctionRegistrar {
+   static constexpr u32 kThunkReserveSize = 0x10000;
+ 
+   /**
+-   * Initializes the function table of a module at image_base + image_size.
++   * Initializes the function table of a module at table_base, or at image_base + image_size
++   * when table_base is 0.
++   *
++   * The table takes (code_size + kThunkReserveSize) * 2 bytes. It fails when the image or
++   * the table of the module overlaps the image or the table of a module already registered.
+    *
+    * AllocateThunk with caller_address 0 uses the pool of the entrypoint module.
+    *
+    * @param code_base The first guest address of the code.
+    * @param is_entrypoint True for the host loaded entrypoint module.
++   * @param table_base Guest address of the table, 0 for image_base + image_size.
+    */
+   bool InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base, u32 image_size,
+-                               bool is_entrypoint = false);
++                               bool is_entrypoint = false, u32 table_base = 0);
+   /**
+    * @return False when the address is outside every registered module.
+    */
+@@ -153,6 +158,7 @@ class REX_KERNEL_API FunctionDispatcher : public IFunctionRegistrar {
+     u32 code_size;
+     u32 image_base;
+     u32 image_size;
++    u32 table_base;
+     u32 next_thunk_address;
+     u32 thunk_limit;
+   };
+diff --git a/include/rex/kernel/heap.h b/include/rex/kernel/heap.h
+index f4897ddd..683b6fa8 100644
+--- a/include/rex/kernel/heap.h
++++ b/include/rex/kernel/heap.h
+@@ -782,13 +782,15 @@ class REX_KERNEL_API GuestAddressSpace : public ISystemHeap {
+   void PlotProfile();
+ 
+   /**
+-   * Initializes the per module function dispatch table at IMAGE_BASE + IMAGE_SIZE, indexed by
+-   * (guest_addr - code_base) * 2. The function table calls are internally locked and may be made
+-   * from any thread.
++   * Initializes the per module function dispatch table at table_base, or at
++   * IMAGE_BASE + IMAGE_SIZE when table_base is 0, indexed by (guest_addr - code_base) * 2. The
++   * function table calls are internally locked and may be made from any thread.
+    *
+    * @param code_base The first guest address of the code.
++   * @param table_base Guest address of the table, 0 for image_base + image_size.
+    */
+-  bool InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base, u32 image_size);
++  bool InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base, u32 image_size,
++                               u32 table_base = 0);
+   /**
+    * Removes the function table of a module and releases its pages.
+    *
+diff --git a/include/rex/ppc/image.h b/include/rex/ppc/image.h
+index 00583211..6a7f029d 100644
+--- a/include/rex/ppc/image.h
++++ b/include/rex/ppc/image.h
+@@ -75,6 +75,11 @@ struct PPCImage {
+   u32 code_size;
+   u32 image_base;
+   u32 image_size;
++  /**
++   * Guest address of the function dispatch table, set by codegen from the TOML key
++   * `function_table_base`. 0 places the table at image_base + image_size.
++   */
++  u32 function_table_base = 0;
+   /** Guest address and host function pairs registered at startup, ended by guest address 0. */
+   const PPCFuncMapping* func_mappings;
+   bool shim_heap = false; /**< Set by codegen when [shim] holds the heap functions. */
+diff --git a/resources/templates/codegen/_indirect_call.inja b/resources/templates/codegen/_indirect_call.inja
+index f84df59c..4eaf28be 100644
+--- a/resources/templates/codegen/_indirect_call.inja
++++ b/resources/templates/codegen/_indirect_call.inja
+@@ -1,5 +1,6 @@
+ // REX_LOOKUP_FUNC indexes into the per-module dispatch table at
+-// IMAGE_BASE + IMAGE_SIZE. REX_CALL_INDIRECT_FUNC bounds-checks the target
++// REX_FUNC_TABLE_BASE, which is IMAGE_BASE + IMAGE_SIZE unless the TOML key
++// function_table_base moves it. REX_CALL_INDIRECT_FUNC bounds-checks the target
+ // against the caller's [REX_CODE_BASE, REX_CODE_BASE + REX_CODE_SIZE +
+ // REX_THUNK_RESERVE_SIZE) range. Out-of-bounds targets and in-bounds
+ // unregistered slots fall back to rex::ppc::ResolveFunction,
+@@ -14,7 +15,7 @@
+ 
+ #define REX_LOOKUP_FUNC(x, y) \
+   (*reinterpret_cast<PPCFunc**>(                                                   \
+-      x + REX_IMAGE_BASE + REX_IMAGE_SIZE +                                        \
++      x + REX_FUNC_TABLE_BASE +                                                    \
+       (static_cast<u64>(static_cast<u32>(y) - REX_CODE_BASE) * 2)))
+ 
+ #define REX_RESOLVE_INDIRECT_FUNC(x)                                                       \
+diff --git a/resources/templates/codegen/init_cpp.inja b/resources/templates/codegen/init_cpp.inja
+index ec23d2b0..ba2933e4 100644
+--- a/resources/templates/codegen/init_cpp.inja
++++ b/resources/templates/codegen/init_cpp.inja
+@@ -12,6 +12,7 @@ const rex::ppc::PPCImage kPPCImageConfig = {
+     .code_size = REX_CODE_SIZE,
+     .image_base = REX_IMAGE_BASE,
+     .image_size = REX_IMAGE_SIZE,
++    .function_table_base = REX_FUNC_TABLE_BASE,
+     .func_mappings = kPPCFuncMappings,
+     .shim_heap = REX_SHIM_HEAP,
+ {% if has_dll_modules and not is_dll %}
+diff --git a/resources/templates/codegen/pch_h.inja b/resources/templates/codegen/pch_h.inja
+index d19ca23c..5e1a7e96 100644
+--- a/resources/templates/codegen/pch_h.inja
++++ b/resources/templates/codegen/pch_h.inja
+@@ -16,6 +16,7 @@
+ {% endif %}
+ #define REX_IMAGE_BASE {{ image_base }}ull
+ #define REX_IMAGE_SIZE {{ image_size }}ull
++#define REX_FUNC_TABLE_BASE {{ function_table_base }}ull
+ #define REX_CODE_BASE {{ code_base }}ull
+ #define REX_CODE_SIZE {{ code_size }}ull
+ #define REX_THUNK_RESERVE_SIZE {{ thunk_reserve_size }}ull
+diff --git a/resources/templates/test/ppc_config_h.inja b/resources/templates/test/ppc_config_h.inja
+index 4de008b2..abbb0764 100644
+--- a/resources/templates/test/ppc_config_h.inja
++++ b/resources/templates/test/ppc_config_h.inja
+@@ -31,6 +31,7 @@
+ // Test code base address (matches -Ttext=0x82010000 linker option)
+ #define REX_IMAGE_BASE 0x{{ image_base }}ull
+ #define REX_IMAGE_SIZE 0x{{ image_size }}ull
++#define REX_FUNC_TABLE_BASE (REX_IMAGE_BASE + REX_IMAGE_SIZE)
+ #define REX_CODE_BASE 0x{{ code_base }}ull
+ #define REX_CODE_SIZE 0x{{ code_size }}ull
+ #define REX_THUNK_RESERVE_SIZE 0x10000ull
+diff --git a/src/codegen/codegen_writer.cpp b/src/codegen/codegen_writer.cpp
+index 24407256..92f716e3 100644
+--- a/src/codegen/codegen_writer.cpp
++++ b/src/codegen/codegen_writer.cpp
+@@ -109,6 +109,11 @@ nlohmann::json BuildTemplateData(const rex::codegen::CodegenContext& ctx,
+       {"project", cfg.project_name},
+       {"image_base", std::format("0x{:X}", ctx.GetBinary().GetBaseAddress())},
+       {"image_size", std::format("0x{:X}", ctx.GetBinary().GetImageSize())},
++      {"function_table_base",
++       std::format("0x{:X}", cfg.function_table_base != 0
++                                 ? cfg.function_table_base
++                                 : static_cast<u32>(ctx.GetBinary().GetBaseAddress() +
++                                                    ctx.GetBinary().GetImageSize()))},
+       {"code_base", std::format("0x{:X}", code_min)},
+       {"code_size", std::format("0x{:X}", code_max - code_min)},
+       {"shim_heap", cfg.UsesShimHeap() ? 1 : 0},
+diff --git a/src/codegen/config.cpp b/src/codegen/config.cpp
+index b1aeddf7..15238ab8 100644
+--- a/src/codegen/config.cpp
++++ b/src/codegen/config.cpp
+@@ -157,6 +157,17 @@ bool ApplyTOML(const toml::table& root, RecompilerConfig& cfg, const std::string
+     u32 addr = static_cast<u32>(*v);
+     MergeScalar(cfg.setjmp_address, addr, "setjmp_address");
+   }
++  if (auto v = root["function_table_base"].value<i64>()) {
++    if (*v < 0 || *v > 0xFFFFFFFFll) {
++      REXCG_ERROR("config {}: function_table_base {} is not a 32 bit guest address",
++                  description, *v);
++      // Not 64 KiB aligned, so Validate() rejects it instead of silently using the default.
++      cfg.function_table_base = 0xFFFFFFFFu;
++    } else {
++      u32 addr = static_cast<u32>(*v);
++      MergeScalar(cfg.function_table_base, addr, "function_table_base");
++    }
++  }
+ 
+   if (auto* analysis_table = root["analysis"].as_table()) {
+     if (auto handlers = (*analysis_table)["exception_handler_funcs"].as_array()) {
+@@ -552,6 +563,7 @@ void RecompilerConfig::ClearAddressEntries() {
+   mid_asm_hooks.clear();
+   longjmp_address = 0;
+   setjmp_address = 0;
++  function_table_base = 0;
+   shim_functions.clear();
+   invalid_instruction_hints.clear();
+   declared_mmio_accesses.clear();
+@@ -658,6 +670,20 @@ RecompilerConfig::ValidationResult RecompilerConfig::Validate() const {
+ 
+   check_alignment(longjmp_address, "longjmp");
+   check_alignment(setjmp_address, "setjmp");
++  // The table is allocated with AllocFixed in the 64 KiB page heap at 0x80000000.
++  if (function_table_base != 0) {
++    if ((function_table_base & 0xFFFF) != 0) {
++      result.errors.push_back(std::format(
++          "function_table_base 0x{:08X} is not 64 KiB aligned", function_table_base));
++      result.valid = false;
++    }
++    if (function_table_base < 0x80000000u || function_table_base >= 0x90000000u) {
++      result.errors.push_back(std::format(
++          "function_table_base 0x{:08X} is outside the 0x80000000-0x8FFFFFFF heap",
++          function_table_base));
++      result.valid = false;
++    }
++  }
+   for (const auto& entry : declared_mmio_accesses) {
+     check_alignment(entry.first, "mmio");
+   }
+diff --git a/src/codegen/config.h b/src/codegen/config.h
+index b388a9a2..c717d33f 100644
+--- a/src/codegen/config.h
++++ b/src/codegen/config.h
+@@ -226,6 +226,12 @@ struct RecompilerConfig {
+    * `ppc_setjmp`.
+    */
+   u32 setjmp_address = 0;
++  /**
++   * TOML key `function_table_base`, default 0. Guest address of this binary's function
++   * dispatch table; 0 places it at image_base + image_size. It must be 64 KiB aligned and lie
++   * in the 0x80000000-0x8FFFFFFF heap. It is per binary and never taken from a shared layer.
++   */
++  u32 function_table_base = 0;
+ 
+   /** Shim function addresses keyed by registry name, read from the [shim] TOML table. */
+   std::unordered_map<std::string, u32> shim_functions;
+diff --git a/src/codegen/config_keys.cpp b/src/codegen/config_keys.cpp
+index 38466ab4..8b2fd614 100644
+--- a/src/codegen/config_keys.cpp
++++ b/src/codegen/config_keys.cpp
+@@ -34,6 +34,7 @@ constexpr std::array kBinaryKeys = {
+     KeySpec{"template_dir", Type::kString},
+     KeySpec{"longjmp_address", Type::kInteger},
+     KeySpec{"setjmp_address", Type::kInteger},
++    KeySpec{"function_table_base", Type::kInteger},
+     KeySpec{"skip_lr", Type::kBoolean},
+     KeySpec{"skip_msr", Type::kBoolean},
+     KeySpec{"ctr_as_local", Type::kBoolean},
+diff --git a/src/kernel/function_dispatcher.cpp b/src/kernel/function_dispatcher.cpp
+index 36bf9e08..94ab1bd2 100644
+--- a/src/kernel/function_dispatcher.cpp
++++ b/src/kernel/function_dispatcher.cpp
+@@ -160,7 +160,8 @@ void FunctionDispatcher::RaiseGraphicsInterrupt(u32 source, u32 cpu) {
+ }
+ 
+ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base,
+-                                                 u32 image_size, bool is_entrypoint) {
++                                                 u32 image_size, bool is_entrypoint,
++                                                 u32 table_base) {
+   std::lock_guard<std::recursive_mutex> lock(dispatch_mutex_);
+ 
+   if (is_entrypoint && entrypoint_code_base_ != 0) {
+@@ -168,15 +169,38 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+                 entrypoint_code_base_);
+   }
+ 
+-  u32 new_table_end = image_base + image_size + (code_size + kThunkReserveSize) * 2;
++  if (table_base == 0) {
++    table_base = image_base + image_size;
++  }
++  // 64 bit ends, so that a range ending at 4 GiB does not wrap to 0.
++  auto table_end = [](u32 base, u32 code) {
++    return static_cast<u64>(base) + (static_cast<u64>(code) + kThunkReserveSize) * 2;
++  };
++  auto overlaps = [](u64 a_begin, u64 a_end, u64 b_begin, u64 b_end) {
++    return a_begin < b_end && b_begin < a_end;
++  };
++  const u64 new_image_end = static_cast<u64>(image_base) + image_size;
++  const u64 new_table_end = table_end(table_base, code_size);
++  if (overlaps(image_base, new_image_end, table_base, new_table_end)) {
++    REXCPU_FAIL(false, "Module table [{:08X}, {:08X}) overlaps its own image [{:08X}, {:08X})",
++                table_base, new_table_end, image_base, new_image_end);
++  }
+   u32 new_code_end = code_base + code_size + kThunkReserveSize;
+   for (const auto& existing : module_tables_) {
+-    u32 existing_table_end =
+-        existing.image_base + existing.image_size + (existing.code_size + kThunkReserveSize) * 2;
++    const u64 existing_image_end = static_cast<u64>(existing.image_base) + existing.image_size;
++    const u64 existing_table_end = table_end(existing.table_base, existing.code_size);
+     u32 existing_code_end = existing.code_base + existing.code_size + kThunkReserveSize;
+-    if (image_base < existing_table_end && new_table_end > existing.image_base) {
+-      REXCPU_FAIL(false, "Module image range [{:08X}, {:08X}) overlaps existing [{:08X}, {:08X})",
+-                  image_base, new_table_end, existing.image_base, existing_table_end);
++    // Images and tables must not overlap in any combination.
++    if (overlaps(image_base, new_image_end, existing.image_base, existing_image_end) ||
++        overlaps(image_base, new_image_end, existing.table_base, existing_table_end) ||
++        overlaps(table_base, new_table_end, existing.image_base, existing_image_end) ||
++        overlaps(table_base, new_table_end, existing.table_base, existing_table_end)) {
++      REXCPU_FAIL(false,
++                  "Module image [{:08X}, {:08X}) and table [{:08X}, {:08X}) overlap the existing "
++                  "image [{:08X}, {:08X}) or table [{:08X}, {:08X}); move a table with the "
++                  "codegen key function_table_base",
++                  image_base, new_image_end, table_base, new_table_end, existing.image_base,
++                  existing_image_end, existing.table_base, existing_table_end);
+     }
+     if (code_base < existing_code_end && new_code_end > existing.code_base) {
+       REXCPU_FAIL(false, "Module code range [{:08X}, {:08X}) overlaps existing [{:08X}, {:08X})",
+@@ -184,7 +208,8 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+     }
+   }
+ 
+-  if (!memory_->InitializeFunctionTable(code_base, code_size, image_base, image_size)) {
++  if (!memory_->InitializeFunctionTable(code_base, code_size, image_base, image_size,
++                                        table_base)) {
+     REXCPU_FAIL(false, "Failed to initialize guest memory function table");
+   }
+ 
+@@ -193,6 +218,7 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+       .code_size = code_size,
+       .image_base = image_base,
+       .image_size = image_size,
++      .table_base = table_base,
+       .next_thunk_address = code_base + code_size,
+       .thunk_limit = code_base + code_size + kThunkReserveSize,
+   });
+@@ -201,8 +227,11 @@ bool FunctionDispatcher::InitializeFunctionTable(u32 code_base, u32 code_size, u
+     entrypoint_code_base_ = code_base;
+   }
+ 
+-  REXCPU_DEBUG("Function table initialized for module: code={:08X}-{:08X}, image={:08X}-{:08X}",
+-               code_base, code_base + code_size, image_base, image_base + image_size);
++  REXCPU_DEBUG(
++      "Function table initialized for module: code={:08X}-{:08X}, image={:08X}-{:08X}, "
++      "table={:08X}-{:08X}",
++      code_base, code_base + code_size, image_base, image_base + image_size, table_base,
++      new_table_end);
+   return true;
+ }
+ 
+diff --git a/src/kernel/memory.cpp b/src/kernel/memory.cpp
+index 4ca50499..65268767 100644
+--- a/src/kernel/memory.cpp
++++ b/src/kernel/memory.cpp
+@@ -776,9 +776,12 @@ void GuestAddressSpace::PlotProfile() {
+ }
+ 
+ bool GuestAddressSpace::InitializeFunctionTable(u32 code_base, u32 code_size, u32 image_base,
+-                                                u32 image_size) {
++                                                u32 image_size, u32 table_base) {
+   constexpr u32 kThunkReserveSize = kernel::FunctionDispatcher::kThunkReserveSize;
+-  u32 table_base = image_base + image_size;
++  const u32 default_table_base = image_base + image_size;
++  if (table_base == 0) {
++    table_base = default_table_base;
++  }
+   u32 table_size = (code_size + kThunkReserveSize) * 2;
+ 
+   REXSYS_DEBUG(
+@@ -786,6 +789,20 @@ bool GuestAddressSpace::InitializeFunctionTable(u32 code_base, u32 code_size, u3
+       "(+{:08X} thunk reserve)",
+       table_base, table_size, code_base, code_base + code_size, kThunkReserveSize);
+ 
++  // AllocFixed with reserve and commit does not refuse pages that are already reserved: it
++  // takes them over, and Zero() below would wipe them. A table moved by function_table_base
++  // must therefore land on free pages. The default placement keeps the upstream behaviour.
++  if (table_base != default_table_base) {
++    auto& heap = heaps_.v80000000;
++    HeapAllocation occupant{};
++    if (table_base < 0x80000000u || !heap.QueryRegionInfo(table_base, &occupant) ||
++        occupant.state != 0 ||
++        occupant.region_size < rex::RoundUpPow2(table_size, heap.GetPageSize())) {
++      REXSYS_FAIL(false, "Function table range {:08X}-{:08X} is not free in the XEX heap",
++                  table_base, static_cast<u64>(table_base) + table_size);
++    }
++  }
++
+   if (!heaps_.v80000000.AllocFixed(
+           table_base, table_size, 0x10000,
+           kernel::kMemoryAllocationReserve | kernel::kMemoryAllocationCommit,
+diff --git a/src/kernel/module_registry.cpp b/src/kernel/module_registry.cpp
+index 5a72e84c..f30df5a1 100644
+--- a/src/kernel/module_registry.cpp
++++ b/src/kernel/module_registry.cpp
+@@ -480,7 +480,8 @@ Result<X_HANDLE> ModuleRegistry::LoadUserModule(std::string_view raw_name, bool
+               xex->GetBaseAddress() + xex->GetImageSize());
+         } else if (!StateOf(runtime_).GetFunctionDispatcher()->InitializeFunctionTable(
+                        image_info->code_base, image_info->code_size, image_info->image_base,
+-                       image_info->image_size)) {
++                       image_info->image_size, /*is_entrypoint=*/false,
++                       image_info->function_table_base)) {
+           REXSYS_ERROR("InitializeFunctionTable failed for module '{}'", recomp->pe_name);
+         } else {
+           StateOf(runtime_).GetFunctionDispatcher()->RegisterModule(
+diff --git a/src/kernel/title_state.cpp b/src/kernel/title_state.cpp
+index 916aeb6a..171437af 100644
+--- a/src/kernel/title_state.cpp
++++ b/src/kernel/title_state.cpp
+@@ -331,7 +331,8 @@ Result<void> TitleState::InstallImage() {
+ 
+   if (!function_dispatcher_->InitializeFunctionTable(image_info.code_base, image_info.code_size,
+                                                      image_info.image_base, image_info.image_size,
+-                                                     /*is_entrypoint=*/true)) {
++                                                     /*is_entrypoint=*/true,
++                                                     image_info.function_table_base)) {
+     Shutdown();
+     return Err(SetupError(X_STATUS_UNSUCCESSFUL, "the function table cannot be initialized"));
+   }
+diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
+index 4b1a0cd1..e7d9af6b 100644
+--- a/tests/unit/CMakeLists.txt
++++ b/tests/unit/CMakeLists.txt
+@@ -231,6 +231,7 @@ add_executable(
+   codegen/tail_call_test.cpp
+   codegen/vector_pair_write_test.cpp
+   codegen/setjmp_test.cpp
++  codegen/function_table_base_test.cpp
+   codegen/skip_lr_test.cpp
+   codegen/call_usage_test.cpp
+   codegen/function_scanner_test.cpp
+diff --git a/tests/unit/codegen/function_table_base_test.cpp b/tests/unit/codegen/function_table_base_test.cpp
+new file mode 100644
+index 00000000..1d5c612a
+--- /dev/null
++++ b/tests/unit/codegen/function_table_base_test.cpp
+@@ -0,0 +1,74 @@
++/**
++ * @file        tests/unit/codegen/function_table_base_test.cpp
++ * @brief       The function_table_base key places the dispatch table (fifa2010wc patch)
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#include "code_image.h"
++#include "rex_test.h"
++#include "temp_folder.h"
++
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace {
++
++using rex::u32;
++
++constexpr u32 kBlr = 0x4E800020;
++
++struct Generated {
++  bool ok = false;
++  std::string tree;
++};
++
++// One function, `blr`, in a synthetic image; no game data.
++Generated Generate(std::string_view extra_manifest) {
++  const std::vector<u32> words = {kBlr};
++  const rex::test::PDataEntry pdata[] = {
++      {rex::test::kCodeImageBase + rex::test::kCodeImageCodeOffset, 1}};
++  rex::test::TempFolder folder;
++  const auto result = rex::test::GenerateFromImage(
++      folder, rex::test::BuildCodeImage(words, pdata), extra_manifest, /*force=*/false);
++  Generated out;
++  out.ok = static_cast<bool>(result);
++  if (out.ok) {
++    out.tree = rex::test::ReadGeneratedTree(folder.path / "generated" / "entry");
++  }
++  return out;
++}
++
++}  // namespace
++
++REX_TEST_CASE("Without function_table_base the table follows the image",
++              "[codegen][function_table_base]") {
++  const auto generated = Generate("");
++  REQUIRE(generated.ok);
++  // kCodeImageBase + kCodeImageSize
++  CHECK(generated.tree.find("#define REX_FUNC_TABLE_BASE 0x82010000ull") != std::string::npos);
++  CHECK(generated.tree.find(".function_table_base = REX_FUNC_TABLE_BASE,") != std::string::npos);
++  CHECK(generated.tree.find("x + REX_FUNC_TABLE_BASE +") != std::string::npos);
++  CHECK(generated.tree.find("REX_IMAGE_BASE + REX_IMAGE_SIZE +") == std::string::npos);
++}
++
++REX_TEST_CASE("function_table_base moves the table", "[codegen][function_table_base]") {
++  const auto generated = Generate("function_table_base = 0x8C000000\n");
++  REQUIRE(generated.ok);
++  CHECK(generated.tree.find("#define REX_FUNC_TABLE_BASE 0x8C000000ull") != std::string::npos);
++  CHECK(generated.tree.find(".function_table_base = REX_FUNC_TABLE_BASE,") != std::string::npos);
++}
++
++REX_TEST_CASE("A function_table_base that is not 64 KiB aligned is refused",
++              "[codegen][function_table_base]") {
++  CHECK_FALSE(Generate("function_table_base = 0x8C000100\n").ok);
++}
++
++REX_TEST_CASE("A function_table_base outside the 0x80000000 heap is refused",
++              "[codegen][function_table_base]") {
++  CHECK_FALSE(Generate("function_table_base = 0x70000000\n").ok);
++  CHECK_FALSE(Generate("function_table_base = 0x90000000\n").ok);
++  CHECK_FALSE(Generate("function_table_base = 0x100000000\n").ok);
++}
+diff --git a/tests/unit/kernel/function_dispatcher_test.cpp b/tests/unit/kernel/function_dispatcher_test.cpp
+index 9a3a9802..0096fff4 100644
+--- a/tests/unit/kernel/function_dispatcher_test.cpp
++++ b/tests/unit/kernel/function_dispatcher_test.cpp
+@@ -114,6 +114,95 @@ REX_TEST_CASE("SetFunction rejects image data below code_base", "[kernel][dispat
+   CHECK(dispatcher.GetFunction(kImageBase + 0x10) == nullptr);
+ }
+ 
++// fifa2010wc patch: the dispatch table of a module can be placed with table_base, so that the
++// default table, which follows the image, does not run into the image of the next module.
++REX_TEST_CASE("InitializeFunctionTable places the table at table_base", "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++
++  constexpr u32 kImageBase = 0x8D000000u;
++  constexpr u32 kCodeSize = 0x10000u;
++  constexpr u32 kImageSize = 0x100000u;
++  constexpr u32 kTableBase = 0x8DC00000u;
++
++  REQUIRE(dispatcher.InitializeFunctionTable(kImageBase, kCodeSize, kImageBase, kImageSize,
++                                             /*is_entrypoint=*/false, kTableBase));
++  REQUIRE(dispatcher.SetFunction(kImageBase + 0x10, &DummyFn));
++  CHECK(*memory.TranslateVirtual<PPCFunc**>(kTableBase + 0x10 * 2) == &DummyFn);
++  CHECK(dispatcher.GetFunction(kImageBase + 0x10) == &DummyFn);
++}
++
++REX_TEST_CASE("A default table that runs into the next image is refused", "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++
++  // The table of A takes (0x80000 + 0x10000) * 2 = 0x120000 bytes after its image, up to
++  // 0x8D410000, past the image of B at 0x8D400000.
++  constexpr u32 kImageA = 0x8D100000u;
++  constexpr u32 kImageB = 0x8D400000u;
++  REQUIRE(dispatcher.InitializeFunctionTable(kImageA, 0x80000u, kImageA, 0x1F0000u));
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(kImageB, 0x10000u, kImageB, 0x100000u));
++}
++
++REX_TEST_CASE("A table moved with table_base lets the next image load", "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++
++  constexpr u32 kImageA = 0x8D500000u;
++  constexpr u32 kImageB = 0x8D700000u;
++  REQUIRE(dispatcher.InitializeFunctionTable(kImageA, 0x80000u, kImageA, 0x1F0000u,
++                                             /*is_entrypoint=*/false, 0x8DD00000u));
++  REQUIRE(dispatcher.InitializeFunctionTable(kImageB, 0x10000u, kImageB, 0x100000u));
++  REQUIRE(dispatcher.SetFunction(kImageA + 0x20, &DummyFn));
++  CHECK(*memory.TranslateVirtual<PPCFunc**>(0x8DD00000u + 0x20 * 2) == &DummyFn);
++}
++
++REX_TEST_CASE("A table that overlaps another table or its own image is refused",
++              "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++
++  // A's table takes (0x10000 + 0x10000) * 2 = 0x40000 bytes from 0x8DF00000.
++  constexpr u32 kImageA = 0x8D900000u;
++  REQUIRE(dispatcher.InitializeFunctionTable(kImageA, 0x10000u, kImageA, 0x100000u,
++                                             /*is_entrypoint=*/false, 0x8DF00000u));
++  constexpr u32 kImageB = 0x8DA00000u;
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(kImageB, 0x10000u, kImageB, 0x100000u,
++                                                 /*is_entrypoint=*/false, 0x8DF20000u));
++  constexpr u32 kImageC = 0x8DB00000u;
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(kImageC, 0x10000u, kImageC, 0x100000u,
++                                                 /*is_entrypoint=*/false, 0x8DB80000u));
++}
++
++// AllocFixed with reserve and commit takes over pages that are already reserved, so a moved
++// table must be refused there rather than wipe them.
++REX_TEST_CASE("A moved table is refused on pages that are already reserved",
++              "[kernel][dispatcher]") {
++  auto& memory = GetTestMemory();
++  rex::kernel::FunctionDispatcher dispatcher(&memory);
++
++  // A page held by something else in the 0x80000000 heap, such as an XEX image.
++  constexpr u32 kOccupied = 0x8E000000u;
++  auto* heap = memory.LookupHeap(kOccupied);
++  REQUIRE(heap != nullptr);
++  REQUIRE(heap->AllocFixed(
++      kOccupied, 0x10000u, 0x10000u,
++      rex::kernel::kMemoryAllocationReserve | rex::kernel::kMemoryAllocationCommit,
++      rex::kernel::kMemoryProtectRead | rex::kernel::kMemoryProtectWrite));
++  *memory.TranslateVirtual<u32*>(kOccupied + 0x100) = 0x12345678u;
++
++  // The table would take (0x10000 + 0x10000) * 2 = 0x40000 bytes from 0x8DFF0000, over the
++  // occupied page. No module overlaps it, so only the guest memory check can refuse it.
++  constexpr u32 kImageA = 0x8E100000u;
++  CHECK_FALSE(dispatcher.InitializeFunctionTable(kImageA, 0x10000u, kImageA, 0x100000u,
++                                                 /*is_entrypoint=*/false, 0x8DFF0000u));
++  CHECK(*memory.TranslateVirtual<u32*>(kOccupied + 0x100) == 0x12345678u);
++
++  // The same module is accepted with its table on free pages.
++  CHECK(dispatcher.InitializeFunctionTable(kImageA, 0x10000u, kImageA, 0x100000u,
++                                           /*is_entrypoint=*/false, 0x8E400000u));
++}
++
+ namespace {
+ constexpr u32 kRegisterModBase = 0x85000000u;
+ void RegisterOne(rex::kernel::IFunctionRegistrar* registrar) {

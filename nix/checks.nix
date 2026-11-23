@@ -161,6 +161,33 @@ in
       '';
     };
 
+  # D-015 (O3): the SDK patch series leaves XEX loading and decryption as upstream wrote
+  # them. Lists every file the patches touch, and fails if one is an XEX or cryptography
+  # file (src/filesystem/xex.cpp, src/kernel/xex_module.cpp, thirdparty/excrypt, ...).
+  # The rule is first run on a synthetic patch that touches xex.cpp, which must be refused.
+  # Whether the series applies is tested by the SDK build itself.
+  sdk-patches = pkgs.runCommand "sdk-patches" { } ''
+    set -euo pipefail
+    mkdir -p "$out"
+    touched() { sed -n -E 's@^(\+\+\+|---) [ab]/@@p' "$@" | sort -u; }
+    forbidden() { grep -iE 'xex|crypt' || true; }
+
+    printf '%s\n' 'diff --git a/src/filesystem/xex.cpp b/src/filesystem/xex.cpp' \
+      '--- a/src/filesystem/xex.cpp' '+++ b/src/filesystem/xex.cpp' > negative.patch
+    [ -n "$(touched negative.patch | forbidden)" ] \
+      || { echo "the rule does not refuse a patch of xex.cpp"; exit 1; }
+
+    patches=(${self}/patches/rexglue-sdk/*.patch)
+    [ -f "''${patches[0]}" ] || { echo "no patch in patches/rexglue-sdk"; exit 1; }
+    touched "''${patches[@]}" > "$out/touched-files.txt"
+    cat "$out/touched-files.txt"
+    bad=$(forbidden < "$out/touched-files.txt")
+    if [ -n "$bad" ]; then
+      echo "a patch touches an XEX or cryptography file (O3, D-015): $bad"
+      exit 1
+    fi
+  '';
+
   # J0: the disc identification tool, tested on synthetic disc images and XEX headers made
   # at run time (no game data). The tests also check that the key and signature fields of
   # an XEX never reach a report, and that a report passes the proprietary data check.

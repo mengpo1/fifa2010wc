@@ -84,6 +84,17 @@ llvmPackages_20.stdenv.mkDerivation {
 
   inherit src;
 
+  # Project patches on top of upstream v0.11.0 (D-011). Each one is a functional change
+  # with its own SDK unit tests, run in checkPhase below, and its provenance in its header
+  # and in THIRD_PARTY.md (D-010). None of them touches XEX loading or decryption
+  # (src/filesystem/xex.cpp, src/kernel/xex_module.cpp, thirdparty/excrypt): O3 keeps the
+  # upstream decryption path unchanged (D-015). nix flake check verifies it (sdk-patches).
+  patches = [
+    # 0003 in the project A numbering: configurable function table base (J2 step A3,
+    # docs/J2_A3_FUNCTION_TABLE.md).
+    ../patches/rexglue-sdk/0001-function-table-base.patch
+  ];
+
   nativeBuildInputs = [
     cmake
     ninja
