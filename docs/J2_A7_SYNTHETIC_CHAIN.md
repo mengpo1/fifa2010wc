@@ -27,7 +27,10 @@
   rien dire, ce qui reproduit P-05 pour l'exécutable du jeu.
   - Les presets de `CMakePresets.json` lisent maintenant `REXGLUE_LLD` dans le shell de
     développement.
-  - `CMakeLists.txt` refuse toute autre valeur, ou son absence.
+  - `CMakeLists.txt` arrête la configuration si la variable manque, si le cache en diffère,
+    ou si un petit programme lié par cet éditeur de liens ne démarre pas sans
+    `LD_LIBRARY_PATH` (revue P-47). Il vérifie un comportement sur ce programme, pas
+    l'identité de l'éditeur de liens.
 - **P-07 tient pour l'hôte** [V] : les bibliothèques copiées à côté du programme sont
   identiques octet pour octet à celles du paquet. Le pilote Vulkan garde donc
   `vulkan-loader` dans son RUNPATH.
@@ -156,15 +159,35 @@ b. plain lld: dependency check refuses the program (plain-deps.txt)
 - **Correctif** :
   - `CMakePresets.json` : `"REXGLUE_LLD": "$env{REXGLUE_LLD}"` dans le preset de base.
     Le shell de développement exporte déjà la variable (`flake.nix`).
-  - `CMakeLists.txt` arrête la configuration dans deux cas : la variable d'environnement
-    est vide, ou `REXGLUE_LLD` a une autre valeur. Le second cas couvre aussi une
-    configuration sans preset et sans `-DREXGLUE_LLD`.
+  - `CMakeLists.txt` arrête la configuration dans trois cas :
+    1. la variable d'environnement est vide ;
+    2. `REXGLUE_LLD` a, dans le cache, une autre valeur que dans l'environnement. Ce cas
+       couvre aussi une configuration sans preset et sans `-DREXGLUE_LLD` ;
+    3. **revue P-47** : un petit programme C++ lié avec ce `ld.lld` ne démarre pas, une
+       fois `LD_LIBRARY_PATH` et `LD_PRELOAD` retirés de son environnement.
+       - Les deux premiers cas ne contrôlent que l'origine de la valeur. Un appelant qui
+         donne le même `ld.lld` brut à l'environnement et au cache les passe.
+       - Le troisième contrôle ce que fait l'éditeur de liens : sans l'enveloppe de Nix,
+         le programme n'a pas de RUNPATH vers `libstdc++.so.6`, et le chargeur ne la
+         trouve pas.
+- **Ce que le garde-fou ne prouve pas** :
+  - il vérifie un comportement sur un petit programme, pas l'identité de l'éditeur de
+    liens ;
+  - un environnement reconfiguré exprès, par exemple avec un `ld.lld` qui ajoute
+    lui-même des RUNPATH, peut le passer.
+  - Le contrôle des dépendances de l'exécutable du jeu, après son vrai lien en B5, reste
+    donc exigé (`J2_PLAN` §4.5).
 - **Vérifié** :
   - le contrôle `cmake-skeleton` configure avec le preset, puis vérifie la valeur dans
     `CMakeCache.txt` ;
-  - il vérifie deux refus : sans la variable, et avec le `lld` brut ;
-  - dans `nix develop`, le preset passe le `ld.lld` enveloppé, et
-    `-DREXGLUE_LLD=/usr/bin/ld.lld` est refusé.
+  - il vérifie trois refus :
+    - sans la variable ;
+    - avec le `lld` brut dans le cache ;
+    - avec le `lld` brut à la fois dans l'environnement et dans le cache. Le chargeur
+      répond alors `libstdc++.so.6: cannot open shared object file` ;
+  - dans `nix develop`, le preset passe le `ld.lld` enveloppé et la sonde réussit.
+    `-DREXGLUE_LLD=/usr/bin/ld.lld` est refusé, et `REXGLUE_LLD=/usr/bin/ld.lld` avec le
+    preset l'est aussi, par la sonde.
 
 ## 6. Limites
 
@@ -188,6 +211,11 @@ b. plain lld: dependency check refuses the program (plain-deps.txt)
   preset, qui passe `REXGLUE_LLD`, puis lie à travers `rexglue_setup_target`, qui appelle
   `rexglue_configure_target`.
   - A7 montre que ce chemin fonctionne avec le paquet corrigé.
-  - Une autre valeur de `REXGLUE_LLD`, ou son absence, arrête la configuration.
+  - La configuration s'arrête si `REXGLUE_LLD` manque, si le cache diffère de
+    l'environnement, ou si l'éditeur de liens ne donne pas de RUNPATH au programme
+    sonde (§5).
+  - **Après le vrai lien**, les dépendances de l'exécutable du jeu et des bibliothèques
+    copiées à côté de lui sont contrôlées comme à l'étape 4 du contrôle
+    `a7-synthetic-chain`. Le garde-fou de configuration ne remplace pas ce contrôle.
 - Les constats P-05 et P-07 de `reports/J1_VALIDATION.md` §6 sont vérifiés pour un hôte,
   et non plus seulement pour le SDK.

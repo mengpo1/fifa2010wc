@@ -144,7 +144,8 @@ in
 
   # The CMake skeleton configures against the SDK package with the linux-amd64-release preset,
   # with REXGLUE_LLD set as in the dev shell. The preset passes it to CMake (J1 P-05, J2 A7).
-  # Negative controls: without the variable, or with another ld.lld, the configure step stops.
+  # Negative controls: the configure step stops without the variable, with another ld.lld in
+  # the cache, and with the plain lld in both the environment and the cache (review P-47).
   cmake-skeleton =
     pkgs.llvmPackages_20.stdenv.mkDerivation {
       name = "fifa2010wc-cmake-skeleton";
@@ -177,11 +178,16 @@ in
         expect_refusal other-lld "not the wrapped ld.lld of the dev shell" \
           cmake --preset linux-amd64-release -B "$TMPDIR/other-lld" \
             -DREXGLUE_LLD=${pkgs.llvmPackages_20.lld}/bin/ld.lld
+        # Review P-47: the environment and the cache both name the plain lld. Their values
+        # agree, so only the probe of CMakeLists.txt, which runs a program it linked, sees it.
+        expect_refusal plain-lld-everywhere "does not start without LD_LIBRARY_PATH" \
+          env REXGLUE_LLD=${pkgs.llvmPackages_20.lld}/bin/ld.lld \
+            cmake --preset linux-amd64-release -B "$TMPDIR/plain-lld-everywhere"
         runHook postBuild
       '';
       installPhase = ''
         mkdir -p "$out"
-        cp configure.log no-variable.log other-lld.log "$out/"
+        cp configure.log no-variable.log other-lld.log plain-lld-everywhere.log "$out/"
       '';
     };
 
