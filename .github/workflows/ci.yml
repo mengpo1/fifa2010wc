@@ -41,7 +41,7 @@ jobs:
           mkdir -p evidence
           nix build .#rexglue-sdk --no-update-lock-file --out-link result-sdk \
             && cp -r result-sdk/share/rexglue-sdk/test-results evidence/sdk-test-results || true
-          for c in rexglue-cli-runs cmake-skeleton a7-synthetic-chain proprietary-data-source proprietary-data-closure iso-identify-selftest; do
+          for c in rexglue-cli-runs cmake-skeleton a7-synthetic-chain proprietary-data-source proprietary-data-closure iso-identify-selftest b1-extract-selftest; do
             nix build ".#checks.x86_64-linux.$c" --no-update-lock-file --out-link "result-$c" \
               && cp -r "result-$c" "evidence/$c" || true
           done

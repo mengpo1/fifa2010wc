@@ -15,6 +15,10 @@
 > franchi** non plus, et PA-1 ne vaut pas PB-0 ; ce rapport dit ce qui reste à remplir
 > (§5).
 >
+> **Mise à jour du 2026-11-24 (D-017)** : PB-0 est franchi depuis, pour B1 seulement, après
+> les contrôles CP-1 à CP-7 sur la machine du porteur (ticket #14). Le §5 garde l'état à la
+> date du rapport.
+>
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Critères de sortie (`J2_PLAN` §3.9)
