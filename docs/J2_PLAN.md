@@ -258,6 +258,11 @@ décision explicite) :
 
   M1 n'établit que des niveaux de preuve N0 à N2. Les valeurs de données restent N3,
   non vérifiées.
+- **A8-bis (2026-11-23)** : outil rédigé, soumis à la revue (`tools/address_compare.py`,
+  `docs/J2_A8BIS_ADDRESS_COMPARE.md`, ticket #22). Il automatise N0 et N1 à partir des
+  formats de la source de ReXGlue. N2 vient d'un relevé d'examen manuel, que l'outil
+  contrôle, car les commentaires du code généré ne portent pas d'adresse. Ses tests sont
+  synthétiques ; il ne traitera les sorties privées qu'en phase B.
 
 ### 3.9 Sortie de la phase A (PA-1)
 

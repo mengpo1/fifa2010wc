@@ -78,6 +78,15 @@
             --template ${./config/private-template/wc2010_manifest.toml} "$@"
         '';
       };
+
+      # J2, step A8-bis: compares ReXGlue address lists and diagnostics with configured
+      # entries (docs/J2_A8BIS_ADDRESS_COMPARE.md). Purely analytic; every path is a run
+      # time argument inside the private folder, which never enters the store.
+      address-compare = pkgs.writeShellApplication {
+        name = "fifa2010wc-address-compare";
+        runtimeInputs = [ pkgs.python3 ];
+        text = ''exec python3 -I ${./tools/address_compare.py} "$@"'';
+      };
     in
     {
       packages.${system} = {
@@ -87,6 +96,7 @@
           iso-identify
           private-guard
           private-project
+          address-compare
           ;
         default = rexglue-sdk;
       };
@@ -112,6 +122,11 @@
           program = "${private-project}/bin/fifa2010wc-private-project";
           meta.description = "Set up and check the codegen project in the private folder (J2)";
         };
+        address-compare = {
+          type = "app";
+          program = "${address-compare}/bin/fifa2010wc-address-compare";
+          meta.description = "Compare ReXGlue address lists with configured entries (J2)";
+        };
       };
 
       checks.${system} = import ./nix/checks.nix {
@@ -124,6 +139,7 @@
           iso-identify
           private-guard
           private-project
+          address-compare
           ;
       };
 
