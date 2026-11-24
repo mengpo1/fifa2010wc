@@ -18,15 +18,26 @@
 - **P-05 est reproduit, puis vérifié corrigé, dans un projet consommateur** [V, §3] :
   - avec `-DREXGLUE_LLD` vers le `ld.lld` enveloppé, toutes les dépendances du programme
     se résolvent dans le magasin ou parmi les bibliothèques copiées à côté de lui ;
-  - avec le `lld` brut, le programme se construit, mais le contrôle des dépendances le
-    refuse ;
-  - sans `-DREXGLUE_LLD`, la configuration s'arrête sur le message du SDK. L'oubli ne
-    passe donc pas inaperçu dans cet environnement.
+  - avec le `lld` brut, le programme se construit, mais le chargeur ne trouve pas
+    `libstdc++.so.6`, et le contrôle des dépendances le refuse ;
+  - sans `-DREXGLUE_LLD`, la configuration s'arrête sur le message du SDK, mais
+    **seulement dans le bac à sable**, où aucun `ld.lld` n'est dans le `PATH`.
+- **A7 a trouvé un second défaut, corrigé ici** [V, §5]. `nix develop` garde le `PATH` de
+  la machine : ici, `/usr/bin/ld.lld`. Sans `-DREXGLUE_LLD`, le SDK l'aurait pris sans
+  rien dire, ce qui reproduit P-05 pour l'exécutable du jeu.
+  - Les presets de `CMakePresets.json` lisent maintenant `REXGLUE_LLD` dans le shell de
+    développement.
+  - `CMakeLists.txt` refuse toute autre valeur, ou son absence.
 - **P-07 tient pour l'hôte** [V] : les bibliothèques copiées à côté du programme sont
   identiques octet pour octet à celles du paquet. Le pilote Vulkan garde donc
   `vulkan-loader` dans son RUNPATH.
-- **Le code généré s'exécute** [I] : résultat des 1 615 cas Catch2 à consigner après le passage du contrôle avec le SDK corrigé.
-- **Limites** (§5) :
+- **Le code généré s'exécute** [V] : les 1 615 cas Catch2 des 161 programmes passent
+  (7 163 assertions). Le recompilateur, compilé et lié dans cette chaîne, rend les valeurs
+  attendues par les tests d'amont, pour tout ce que GNU binutils sait assembler.
+  - La CI de ReXGlue ne lance pas ces tests à `v0.11.0` : aucun workflow de
+    `.github/workflows` n'active `REXGLUE_BUILD_PPC_TESTS`, désactivé par défaut, qui
+    demande les binutils précompilés.
+- **Limites** (§6) :
   - A7 n'exerce ni `rexglue codegen` sur un XEX, ni `rexglue_project`, ni le chargement
     des modules à l'exécution ;
   - les 29 programmes de test qui demandent VMX128 ne sont pas couverts ;
@@ -78,12 +89,28 @@
 | 4. Copies | Chaque bibliothèque copiée à côté du programme est identique à celle du paquet ; `librexgpu-xenos-vulkan.so` a `vulkan-loader` dans son RUNPATH (P-07) |
 | 5. Exécution | Les cas Catch2 passent ; rapport JUnit conservé |
 | 6a. Témoin | Sans `-DREXGLUE_LLD`, la configuration échoue avec « ReXGlue links with lld » |
-| 6b. Témoin | Avec le `lld` brut, le programme se construit et le contrôle des dépendances le refuse (P-05) |
+| 6b. Témoin | Avec le `lld` brut, le programme se construit et le contrôle des dépendances le refuse : `libstdc++.so.6: cannot open shared object file` (P-05) |
 
 - Les témoins (6a, 6b) n'utilisent qu'un programme, `instr_add`, pour rester courts.
 - **La sortie ne garde que des journaux et des rapports** : aucune source générée, aucun
   objet, aucun programme. `chain.txt` résume chaque étape.
 - Le contrôle est aussi recueilli comme preuve par la CI (`.github/workflows/ci.yml`).
+
+Résultat (`chain.txt`, extrait, chemins du magasin abrégés) :
+
+```
+161 of 190 test programs assembled; the 29 refused are the VMX128 list
+exit status 0, 1615 Catch2 cases
+10 provider module locations of the package exist
+linked with --ld-path=/nix/store/…-llvm-binutils-wrapper-20.1.8/bin/ld.lld
+RUNPATH: $ORIGIN:$ORIGIN/../lib64:/nix/store/…-a7-synthetic-chain/lib:/nix/store/…-rexglue-sdk-0.11.0/lib:/nix/store/…-glibc-2.42-103/lib:/nix/store/…-gcc-15.3.0-lib/lib:/nix/store/…-gcc-15.3.0-libgcc/lib
+a7_ppc_tests: every dependency resolved (host-deps.txt)
+18 staged files, each identical to the SDK package's
+staged librexgpu-xenos-vulkan.so: vulkan-loader on RUNPATH
+All tests passed (7163 assertions in 1615 test cases)
+a. without REXGLUE_LLD: configure stops with the SDK's lld message
+b. plain lld: dependency check refuses the program (plain-deps.txt)
+```
 
 ## 4. Constat A7-1 : emplacements des modules dans le paquet du SDK [V]
 
@@ -114,7 +141,32 @@
   que chaque emplacement de module existe ; le paquet d'avant le correctif échoue aux
   deux.
 
-## 5. Limites
+## 5. Constat A7-2 : `ld.lld` pris dans le `PATH` de la machine [V]
+
+- **Constat** : `rexglue_link_flags` (`lib/cmake/rexglue/rexglue_target.cmake`) prend
+  `REXGLUE_LLD` s'il est donné. Sinon, il prend le premier `ld.lld-20` ou `ld.lld` du
+  `PATH` (`find_program`).
+  - Le bac à sable de Nix n'en a aucun : l'oubli arrête la configuration (témoin 6a).
+  - `nix develop` garde le `PATH` de la machine. Dans cet environnement,
+    `command -v ld.lld` y donne `/usr/bin/ld.lld`. Sur NixOS, un `lld` installé pour le
+    système serait dans `/run/current-system/sw/bin` [H].
+  - L'oubli de `-DREXGLUE_LLD`, que demandait le commentaire du shell de développement,
+    aurait donc lié l'exécutable du jeu sans rien signaler, avec un `ld.lld` hors de
+    l'enveloppe de Nix : c'est P-05.
+- **Correctif** :
+  - `CMakePresets.json` : `"REXGLUE_LLD": "$env{REXGLUE_LLD}"` dans le preset de base.
+    Le shell de développement exporte déjà la variable (`flake.nix`).
+  - `CMakeLists.txt` arrête la configuration dans deux cas : la variable d'environnement
+    est vide, ou `REXGLUE_LLD` a une autre valeur. Le second cas couvre aussi une
+    configuration sans preset et sans `-DREXGLUE_LLD`.
+- **Vérifié** :
+  - le contrôle `cmake-skeleton` configure avec le preset, puis vérifie la valeur dans
+    `CMakeCache.txt` ;
+  - il vérifie deux refus : sans la variable, et avec le `lld` brut ;
+  - dans `nix develop`, le preset passe le `ld.lld` enveloppé, et
+    `-DREXGLUE_LLD=/usr/bin/ld.lld` est refusé.
+
+## 6. Limites
 
 - **Pas de XEX** : `rexglue codegen` sur un manifeste, `rexglue_project` et
   `rexglue_setup_target` ne sont pas exercés. `recompile-tests` charge les programmes par
@@ -130,11 +182,12 @@
 - **Release seulement** ; la configuration Debug n'est pas construite.
 - Un essai sur des données synthétiques ne garantit pas le comportement sur le jeu.
 
-## 6. Effets sur la suite
+## 7. Effets sur la suite
 
-- **B5** (`J2_PLAN` §4.5) : le projet du jeu se configure avec
-  `-DREXGLUE_LLD=$REXGLUE_LLD` (`nix develop`) et lie à travers `rexglue_setup_target`,
-  qui appelle `rexglue_configure_target`. A7 montre que ce chemin fonctionne avec le
-  paquet corrigé, et que l'oubli de `-DREXGLUE_LLD` arrête la configuration.
+- **B5** (`J2_PLAN` §4.5) : le projet du jeu se configure depuis `nix develop` avec un
+  preset, qui passe `REXGLUE_LLD`, puis lie à travers `rexglue_setup_target`, qui appelle
+  `rexglue_configure_target`.
+  - A7 montre que ce chemin fonctionne avec le paquet corrigé.
+  - Une autre valeur de `REXGLUE_LLD`, ou son absence, arrête la configuration.
 - Les constats P-05 et P-07 de `reports/J1_VALIDATION.md` §6 sont vérifiés pour un hôte,
   et non plus seulement pour le SDK.

@@ -142,7 +142,9 @@ in
         echo "usage error rejected as expected"
       '';
 
-  # The CMake skeleton configures against the SDK package with the linux-amd64-release preset.
+  # The CMake skeleton configures against the SDK package with the linux-amd64-release preset,
+  # with REXGLUE_LLD set as in the dev shell. The preset passes it to CMake (J1 P-05, J2 A7).
+  # Negative controls: without the variable, or with another ld.lld, the configure step stops.
   cmake-skeleton =
     pkgs.llvmPackages_20.stdenv.mkDerivation {
       name = "fifa2010wc-cmake-skeleton";
@@ -152,15 +154,34 @@ in
         pkgs.ninja
       ];
       buildInputs = [ rexglue-sdk ];
+      # The same value as in the dev shell (flake.nix).
+      REXGLUE_LLD = "${pkgs.llvmPackages_20.bintools}/bin/ld.lld";
       dontUseCmakeConfigure = true;
       buildPhase = ''
         runHook preBuild
+        set -euo pipefail
         cmake --preset linux-amd64-release 2>&1 | tee configure.log
+        grep -E "^REXGLUE_LLD:[A-Z]+=$REXGLUE_LLD\$" out/build/linux-amd64-release/CMakeCache.txt \
+          | tee -a configure.log
+        expect_refusal() { # <name> <message> <command>...
+          name=$1; message=$2; shift 2
+          if "$@" > "$name.log" 2>&1; then
+            echo "$name: the configure step accepted it" >&2; cat "$name.log" >&2; exit 1
+          fi
+          # CMake wraps long messages: compare with the line breaks folded into spaces.
+          tr -s ' \n' '  ' < "$name.log" | grep -qF "$message" || { cat "$name.log" >&2; exit 1; }
+          echo "$name: refused as expected" | tee -a configure.log
+        }
+        expect_refusal no-variable "REXGLUE_LLD is not set in the environment" \
+          env -u REXGLUE_LLD cmake --preset linux-amd64-release -B "$TMPDIR/no-variable"
+        expect_refusal other-lld "not the wrapped ld.lld of the dev shell" \
+          cmake --preset linux-amd64-release -B "$TMPDIR/other-lld" \
+            -DREXGLUE_LLD=${pkgs.llvmPackages_20.lld}/bin/ld.lld
         runHook postBuild
       '';
       installPhase = ''
         mkdir -p "$out"
-        cp configure.log "$out/"
+        cp configure.log no-variable.log other-lld.log "$out/"
       '';
     };
 
@@ -339,7 +360,7 @@ in
           exit 1
         fi
         echo "b. plain lld: dependency check refuses the program (plain-deps.txt)" >> "$R/chain.txt"
-        grep -E 'not found|interpreter|=> /' "$R/plain-deps.txt" | head -n 5 >> "$R/chain.txt" || true
+        grep -E 'not found|cannot open|error while loading' "$R/plain-deps.txt" | head -n 5 >> "$R/chain.txt" || true
         echo "  interpreter: $(patchelf --print-interpreter "$W/build-plain/a7_ppc_tests")" \
           >> "$R/chain.txt"
         runHook postBuild

@@ -42,6 +42,20 @@ foreach (layer IN LISTS FIFA2010WC_LAYERS)
   endif ()
 endforeach ()
 
+# J1 finding P-05 and J2 step A7 (docs/J2_A7_SYNTHETIC_CHAIN.md §5): ReXGlue links every
+# binary with the ld.lld named by REXGLUE_LLD, or else with the first ld.lld on PATH. Only the
+# wrapped ld.lld of the dev shell gives the binaries their RUNPATH entries, and `nix develop`
+# keeps the PATH of the machine, where another ld.lld can come first. The presets read
+# REXGLUE_LLD from the dev shell; anything else stops the configure step.
+if ("$ENV{REXGLUE_LLD}" STREQUAL "")
+  message(FATAL_ERROR "REXGLUE_LLD is not set in the environment: configure from `nix develop` "
+                      "with a preset of CMakePresets.json")
+endif ()
+if (NOT REXGLUE_LLD STREQUAL "$ENV{REXGLUE_LLD}")
+  message(FATAL_ERROR "REXGLUE_LLD is '${REXGLUE_LLD}', not the wrapped ld.lld of the dev shell "
+                      "($ENV{REXGLUE_LLD})")
+endif ()
+
 # D-011: the ReXGlue SDK v0.11.0 package, built from source by the flake
 # (nix/rexglue-sdk.nix). `nix develop` puts it on CMAKE_PREFIX_PATH.
 find_package(rexglue 0.11 CONFIG REQUIRED)

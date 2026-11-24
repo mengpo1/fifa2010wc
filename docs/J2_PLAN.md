@@ -229,8 +229,13 @@ décision explicite) :
   - **Défaut trouvé et corrigé** : les emplacements des modules fournisseurs du paquet du
     SDK étaient faux, ce qui empêchait de lier l'hôte. Le correctif est
     `-DCMAKE_INSTALL_LIBDIR=lib` dans `nix/rexglue-sdk.nix`, sans toucher au SDK.
+  - **Second défaut, corrigé** : `nix develop` garde le `PATH` de la machine. Sans
+    `-DREXGLUE_LLD`, un `ld.lld` hors de Nix aurait été pris sans rien signaler. Les
+    presets passent maintenant `REXGLUE_LLD`, et `CMakeLists.txt` refuse toute autre
+    valeur.
   - P-05 est reproduit avec le `lld` brut, et vérifié corrigé avec le `ld.lld`
     enveloppé. P-07 tient pour les copies faites à côté de l'hôte.
+  - Les 1 615 cas Catch2 tirés des 161 programmes passent.
   - Non couverts : un XEX (`rexglue codegen`, `rexglue_project`), VMX128 (29 programmes)
     et le chargement des modules à l'exécution.
 
@@ -341,7 +346,9 @@ décision explicite) :
 
 - **Action** : le manifeste à deux modules, les correctifs 0002 et 0003 transposés (0003 :
   A3 ; 0002 : seulement si la configuration échoue, `docs/J2_A2_SDK_PATCHES.md` §5), et
-  l'édition de liens avec `-DREXGLUE_LLD` et un RUNPATH corrigé.
+  l'édition de liens avec `-DREXGLUE_LLD` et un RUNPATH corrigé. La configuration se fait
+  depuis `nix develop`, avec un preset, qui passe `REXGLUE_LLD`
+  (`docs/J2_A7_SYNTHETIC_CHAIN.md` §5 et §7).
 - **Critère de sortie** : C2.1 à C2.4 (`ROADMAP.md` §4) :
   - `readelf -h` montre un ELF x86-64, sans dépendance à Wine ni à Windows ;
   - aucun interpréteur ni JIT ;
