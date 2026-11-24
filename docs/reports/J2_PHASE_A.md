@@ -6,8 +6,13 @@
 > publique de ReXGlue v0.11.0.
 >
 > PA-1 est un point de revue (`J2_PLAN` §2 et §3.9). Ce n'est pas un nouveau consentement :
-> PJ2-3 est déjà accordée (D-015). **PB-0 n'est pas franchi** ; ce rapport dit ce qui reste
-> à remplir (§5).
+> PJ2-3 est déjà accordée (D-015).
+>
+> **PA-1 n'est pas encore franchi.** Il faut d'abord trois choses (revue 6039494135 de #27) :
+> la fusion de A7 (#26), ce rapport ramené sur `main` avec une CI verte sur sa nouvelle
+> tête, puis une seconde revue et la décision du porteur du projet. **PB-0 n'est pas
+> franchi** non plus, et PA-1 ne vaut pas PB-0 ; ce rapport dit ce qui reste à remplir
+> (§5).
 >
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
@@ -104,7 +109,7 @@ CI de `main` après chaque fusion : verte pour #15, #16, #18, #19, #20 et #23. A
   pendant l'arrêt du titre (R-05). C'est à surveiller en J3, quand le jeu s'arrête.
 - **Ce qui n'est pas fait** : aucun test n'est désactivé, ignoré ni relancé
   automatiquement. Un passage échoué n'est relancé qu'une fois, à la main.
-- **Options, à décider par l'orchestrateur et le porteur du projet** :
+- **Options proposées** :
   1. Signaler les trois cas en amont, avec la piste. C'est une action extérieure, à faire
      avec l'accord du porteur.
   2. Garder la règle actuelle (une relance manuelle au plus, consignée), et suivre la
@@ -113,6 +118,26 @@ CI de `main` après chaque fusion : verte pour #15, #16, #18, #19, #20 et #23. A
      et allonge la CI.
   4. Écrire un correctif de ReXGlue (attendre la fin réelle du thread avant de détruire
      le runtime). Il demande d'abord un test qui reproduise le défaut à coup sûr.
+- **Arbitrage de l'orchestrateur** (revue 6039494135 de #27), **à confirmer par le
+  porteur du projet** lors de la décision PA-1 ; le suivi se fait dans le ticket #28.
+  - **L'option 2 est retenue, à titre provisoire**. Tous les tests Debug et leur
+    parallélisme sont gardés.
+  - Un échec isolé de la suite Debug peut être relancé **une fois au plus**, à la main,
+    sur le même commit. Les journaux et l'identifiant des deux tentatives sont gardés.
+  - **Un second échec bloque**, et doit être examiné.
+  - Pour chaque incident, on consigne :
+    - le SHA ;
+    - le contexte de la machine ;
+    - le nom du test ;
+    - le signal ou le délai dépassé ;
+    - les traces.
+  - On réévalue si la fréquence augmente, ou si un test devient reproductible.
+  - L'option 1 ne se fait qu'avec l'accord explicite du porteur du projet. Elle
+    n'utilise que des informations publiques, sans aucun journal du jeu.
+  - L'option 3 n'est pas retenue sans mesure, pour ne pas masquer une concurrence.
+  - L'option 4 n'est pas retenue tant qu'aucun test ne reproduit la cause.
+  - L'hypothèse sur la durée de vie du thread reste une hypothèse. Elle doit être
+    confirmée par une instrumentation publique et synthétique avant tout correctif.
 
 ### 4.2 Limites des outils du dossier privé
 
@@ -182,19 +207,23 @@ PB-0 (`J2_PLAN` §2) demande quatre conditions :
 | Condition | État |
 |---|---|
 | Autorisation PJ2-3 expresse | Accordée le 2026-11-23 (D-015) |
-| PA-1 franchi | **Ce rapport**, soumis à la revue de l'orchestrateur, puis du porteur du projet |
+| PA-1 franchi | **Non franchi.** Ce rapport a reçu une première revue (6039494135). Restent la fusion de #26, ce rapport ramené sur `main` avec une CI verte, une seconde revue, puis la décision du porteur du projet |
 | Contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6) | **À faire sur la machine de l'utilisateur**, avec la vérification des *core dumps* (§4.3). Aucun ne lit le jeu, sauf le contrôle que `iso/` est en lecture seule |
 | Méthode de validation des adresses décidée | Décidée : M1, M3 en repli, M2 non autorisée (§1) |
 
 **Ce qui reste avant la phase B**, dans l'ordre :
 
-1. la revue de ce rapport, et la fusion de A7 (#26) avec l'accord du porteur du projet ;
-2. la décision sur la réserve du §4.1 (options 1 à 4) ;
-3. sur la machine de l'utilisateur, la procédure de `J2_PHASE_B_CONTROLS.md` §1 :
+1. la fusion de A7 (#26), avec l'accord explicite du porteur du projet, après une
+   dernière vérification de sa tête et de sa CI ;
+2. ce rapport ramené sur `main`, avec son seul diff documentaire, et une CI verte sur sa
+   nouvelle tête ; puis la seconde revue de l'orchestrateur ;
+3. la décision PA-1 du porteur du projet, qui confirme aussi la règle du §4.1 ;
+4. sur la machine de l'utilisateur seulement, la procédure de
+   `J2_PHASE_B_CONTROLS.md` §1 :
    préparation du dossier privé, `private_guard check-dir`, crochet de pré-commit
    (CP-1, CP-6), puis la vérification des *core dumps* (§4.3) et la recherche CP-3 dans
    le magasin ;
-4. la consignation des résultats, sans contenu propriétaire (CP-5) ;
-5. la décision PB-0 du porteur du projet.
+5. la consignation des résultats, expurgés de tout contenu propriétaire (CP-5) ;
+6. la décision PB-0 du porteur du projet, distincte de PA-1.
 
 **Aucune opération sur l'ISO ni sur les XEX n'a lieu avant cette décision.**

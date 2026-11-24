@@ -283,9 +283,14 @@ décision explicite) :
   défaut, PB-0 n'est pas franchi et la phase B ne commence pas.
 - Un rapport de phase A est rédigé. PJ2-3 est déjà accordée (D-015) : PA-1 n'en est
   pas un nouveau consentement, seulement un point de revue.
-- **État (2026-11-24)** : rapport rédigé, soumis à la revue (`reports/J2_PHASE_A.md`).
-  Il garde une réserve sur la CI de `main`, où des tests Debug de ReXGlue sont instables
-  sous charge (§4.1 du rapport).
+- **État (2026-11-24)** : rapport rédigé (`reports/J2_PHASE_A.md`).
+  - **Première revue** (6039494135) : le rapport est recevable, mais **PA-1 n'est pas
+    franchi**. Il faut encore fusionner A7 (#26), ramener le rapport sur `main` avec une
+    CI verte, obtenir une seconde revue et la décision du porteur du projet.
+  - **Tests Debug de ReXGlue instables sous charge** (§4.1 du rapport, ticket #28) :
+    l'orchestrateur retient l'option 2 à titre provisoire, sous réserve de la
+    confirmation du porteur. La règle : une relance manuelle au plus, les preuves des
+    deux tentatives gardées, et un second échec bloque.
 
 ## 4. Phase B — traitement local des données privées, après PB-0
 
