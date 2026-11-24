@@ -53,7 +53,7 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 |---|---|---|---|
 | **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A. **Accordée le 2026-11-23** (D-015) |
 | **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9 |
-| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Non franchi** : les trois dernières conditions restent à remplir |
+| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Non franchi** : la méthode est décidée (M1, §6) ; PA-1 est soumis à la revue (`reports/J2_PHASE_A.md`) ; les contrôles CP-1 à CP-7 restent à exécuter sur la machine de l'utilisateur |
 | **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0 |
 | **PB-2** | Après le contrôle de compatibilité (B2) | Orchestrateur, puis porteur du projet | Validation des adresses ou nouvelle analyse |
 | **PB-3** | Avant de versionner un fichier tiré du disque | Orchestrateur, puis porteur du projet | Seules des adresses et des métadonnées, autorisées par D-007, après le contrôle des données |
@@ -281,6 +281,9 @@ décision explicite) :
   défaut, PB-0 n'est pas franchi et la phase B ne commence pas.
 - Un rapport de phase A est rédigé. PJ2-3 est déjà accordée (D-015) : PA-1 n'en est
   pas un nouveau consentement, seulement un point de revue.
+- **État (2026-11-24)** : rapport rédigé, soumis à la revue (`reports/J2_PHASE_A.md`).
+  Il garde une réserve sur la CI de `main`, où des tests Debug de ReXGlue sont instables
+  sous charge (§4.1 du rapport).
 
 ## 4. Phase B — traitement local des données privées, après PB-0
 
@@ -380,9 +383,7 @@ Points tranchés le 2026-11-23 (D-015) :
    correctifs fonctionnels sont permis (§3.2).
 3. **L'articulation avec le ticket #11** : il est remplacé par la phase A (§3.6).
 
-Point encore ouvert :
-
-4. **La méthode de validation des adresses** (`J2_PREREQUISITES.md` §3.3). *Arbitrée le
-   2026-11-23 : M1 d'abord, M3 en repli, M2 non autorisée, A8-bis autorisée
-   (`docs/J2_A8_ADDRESS_VALIDATION.md` §4). L'arbitrage sera acquis à la fusion de la
-   note.*
+4. **La méthode de validation des adresses** (`J2_PREREQUISITES.md` §3.3) : M1 d'abord,
+   M3 en repli, M2 non autorisée, A8-bis autorisée (`docs/J2_A8_ADDRESS_VALIDATION.md`
+   §4). Arbitrée par l'orchestrateur le 2026-11-23, acquise à la fusion de la note (#18)
+   avec l'accord du porteur du projet.
