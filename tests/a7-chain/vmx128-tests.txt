@@ -1,0 +1,32 @@
+# fifa2010wc J2 step A7 (docs/J2_A7_SYNTHETIC_CHAIN.md): the PowerPC instruction tests of
+# ReXGlue v0.11.0 (tests/ppc/asm) that the GNU binutils of nixpkgs refuse, since they have no
+# VMX128. The a7-synthetic-chain check fails when the refused tests differ from this list.
+instr_lvexx
+instr_lvl
+instr_lvr
+instr_stvl
+instr_stvr
+instr_vaddfp128
+instr_vand128
+instr_vandc128
+instr_vcmpxxfp128
+instr_vmaxfp128
+instr_vminfp128
+instr_vmsum3fp128
+instr_vmsum4fp128
+instr_vor128
+instr_vpkshss128
+instr_vpkshus128
+instr_vpkswss128
+instr_vpkswus128
+instr_vpkuhum128
+instr_vpkuhus128
+instr_vpkuwum128
+instr_vpkuwus128
+instr_vrlimi128
+instr_vsubfp128
+instr_vupkhsb128
+instr_vupklsb128
+instr_vxor128
+seq_stvlx_stvrx
+seq_vmx_nj_flush

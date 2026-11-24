@@ -322,7 +322,7 @@ dumps*, sans le supprimer : ce risque reste **sensible** (§4.3).
 | `function_table_base` absent, chevauchement possible des tables | A3 |
 | Transposer 0001, 0002 et 0004 à 0008 : besoin à confirmer correctif par correctif | A2 |
 | Méthode de validation des adresses : constats du §5.5 | A8 |
-| Essai de la chaîne sans le jeu : `recompile-tests` part d'assembleur PowerPC (`--bin-dir`, `--asm-dir`) et demande une chaîne de compilation PowerPC [I] | A7 |
+| Essai de la chaîne sans le jeu : `recompile-tests` part d'assembleur PowerPC (`--bin-dir`, `--asm-dir`) et demande une chaîne de compilation PowerPC [I]. *A7 (2026-11-24) : les GNU binutils de nixpkgs, sans VMX128, assemblent 161 des 190 programmes d'amont (`docs/J2_A7_SYNTHETIC_CHAIN.md`)* | A7 |
 
 ## 8. Variables d'environnement lues par le SDK [V]
 

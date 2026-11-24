@@ -222,6 +222,24 @@ décision explicite) :
   (`src/rexglue/command/test_recompiler.cpp`). C'est une piste, à évaluer [H].
 - **Critère de sortie** : un ELF lié au SDK sans aucune donnée du jeu, ou un constat
   d'impossibilité documenté.
+- **État (2026-11-24)** : critère atteint, soumis à la revue
+  (`docs/J2_A7_SYNTHETIC_CHAIN.md`). Le contrôle Nix `a7-synthetic-chain` construit un
+  hôte par `rexglue_configure_target`, à partir du C++ que `rexglue recompile-tests` tire
+  de 161 programmes de test d'amont, assemblés par les GNU binutils de nixpkgs.
+  - **Défaut trouvé et corrigé** : les emplacements des modules fournisseurs du paquet du
+    SDK étaient faux, ce qui empêchait de lier l'hôte. Le correctif est
+    `-DCMAKE_INSTALL_LIBDIR=lib` dans `nix/rexglue-sdk.nix`, sans toucher au SDK.
+  - **Second défaut, corrigé** : `nix develop` garde le `PATH` de la machine. Sans
+    `-DREXGLUE_LLD`, un `ld.lld` hors de Nix aurait été pris sans rien signaler. Les
+    presets passent maintenant `REXGLUE_LLD`. `CMakeLists.txt` arrête la configuration
+    dans trois cas : la variable manque, le cache en diffère, ou un programme sonde lié
+    par cet éditeur de liens ne démarre pas sans `LD_LIBRARY_PATH` (revue P-47). C'est
+    un contrôle de comportement, pas d'identité.
+  - P-05 est reproduit avec le `lld` brut, et vérifié corrigé avec le `ld.lld`
+    enveloppé. P-07 tient pour les copies faites à côté de l'hôte.
+  - Les 1 615 cas Catch2 tirés des 161 programmes passent.
+  - Non couverts : un XEX (`rexglue codegen`, `rexglue_project`), VMX128 (29 programmes)
+    et le chargement des modules à l'exécution.
 
 ### 3.8 A8 — Proposition sur la source de l'image en clair
 
@@ -330,9 +348,17 @@ décision explicite) :
 
 - **Action** : le manifeste à deux modules, les correctifs 0002 et 0003 transposés (0003 :
   A3 ; 0002 : seulement si la configuration échoue, `docs/J2_A2_SDK_PATCHES.md` §5), et
-  l'édition de liens avec `-DREXGLUE_LLD` et un RUNPATH corrigé.
+  l'édition de liens avec `-DREXGLUE_LLD` et un RUNPATH corrigé. La configuration se fait
+  depuis `nix develop`, avec un preset, qui passe `REXGLUE_LLD`
+  (`docs/J2_A7_SYNTHETIC_CHAIN.md` §5 et §7).
 - **Critère de sortie** : C2.1 à C2.4 (`ROADMAP.md` §4) :
   - `readelf -h` montre un ELF x86-64, sans dépendance à Wine ni à Windows ;
+  - **après le vrai lien**, contrôle des dépendances de l'exécutable et des bibliothèques
+    copiées à côté de lui, comme à l'étape 4 de `a7-synthetic-chain` (revue P-47) :
+    - `$ORIGIN` dans le RUNPATH ;
+    - `ld.so --list` sans « not found » ;
+    - chaque bibliothèque dans le magasin ou dans le dossier de l'exécutable ;
+    - l'interpréteur dans le magasin ;
   - aucun interpréteur ni JIT ;
   - le code généré n'est pas versionné : `git status` et le script du §4.5 de la feuille
     de route.

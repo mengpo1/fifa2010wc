@@ -42,6 +42,52 @@ foreach (layer IN LISTS FIFA2010WC_LAYERS)
   endif ()
 endforeach ()
 
+# J1 finding P-05 and J2 step A7 (docs/J2_A7_SYNTHETIC_CHAIN.md §5): ReXGlue links every
+# binary with the ld.lld named by REXGLUE_LLD, or else with the first ld.lld on PATH. Only the
+# wrapped ld.lld of the dev shell gives the binaries their RUNPATH entries, and `nix develop`
+# keeps the PATH of the machine, where another ld.lld can come first. The presets read
+# REXGLUE_LLD from the dev shell. Three checks stop the configure step:
+# 1. the variable is not set in the environment;
+# 2. the cache value differs from the environment;
+# 3. a program linked with that ld.lld does not start without LD_LIBRARY_PATH (review P-47:
+#    the first two only check where the value comes from, not what the linker does).
+# The third is a probe on one small program. It does not replace the dependency check of the
+# real host after its link (docs/J2_PLAN.md §4.5).
+if ("$ENV{REXGLUE_LLD}" STREQUAL "")
+  message(FATAL_ERROR "REXGLUE_LLD is not set in the environment: configure from `nix develop` "
+                      "with a preset of CMakePresets.json")
+endif ()
+if (NOT REXGLUE_LLD STREQUAL "$ENV{REXGLUE_LLD}")
+  message(FATAL_ERROR "REXGLUE_LLD is '${REXGLUE_LLD}', not the wrapped ld.lld of the dev shell "
+                      "($ENV{REXGLUE_LLD})")
+endif ()
+set(_lld_probe_dir "${CMAKE_BINARY_DIR}/CMakeFiles/fifa2010wc_lld_probe")
+file(WRITE "${_lld_probe_dir}/probe.cpp"
+     "#include <string>\nint main() { std::string text(\"runpath\"); return text.size() == 7 ? 0 : 1; }\n"
+)
+try_compile(
+  _lld_probe_built SOURCES "${_lld_probe_dir}/probe.cpp"
+  LINK_OPTIONS "--ld-path=${REXGLUE_LLD}"
+  OUTPUT_VARIABLE _lld_probe_build_log
+  COPY_FILE "${_lld_probe_dir}/probe"
+)
+if (NOT _lld_probe_built)
+  message(FATAL_ERROR "A program cannot be linked with REXGLUE_LLD (${REXGLUE_LLD}):\n"
+                      "${_lld_probe_build_log}")
+endif ()
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env --unset=LD_LIBRARY_PATH --unset=LD_PRELOAD
+          "${_lld_probe_dir}/probe"
+  RESULT_VARIABLE _lld_probe_status
+  OUTPUT_VARIABLE _lld_probe_output
+  ERROR_VARIABLE _lld_probe_output
+)
+if (NOT _lld_probe_status EQUAL 0)
+  message(FATAL_ERROR "A program linked with REXGLUE_LLD (${REXGLUE_LLD}) does not start "
+                      "without LD_LIBRARY_PATH (${_lld_probe_status}): it is not the wrapped "
+                      "ld.lld of the dev shell. ${_lld_probe_output}")
+endif ()
+
 # D-011: the ReXGlue SDK v0.11.0 package, built from source by the flake
 # (nix/rexglue-sdk.nix). `nix develop` puts it on CMAKE_PREFIX_PATH.
 find_package(rexglue 0.11 CONFIG REQUIRED)
