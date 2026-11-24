@@ -173,6 +173,11 @@
 - **[H]** Les comportements sensibles à la cadence (vblank, threads invités, attentes
   actives), qui ont exigé le correctif 0004 sous Windows, peuvent différer sous Linux,
   dans un sens ou dans l'autre.
+- **[V]** *Complément du 2026-11-24 (rapport PA-1, `reports/J2_PHASE_A.md` §4.1)* : trois
+  tests Debug du SDK ont échoué chacun une fois sous la charge de la CI, dont un SIGSEGV à
+  la fermeture d'un dispositif de test qui exécute un thread invité. **[H]** Une sortie
+  de thread qui touche encore le runtime pendant sa destruction pourrait en être la
+  cause ; elle n'est pas confirmée. À surveiller à l'arrêt du titre, en J3.
 - **Mitigation** : J3 vise uniquement l'écran-titre, avec journaux détaillés ; on
   compare à Windows, et à Xenia comme oracle si nécessaire.
 
