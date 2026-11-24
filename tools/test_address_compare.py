@@ -259,7 +259,6 @@ class ClaimTests(Folder):
             "not examined": dict(examined=False),
             "function unknown": dict(examined=True, address=C, expected="s", observed="s"),
             "sequence differs": dict(examined=True, expected="s", observed="t"),
-            "sequence missing": dict(examined=True),
         }
         for label, values in cases.items():
             with self.subTest(label):
@@ -270,7 +269,8 @@ class ClaimTests(Folder):
                 status, _, report, _ = self.run_tool(claims=self.claim(**fields))
                 self.assertEqual(status, 1)
                 self.assertEqual(report["claims"][0]["level"], "N0")
-                self.assertTrue(any("boot_hook" in s for s in report["stops"]))
+                self.assertTrue(any(s.startswith("claim #0 (hook)") for s in report["stops"]))
+                self.assertEqual(report["claims"][0]["name"], "boot_hook")
 
     def test_invalid_data_offset_stays_unverified(self):
         # False positive 2: a data offset that is no valid displacement.
@@ -338,6 +338,120 @@ class OutputTests(Folder):
         status, _, _, _ = self.run_tool(entries=[("function", entries_text([A]))])
         self.assertEqual(status, 2)
         self.assertFalse(os.path.exists(target))
+
+
+class ReviewTests(Folder):
+    """Review comment 7127281995 on PR #24: P-43 to P-46."""
+
+    def test_paths_are_checked_before_any_file_is_read(self):
+        # P-43: an entries file outside the private folder is never opened.
+        outside = os.path.join(self.top, "outside.toml")
+        with open(outside, "w", encoding="utf-8") as handle:
+            handle.write(entries_text([A]))
+        read = []
+        real = ac.read_text
+        ac.read_text = lambda path: (read.append(path), real(path))[1]
+        self.addCleanup(setattr, ac, "read_text", real)
+        argv = ["--private-dir", self.private, "--entries", f"function={outside}",
+                "--mappings-with", self.file("w.cpp", mappings_text([A])),
+                "--log", self.file("l.log", "ok\n"),
+                "--out", os.path.join(self.private, "r.json")]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ac.main(argv), 2)
+        self.assertEqual(read, [])
+        self.assertFalse(os.path.exists(os.path.join(self.private, "r.json")))
+
+    def test_refusals_print_no_address(self):
+        # P-44: the offending line holds an address; the standard output does not.
+        bad = mappings_text([A]).replace(f"\t{{ 0x{A:X}, sub_{A:08X} }},",
+                                         f"\t{{ 0x{A:x}, sub_{A:08X} }},")
+        argv = ["--private-dir", self.private,
+                "--entries", f"function={self.file('e.toml', entries_text([A]))}",
+                "--mappings-with", self.file("w.cpp", bad),
+                "--log", self.file("l.log", "ok\n"),
+                "--out", os.path.join(self.private, "r.json")]
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(ac.main(argv), 2)
+        self.assertNotIn("8C010000", stdout.getvalue().upper())
+        for text in ("[functions]\n0x8C010002 = {}\n", "[functions]\n0x8C010000 = 1\n"):
+            with self.subTest(text):
+                stdout = io.StringIO()
+                argv[3] = f"function={self.file('e.toml', text)}"
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(ac.main(argv), 2)
+                self.assertNotIn("8C01000", stdout.getvalue().upper())
+
+    def test_stop_lines_print_no_address(self):
+        # P-44: a claim name may hold an address; STOP lines name the claim by its index.
+        claims = ('[[claim]]\nname = "hook_0x8C010000"\nkind = "hook"\naddress = 0x8C010000\n'
+                  'boot_critical = true\n')
+        status, stdout, report, _ = self.run_tool(claims=claims)
+        self.assertEqual(status, 1)
+        self.assertIn("STOP: claim #0 (hook) below N2", stdout)
+        self.assertNotIn("8C010000", stdout.upper())
+        self.assertEqual(report["claims"][0]["name"], "hook_0x8C010000")
+        self.assertEqual(ac.redact("at 0x8C010000 and 8C010040, ok"), "at <address> and "
+                         "<address>, ok")
+
+    def test_badly_typed_claims_are_refused_and_cannot_lift_a_stop(self):
+        # P-45: "false" is a string, 42 is no instruction sequence, true is no address.
+        base = ('[[claim]]\nname = "setjmp"\nkind = "crt"\naddress = 0x8C010000\n')
+        cases = {
+            "examined string": base + 'examined = "false"\nexpected = "a"\nobserved = "a"\n',
+            "examined integer": base + 'examined = 1\nexpected = "a"\nobserved = "a"\n',
+            "sequences integers": base + 'examined = true\nexpected = 42\nobserved = 42\n',
+            "sequence empty": base + 'examined = true\nexpected = " "\nobserved = " "\n',
+            "sequence missing": base + 'examined = true\n',
+            "address boolean": ('[[claim]]\nname = "s"\nkind = "crt"\naddress = true\n'),
+            "boot_critical string": base + 'boot_critical = "yes"\n',
+            "offset boolean": ('[[claim]]\nname = "d"\nkind = "data"\naddress = 0x8C010000\n'
+                               'offset = true\n'),
+        }
+        entries = entries_text([], f"setjmp_address = 0x{A:08X}\n")
+        for label, claims in cases.items():
+            with self.subTest(label):
+                for name in os.listdir(self.private):
+                    os.remove(os.path.join(self.private, name))
+                status, stdout, report, out = self.run_tool(entries=[("function", entries)],
+                                                            claims=claims)
+                self.assertEqual(status, 2, stdout)
+                self.assertIsNone(report)
+                self.assertFalse(os.path.exists(out))
+
+    def test_setjmp_entry_must_be_an_integer(self):
+        path = self.file("bad.toml", "setjmp_address = true\n")
+        with self.assertRaises(ac.Refused):
+            ac.parse_entries(path, "function")
+
+    def test_report_parent_swapped_for_a_link_is_refused(self):
+        # P-46: between the checks and the creation, the report folder becomes a link to a
+        # folder outside the private one. The anchored creation refuses to follow it.
+        reports = os.path.join(self.private, "reports")
+        os.mkdir(reports, 0o700)
+        outside = os.path.join(self.top, "outside")
+        os.mkdir(outside)
+
+        def swap():
+            os.rename(reports, reports + ".old")
+            os.symlink(outside, reports)
+
+        ac.BEFORE_REPORT_OPEN_FOR_TESTING = swap
+        self.addCleanup(setattr, ac, "BEFORE_REPORT_OPEN_FOR_TESTING", None)
+        status, stdout, _, _ = self.run_tool(entries=[("function", entries_text([A]))],
+                                             out=os.path.join(reports, "report.json"))
+        self.assertEqual(status, 2, stdout)
+        self.assertEqual(os.listdir(outside), [])
+        self.assertEqual(os.listdir(reports + ".old"), [])
+
+    def test_report_in_a_subfolder_is_written(self):
+        reports = os.path.join(self.private, "reports")
+        os.mkdir(reports, 0o700)
+        status, _, report, out = self.run_tool(entries=[("function", entries_text([A]))],
+                                               out=os.path.join(reports, "report.json"))
+        self.assertEqual(status, 0)
+        self.assertIsNotNone(report)
+        self.assertEqual(os.stat(out).st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

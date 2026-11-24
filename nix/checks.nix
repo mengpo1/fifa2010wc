@@ -318,7 +318,10 @@ in
     for t in test_entry_in_configuration_only_stays_n0 test_invalid_data_offset_stays_unverified \
              test_function_collision_is_reported test_absent_diagnostics_are_refused \
              test_unknown_or_partial_mappings_are_refused \
-             test_paths_outside_the_private_folder_are_refused; do
+             test_paths_outside_the_private_folder_are_refused \
+             test_paths_are_checked_before_any_file_is_read test_stop_lines_print_no_address \
+             test_badly_typed_claims_are_refused_and_cannot_lift_a_stop \
+             test_report_parent_swapped_for_a_link_is_refused; do
       grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }
     done
 

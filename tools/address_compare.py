@@ -31,8 +31,15 @@ address, and two fused instructions share one comment (src/codegen/function_grap
 641-712), so instruction addresses cannot be recovered reliably from it. N2 is therefore
 not computed: it comes from a manual examination record, checked for consistency.
 
+Guarantees: every path is checked before any file is read; claim fields have exact types
+(a string "false" or the integer 1 is no boolean, true is no address); the standard output
+holds no address (messages cite no line content, STOP lines name claims by their index, and
+a last redaction replaces any address left); the report is created anchored to the private
+root, every folder opened with O_NOFOLLOW from its parent's descriptor.
+
 Exit status: 0 report written, no STOP; 1 report written, with STOP; 2 refused (bad usage,
-unknown or partial format, path outside the private folder): nothing is written.
+unknown or partial format, badly typed claim, path outside the private folder): nothing is
+written.
 """
 
 import argparse
@@ -114,11 +121,10 @@ def parse_mappings(path):
             return addresses
         match = MAPPING_LINE.match(line)
         if not match:
-            raise Refused(f"{path}:{number}: unknown kPPCFuncMappings line: {line[:80]!r}")
+            raise Refused(f"{path}:{number}: unknown kPPCFuncMappings line")
         address = int(match.group(1), 16)
         if address in addresses:
-            raise Refused(f"{path}:{number}: function 0x{address:08X} listed twice "
-                          f"({addresses[address]}, {match.group(2)})")
+            raise Refused(f"{path}:{number}: a function is listed twice")
         addresses[address] = match.group(2)
     raise Refused(f"{path}: kPPCFuncMappings has no '{{ 0, nullptr }}' terminator")
 
@@ -158,7 +164,7 @@ def parse_log(path):
                 found = True
                 break
         if not found and SUSPECT.search(line):
-            raise Refused(f"{path}:{number}: diagnostic in an unknown format: {line[:100]!r}")
+            raise Refused(f"{path}:{number}: diagnostic in an unknown format")
     if failed is None:
         if errors:
             raise Refused(f"{path}: errors without the 'Validation failed' summary: partial log")
@@ -184,17 +190,17 @@ def parse_entries(path, kind):
         raise Refused(f"{path}: [functions] is not a table")
     for key, value in functions.items():
         if not ADDRESS_KEY.match(key):
-            raise Refused(f"{path}: [functions] key {key!r} is not a 0x address")
+            raise Refused(f"{path}: a [functions] key is not a 0x address")
         if not isinstance(value, dict):
-            raise Refused(f"{path}: [functions].{key} is not a table")
+            raise Refused(f"{path}: a [functions] entry is not a table")
         address = int(key, 16)
         if address % 4:
-            raise Refused(f"{path}: [functions].{key} is not 4 byte aligned")
+            raise Refused(f"{path}: a [functions] key is not 4 byte aligned")
         entries.append((address, kind, f"[functions].{key}"))
     for key in ("setjmp_address", "longjmp_address"):
         if key in table:
             value = table[key]
-            if not isinstance(value, int) or value < 0 or value > 0xFFFFFFFF or value % 4:
+            if type(value) is not int or value < 0 or value > 0xFFFFFFFF or value % 4:
                 raise Refused(f"{path}: {key} is not an aligned 32 bit address")
             entries.append((value, "crt", key))
     return entries
@@ -220,13 +226,30 @@ def parse_claims(path):
             raise Refused(f"{label}: unknown keys {sorted(unknown)}")
         if claim.get("kind") not in ("crt", "hook", "data"):
             raise Refused(f"{label}: kind must be crt, hook or data")
-        if not isinstance(claim.get("name"), str) or not claim["name"]:
+        if not isinstance(claim.get("name"), str) or not claim["name"].strip():
             raise Refused(f"{label}: name is missing")
+        # Exact types: a TOML string "false" is not false, and true is not the integer 1.
         address = claim.get("address")
-        if not isinstance(address, int) or not 0 <= address <= 0xFFFFFFFF:
-            raise Refused(f"{label}: address is not a 32 bit value")
+        if type(address) is not int or not 0 <= address <= 0xFFFFFFFF:
+            raise Refused(f"{label}: address is not a 32 bit integer")
+        for key in ("offset", "referenced_by"):
+            if key in claim and type(claim[key]) is not int:
+                raise Refused(f"{label}: {key} is not an integer")
+        for key in ("examined", "boot_critical"):
+            if key in claim and type(claim[key]) is not bool:
+                raise Refused(f"{label}: {key} must be true or false")
+        for key in ("expected", "observed"):
+            if key in claim and (not isinstance(claim[key], str) or not claim[key].strip()):
+                raise Refused(f"{label}: {key} must be a non empty instruction sequence")
+        if claim.get("examined") is True and not ("expected" in claim and "observed" in claim):
+            raise Refused(f"{label}: an examined claim needs both expected and observed")
         out.append(claim)
     return out
+
+
+def same_sequence(claim):
+    """Expected and observed sequences, as text, equal once their spacing is normalised."""
+    return " ".join(claim["expected"].split()) == " ".join(claim["observed"].split())
 
 
 def evaluate(entries, mappings_with, mappings_without, log, claims):
@@ -280,7 +303,7 @@ def evaluate(entries, mappings_with, mappings_without, log, claims):
         address = claim["address"]
         kind = claim["kind"]
         level = "N0"
-        if not claim.get("examined", False):
+        if claim.get("examined") is not True:
             notes.append("not examined: no instruction reference established")
         elif kind in ("crt", "hook"):
             if address not in known_functions:
@@ -288,28 +311,27 @@ def evaluate(entries, mappings_with, mappings_without, log, claims):
                              "reference")
             elif failed or diagnostics.get(address):
                 notes.append("ReXGlue diagnostics or a failed run for this function")
-            elif not claim.get("expected") or claim.get("expected") != claim.get("observed"):
-                notes.append("the observed sequence is missing or differs from the expected "
-                             "one")
+            elif not same_sequence(claim):
+                notes.append("the observed sequence differs from the expected one")
             else:
                 level = "N2"
         else:  # data
             ref = claim.get("referenced_by")
             offset = claim.get("offset", 0)
-            if not isinstance(offset, int) or not -0x8000 <= offset <= 0x7FFF:
+            if type(offset) is not int or not -0x8000 <= offset <= 0x7FFF:
                 notes.append("invalid data offset: not a signed 16 bit displacement")
-            elif not isinstance(ref, int) or ref not in known_functions:
+            elif type(ref) is not int or ref not in known_functions:
                 notes.append("the referencing function is not in kPPCFuncMappings: "
                              "inconsistent reference")
-            elif not claim.get("expected") or claim.get("expected") != claim.get("observed"):
-                notes.append("the observed reference is missing or differs from the expected "
-                             "one")
+            elif not same_sequence(claim):
+                notes.append("the observed reference differs from the expected one")
             else:
                 level = "N2"
             notes.append("data value not verified (N3)")
         claim_results.append({"name": claim["name"], "kind": kind,
                               "address": f"0x{address:08X}", "level": level,
-                              "required": "N2", "boot_critical": bool(claim.get("boot_critical")),
+                              "required": "N2",
+                              "boot_critical": claim.get("boot_critical") is True,
                               "notes": notes})
 
     # A crt entry reaches N2 only through a crt claim examined at the same address.
@@ -325,9 +347,9 @@ def evaluate(entries, mappings_with, mappings_without, log, claims):
     for result in results:
         if result["kind"] == "crt" and result["level"] != "N2":
             stops.append(f"{result['origin']} below N2 (PB-2 stop)")
-    for claim in claim_results:
+    for index, claim in enumerate(claim_results):
         if claim["level"] != "N2" and (claim["boot_critical"] or claim["kind"] == "crt"):
-            stops.append(f"claim {claim['name']} ({claim['kind']}) below N2")
+            stops.append(f"claim #{index} ({claim['kind']}) below N2: see the report")
     if failed:
         stops.append(f"the generation failed: {len(errors)} unresolved call or millicode "
                      "error(s); add seeds and generate again")
@@ -354,53 +376,100 @@ def within(path, folder):
     return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
 
 
+def report_parts(private, out):
+    """The components of the report path below the private root, taken from the path as
+    given (no link followed), or None if it is not below it."""
+    target = os.path.normpath(out)
+    for root in (os.path.normpath(os.path.abspath(private)), os.path.realpath(private)):
+        rel = os.path.relpath(target, root)
+        parts = rel.split(os.sep)
+        if rel != os.curdir and parts[0] != os.pardir:
+            return parts
+    return None
+
+
 def check_paths(private, inputs, out):
+    """Every path, before anything is read or written. Returns the report components."""
     if not private or not os.path.isabs(private) or not os.path.isdir(private):
         raise Refused("WC2010_PRIVATE_DIR must be an absolute path to an existing folder")
+    if os.path.realpath(private).startswith("/nix/store/"):
+        raise Refused("the private folder is in /nix/store")
     for path in inputs:
-        if not within(path, private):
-            raise Refused(f"input outside the private folder: {path}")
-    if out is not None:
-        if not os.path.isabs(out):
-            raise Refused(f"the report path is not absolute: {out}")
-        if not within(os.path.dirname(out), private):
-            raise Refused(f"report outside the private folder: {out}")
-        if os.path.realpath(private).startswith("/nix/store/"):
-            raise Refused("the private folder is in /nix/store")
+        if not os.path.isabs(path) or not within(path, private):
+            raise Refused(f"input outside the private folder, or not absolute: {path}")
+    if not os.path.isabs(out):
+        raise Refused(f"the report path is not absolute: {out}")
+    parts = report_parts(private, out)
+    if parts is None or not within(os.path.dirname(out), private):
+        raise Refused(f"report outside the private folder: {out}")
+    return parts
 
 
-def write_report(out, report):
-    """Creates the report; never overwrites nor follows a link at the last component."""
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+# Test hook, empty in normal use: runs between the path checks and the report creation.
+BEFORE_REPORT_OPEN_FOR_TESTING = None
+
+
+def write_report(private, parts, report):
+    """Creates the report below the private root: every folder is opened with O_NOFOLLOW
+    from its parent's descriptor, and the file with O_CREAT | O_EXCL | O_NOFOLLOW. A link
+    put in place of a folder after the checks makes the creation fail; nothing is
+    overwritten."""
     data = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if BEFORE_REPORT_OPEN_FOR_TESTING:
+        BEFORE_REPORT_OPEN_FOR_TESTING()
     try:
-        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = os.open(os.path.realpath(private), DIR_FLAGS)
     except OSError as error:
-        raise Refused(f"cannot create the report {out}: {error.strerror}") from None
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        raise Refused(f"cannot open the private folder: {error.strerror}") from None
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        out = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                      | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=fd)
+    except OSError as error:
+        raise Refused(f"cannot create the report: {error.strerror}") from None
+    finally:
+        os.close(fd)
+    with os.fdopen(out, "w", encoding="utf-8") as handle:
         handle.write(data)
 
 
 def run(args):
-    entries = []
-    inputs = []
+    # Every path is checked before any file is read (P-43).
+    specs = []
     for spec in args.entries:
         kind, sep, path = spec.partition("=")
         if not sep or kind not in KINDS or not path:
-            raise Refused(f"--entries takes KIND=PATH with KIND in {KINDS}: {spec}")
-        inputs.append(path)
-        entries += parse_entries(path, kind)
+            raise Refused(f"--entries takes KIND=PATH with KIND in {KINDS}")
+        specs.append((kind, path))
+    inputs = [path for _, path in specs]
     inputs += [p for p in (args.mappings_with, args.mappings_without, args.log, args.claims)
                if p]
-    check_paths(args.private_dir, inputs, args.out)
-    if not entries and not args.claims:
+    parts = check_paths(args.private_dir, inputs, args.out)
+    if not specs and not args.claims:
         raise Refused("nothing to compare: give --entries or --claims")
+    entries = []
+    for kind, path in specs:
+        entries += parse_entries(path, kind)
     mappings_with = parse_mappings(args.mappings_with)
     mappings_without = parse_mappings(args.mappings_without) if args.mappings_without else None
     log = parse_log(args.log)
     claims = parse_claims(args.claims) if args.claims else []
     report = evaluate(entries, mappings_with, mappings_without, log, claims)
-    write_report(args.out, report)
+    write_report(args.private_dir, parts, report)
     return report
+
+
+# Defence in depth for the standard output: any hexadecimal address or 8 digit word left in
+# a message is replaced (P-44). The report, in the private folder, keeps the details.
+ADDRESS_LIKE = re.compile(r"0[xX][0-9A-Fa-f]+|\b[0-9A-Fa-f]{8}\b")
+
+
+def redact(text):
+    return ADDRESS_LIKE.sub("<address>", text)
 
 
 def main(argv):
@@ -416,7 +485,7 @@ def main(argv):
     try:
         report = run(args)
     except Refused as error:
-        print(f"REFUSED: {error}")
+        print(f"REFUSED: {redact(str(error))}")
         print("nothing was written")
         return 2
     # Aggregated output only: counts by kind and level, and the stop reasons.
@@ -425,7 +494,7 @@ def main(argv):
         counts = report["summary"][kind]
         print(f"{kind}: " + ", ".join(f"{level} {counts[level]}" for level in LEVELS))
     for stop in report["stops"]:
-        print(f"STOP: {stop}")
+        print(f"STOP: {redact(stop)}")
     print(f"report: {args.out}")
     return 1 if report["stops"] else 0
 

@@ -34,8 +34,11 @@ Les formats sont ceux de la source de ReXGlue v0.11.0 (`a3e1d82`). Aucun n'est s
 | `--mappings-with` | Le fichier `<préfixe>_init.cpp` généré **avec** les entrées | Liste `kPPCFuncMappings`, une ligne `\t{ 0x<ADRESSE>, <nom> },` par fonction, terminée par `\t{ 0, nullptr }` puis `};` (`resources/templates/codegen/init_cpp.inja:34-37`) |
 | `--mappings-without` | Le même fichier, généré **sans** les entrées (facultatif) | Idem |
 | `--log` | Le journal de la génération avec les entrées | Messages de `src/codegen/phase_validate.cpp:57,61,78` (« is not a function entry point », « outranked by », « split by »), de `src/codegen/phase_discover.cpp:78,94` (« not in any code region », « no blocks found »), de `src/codegen/config.cpp:227-262` (erreurs de configuration), et erreurs d'analyse imprimées par `AnalysisErrorLog::PrintReport` (`src/codegen/analyze.cpp:103-129`) avec le résumé « Validation failed: N unresolved calls, M millicode errors » (`phase_validate.cpp:196-200`). Le texte est cherché dans la ligne : le préfixe du journal n'importe pas |
-| `--claims` | Le relevé des examens manuels de N2 : `[[claim]]` avec `name`, `kind` (`crt`, `hook`, `data`), `address`, et selon le cas `offset`, `referenced_by`, `examined`, `boot_critical`, `expected`, `observed` | Défini par ce projet. Une clé inconnue est refusée |
-| `--out` | Le rapport détaillé, en JSON | Créé dans le dossier privé, jamais écrasé, jamais à travers un lien |
+| `--claims` | Le relevé des examens manuels de N2 : `[[claim]]` avec `name`, `kind` (`crt`, `hook`, `data`), `address`, et selon le cas `offset`, `referenced_by`, `examined`, `boot_critical`, `expected`, `observed` | Défini par ce projet, aux **types exacts** (P-45) : `address`, `offset` et `referenced_by` sont des entiers (un booléen est refusé) ; `examined` et `boot_critical` sont `true` ou `false` (une chaîne est refusée) ; `expected` et `observed` sont des séquences d'instructions écrites en texte, non vides, par exemple `"mflr r12 / stw r12,-8(r1)"`, comparées à espaces près. Un relevé `examined = true` exige les deux séquences. Une clé inconnue est refusée |
+| `--out` | Le rapport détaillé, en JSON | Créé dans le dossier privé, ancré à sa racine (§4), jamais écrasé, jamais à travers un lien |
+
+**Ordre** (P-43) : **tous les chemins sont contrôlés avant la lecture du moindre fichier**.
+Une entrée hors du dossier privé n'est donc jamais ouverte.
 
 **Refus, avec code 2 et rien d'écrit** :
 - une liste `kPPCFuncMappings` absente, une ligne inconnue, un terminateur ou une fin
@@ -45,7 +48,7 @@ Les formats sont ceux de la source de ReXGlue v0.11.0 (`a3e1d82`). Aucun n'est s
 - des erreurs sans le résumé « Validation failed », ou un résumé dont les nombres
   diffèrent des erreurs listées, car le journal est alors partiel ;
 - une clé `[functions]` refusée par ReXGlue ;
-- une entrée ou une réclamation mal formée ;
+- une entrée ou une réclamation mal formée, ou mal typée ;
 - un chemin hors du dossier privé, ou un rapport à un chemin relatif.
 
 ## 3. Niveaux de preuve et cas d'arrêt
@@ -82,7 +85,13 @@ réanalysé (M3), comme le prévoit A8.
 ## 4. Sortie
 
 - **Sortie standard, agrégée** : la phrase de méthode, les nombres par type et par
-  niveau, les raisons d'arrêt et le chemin du rapport. **Aucune adresse.**
+  niveau, les raisons d'arrêt et le chemin du rapport. **Aucune adresse** (P-44) :
+  - les messages de refus ne citent ni la ligne fautive ni l'adresse, seulement le
+    fichier, le numéro de ligne et la nature du problème ;
+  - une raison d'arrêt désigne un relevé par son numéro, jamais par son nom libre, qui
+    peut contenir une adresse ;
+  - par précaution, tout motif hexadécimal ou mot de 8 chiffres hexadécimaux restant dans
+    un message est remplacé par `<address>` avant l'affichage.
 - **Rapport JSON, dans le dossier privé** :
   - les mêmes nombres ;
   - pour chaque entrée, son adresse, son type, son origine, son niveau et ses notes ;
@@ -90,10 +99,19 @@ réanalysé (M3), comme le prévoit A8.
 
   Il ne contient ni désassemblée, ni code généré, ni contenu du jeu. Il n'entre dans le
   dépôt qu'après PB-3, et seulement pour des adresses et des métadonnées (A8 §4, D-007).
+- **Création du rapport, ancrée** (P-46) :
+  - la racine du dossier privé est ouverte une fois, par son chemin réel ;
+  - chaque dossier du chemin du rapport est ouvert avec `O_DIRECTORY | O_NOFOLLOW`,
+    relativement au descripteur de son parent ;
+  - le fichier est créé par `O_CREAT | O_EXCL | O_NOFOLLOW`.
+
+  Un dossier remplacé par un lien entre les contrôles et la création fait échouer
+  celle-ci, sans rien écrire. Comme pour A5, cela ne couvre pas le renommage, par un
+  processus du même utilisateur, d'un vrai dossier déjà ouvert vers l'extérieur.
 
 ## 5. Vérifications
 
-**Tests unitaires** (`tools/test_address_compare.py`, 23 tests, dans le contrôle Nix
+**Tests unitaires** (`tools/test_address_compare.py`, 30 tests, dans le contrôle Nix
 `address-compare-selftest`). Les données sont synthétiques, aux adresses `0x8C01xxxx` :
 
 | Faux positif de A8 §4 | Test |
@@ -117,6 +135,15 @@ Autres tests :
   contient aucune adresse ;
 - un chemin hors du dossier privé est refusé et rien n'est écrit ;
 - le rapport n'est jamais écrasé, ni écrit à travers un lien.
+
+Tests de la revue du 24 novembre (commentaire 7127281995) :
+
+| Constat | Test | Contrôle par mutation |
+|---|---|---|
+| P-43 | `test_paths_are_checked_before_any_file_is_read` : une entrée hors du dossier privé n'est jamais lue (aucun appel de lecture) | Avec l'ancien ordre, le fichier extérieur est lu : le test échoue |
+| P-44 | `test_refusals_print_no_address`, `test_stop_lines_print_no_address` : une ligne fautive, une clé ou un nom de relevé qui contient `0x8C010000` ne paraît pas sur la sortie standard ; le rapport garde le nom | — |
+| P-45 | `test_badly_typed_claims_are_refused_and_cannot_lift_a_stop` : `examined = "false"` ou `1`, séquences `42` ou vides ou absentes, adresse `true`, `boot_critical = "yes"`, décalage `true` sont refusés (code 2, aucun rapport), donc ne peuvent lever l'arrêt PB-2 ; `test_setjmp_entry_must_be_an_integer` | — |
+| P-46 | `test_report_parent_swapped_for_a_link_is_refused` : entre les contrôles et la création, le dossier du rapport devient un lien vers l'extérieur ; la création est refusée, et l'extérieur reste vide | Avec une création par chemin, le rapport est écrit à l'extérieur : le test échoue |
 
 **Commande empaquetée** (même contrôle) [V] : sur un dossier privé synthétique, la sortie
 est agrégée et sans adresse, et le rapport est créé dans le dossier privé. Un rapport
