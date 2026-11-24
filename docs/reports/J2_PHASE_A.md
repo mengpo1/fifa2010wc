@@ -17,7 +17,7 @@
 |---|---|---|
 | A1 à A6 et A8 fusionnées, chacune avec la CI verte | **Rempli** [V]. A8-bis (#24), ajoutée par l'arbitrage de A8, l'est aussi | §2 : chaque PR a fusionné après une CI verte sur sa tête exacte |
 | A7 faite, ou son impossibilité documentée | **Faite** [V], fusion en attente (#26) | `docs/J2_A7_SYNTHETIC_CHAIN.md` ; contrôle `a7-synthetic-chain` |
-| `nix flake check -L --no-update-lock-file` et `check_proprietary_data.py repo` passent sur `main` | **Réserve** (§4.1) : la CI de `main` a échoué deux fois sur un test Debug de ReXGlue, instable sous charge, et jamais sur un contrôle du projet | §4.1 |
+| `nix flake check -L --no-update-lock-file` et `check_proprietary_data.py repo` passent sur `main` | **Rempli, avec une réserve** (§4.1). `main` est vert sur `1d65df8`, après une relance manuelle. Des tests Debug de ReXGlue sont instables sous la charge de la CI, et aucun contrôle du projet n'a échoué | Passage 45371847463, 2ᵉ essai ; §4.1 |
 | Aucun fichier du jeu lu ni requis | **Rempli** [V] | CI sans le jeu ; §3 |
 | La série de correctifs ne touche ni le décodage des XEX, ni `excrypt`, ni les clés | **Rempli** [V] | Contrôle `sdk-patches` ; la série compte un correctif, `0001-function-table-base.patch` (A3) |
 | Source de l'image décidée | **Rempli** [V] : M1 d'abord, M3 en repli, M2 non autorisée | Arbitrage de l'orchestrateur (revue 6021690700 de #18), acquis à la fusion de #18 avec l'accord du porteur du projet |
@@ -60,21 +60,59 @@ CI de `main` après chaque fusion : verte pour #15, #16, #18, #19, #20 et #23. A
 
 ### 4.1 Tests Debug de ReXGlue instables sous charge
 
-- **Constat** [V] : la CI de `main` a échoué deux fois après une fusion, chaque fois sur un
-  seul test du SDK construit en Debug (`rexglue-sdk-debug-tests`), jamais sur un contrôle
-  du projet. Dans les deux cas, la même dérivation avait réussi sur la PR et en local.
-  - Après #17 (run 45188167661) : « an unfocused window mutes only when asked »
-    (`apu`), *Failed*.
-  - Après #24 (run 45371847463) : « A profile flag wins over the all profiles flag »
-    (`xam`, `content_package_test.cpp:166`), *SIGSEGV* après la dernière assertion, donc
-    pendant la fermeture du dispositif de test.
-  - En J1 déjà (P-17) : un test de synchronisation du noyau dépassait son délai sous
-    charge, et un autre plantait.
-- **Analyse en cours** [I] : reproduction locale sous charge, avec une trace d'appels. La
-  piste étudiée est la sortie d'un thread invité qui touche encore le runtime alors que le
-  test le détruit. Le résultat sera consigné ici.
+- **Constat** [V] : au 2026-11-24, sur 68 essais de la CI du projet menés à terme (un
+  autre a été annulé), trois ont échoué. Chaque fois,
+  un seul test du SDK construit en Debug était en cause (`rexglue-sdk-debug-tests`), et
+  c'était un test différent. Aucun contrôle du projet n'a échoué, et le SDK en Release
+  jamais.
+
+  | Passage | Test | Résultat |
+  |---|---|---|
+  | 44987255472, J1, commit `25fdd71` (P-17) | « XamGetOverlappedResult sees the event set once the result is complete » | Délai de 20 s dépassé |
+  | 45188167661, `main` après #17 | « an unfocused window mutes only when asked » (`apu`) | *Failed* |
+  | 45371847463, `main` après #24, 1er essai | « A profile flag wins over the all profiles flag » (`xam`, `content_package_test.cpp:166`) | *SIGSEGV* |
+
+- **Dernier cas** [V] :
+  - les 14 assertions du test avaient réussi ; Catch2 compte le signal comme une 15ᵉ,
+    en échec. Il arrive après la dernière ligne relevée (`:185`), donc pendant la
+    fermeture du dispositif de test (`KernelFixture`) ;
+  - la même dérivation avait réussi sur la PR #24 ;
+  - **relancé une fois à la main, le même passage est vert** sur la même tête `1d65df8`
+    (2ᵉ essai). `main` est donc vert, mais ce vert ne prouve pas que le défaut a disparu.
+- **Reproduction locale, sans succès** [V] :
+  - le SDK Debug passe ses 2 247 tests ;
+  - le test seul : 0 plantage en 200 exécutions ;
+  - sous quatre boucles parallèles : 0 plantage en 600 exécutions ;
+  - sous gdb, avec trois boucles de charge : aucun SIGSEGV. Cette passe a été arrêtée,
+    chaque exécution sous gdb prenant 45 s ;
+  - la CI exécute toute la suite en parallèle (`ctest -j`) sur 4 processeurs virtuels,
+    une charge que ces essais ne reproduisent pas.
+- **Cause possible, non confirmée** [H], tirée de la lecture du code de ReXGlue v0.11.0 :
+  - le dispositif rend la main dès que le corps du thread invité signale sa fin
+    (`tests/unit/kernel/kernel_fixture.cpp:336`), alors que le thread n'a pas fini de
+    sortir. Le test ferme ensuite son handle (`:344`) et détruit le runtime avant
+    d'attendre les threads de l'hôte (`ThreadDrain`, déclaré en premier, détruit en
+    dernier, `:272-276`) ;
+  - à la sortie, le thread s'inscrit comme terminé dans le registre
+    (`src/kernel/kernel_thread.cpp:581`), puis touche encore la table des objets du
+    runtime (`ReleaseReference`, `:582-596`) ;
+  - l'arrêt des threads invités n'attend que ceux qui sont encore dans le registre
+    (`src/kernel/process.cpp:395`). Un thread déjà retiré peut donc encore lire une table
+    en cours de destruction ;
+  - aucune trace d'appels ne le confirme.
+- **Portée pour le jeu** [H] : si la piste est juste, elle touche la sortie d'un thread
+  pendant l'arrêt du titre (R-05). C'est à surveiller en J3, quand le jeu s'arrête.
 - **Ce qui n'est pas fait** : aucun test n'est désactivé, ignoré ni relancé
-  automatiquement pour obtenir une CI verte. Un job n'est relancé qu'une fois, à la main.
+  automatiquement. Un passage échoué n'est relancé qu'une fois, à la main.
+- **Options, à décider par l'orchestrateur et le porteur du projet** :
+  1. Signaler les trois cas en amont, avec la piste. C'est une action extérieure, à faire
+     avec l'accord du porteur.
+  2. Garder la règle actuelle (une relance manuelle au plus, consignée), et suivre la
+     fréquence des échecs.
+  3. Lancer la suite Debug avec moins de parallélisme. Cela change les conditions du test
+     et allonge la CI.
+  4. Écrire un correctif de ReXGlue (attendre la fin réelle du thread avant de détruire
+     le runtime). Il demande d'abord un test qui reproduise le défaut à coup sûr.
 
 ### 4.2 Limites des outils du dossier privé
 
@@ -143,7 +181,7 @@ PB-0 (`J2_PLAN` §2) demande quatre conditions :
 **Ce qui reste avant la phase B**, dans l'ordre :
 
 1. la revue de ce rapport, et la fusion de A7 (#26) avec l'accord du porteur du projet ;
-2. la décision sur la réserve du §4.1 ;
+2. la décision sur la réserve du §4.1 (options 1 à 4) ;
 3. sur la machine de l'utilisateur, la procédure de `J2_PHASE_B_CONTROLS.md` §1 :
    préparation du dossier privé, `private_guard check-dir`, crochet de pré-commit
    (CP-1, CP-6), puis la vérification des *core dumps* (§4.3) et la recherche CP-3 dans
