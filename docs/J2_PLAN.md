@@ -231,8 +231,10 @@ décision explicite) :
     `-DCMAKE_INSTALL_LIBDIR=lib` dans `nix/rexglue-sdk.nix`, sans toucher au SDK.
   - **Second défaut, corrigé** : `nix develop` garde le `PATH` de la machine. Sans
     `-DREXGLUE_LLD`, un `ld.lld` hors de Nix aurait été pris sans rien signaler. Les
-    presets passent maintenant `REXGLUE_LLD`, et `CMakeLists.txt` refuse toute autre
-    valeur.
+    presets passent maintenant `REXGLUE_LLD`. `CMakeLists.txt` arrête la configuration
+    dans trois cas : la variable manque, le cache en diffère, ou un programme sonde lié
+    par cet éditeur de liens ne démarre pas sans `LD_LIBRARY_PATH` (revue P-47). C'est
+    un contrôle de comportement, pas d'identité.
   - P-05 est reproduit avec le `lld` brut, et vérifié corrigé avec le `ld.lld`
     enveloppé. P-07 tient pour les copies faites à côté de l'hôte.
   - Les 1 615 cas Catch2 tirés des 161 programmes passent.
@@ -351,6 +353,12 @@ décision explicite) :
   (`docs/J2_A7_SYNTHETIC_CHAIN.md` §5 et §7).
 - **Critère de sortie** : C2.1 à C2.4 (`ROADMAP.md` §4) :
   - `readelf -h` montre un ELF x86-64, sans dépendance à Wine ni à Windows ;
+  - **après le vrai lien**, contrôle des dépendances de l'exécutable et des bibliothèques
+    copiées à côté de lui, comme à l'étape 4 de `a7-synthetic-chain` (revue P-47) :
+    - `$ORIGIN` dans le RUNPATH ;
+    - `ld.so --list` sans « not found » ;
+    - chaque bibliothèque dans le magasin ou dans le dossier de l'exécutable ;
+    - l'interpréteur dans le magasin ;
   - aucun interpréteur ni JIT ;
   - le code généré n'est pas versionné : `git status` et le script du §4.5 de la feuille
     de route.

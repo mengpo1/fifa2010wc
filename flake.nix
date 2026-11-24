@@ -155,9 +155,10 @@
           pkgs.vulkan-tools
         ];
         # The wrapped ld.lld (see nix/rexglue-sdk.nix), so that the host executable gets its
-        # RUNPATH entries. The presets of CMakePresets.json pass it to CMake, and
-        # CMakeLists.txt refuses any other value: this shell keeps the PATH of the machine,
-        # where another ld.lld can come first (J2 step A7, docs/J2_A7_SYNTHETIC_CHAIN.md).
+        # RUNPATH entries. The presets of CMakePresets.json pass it to CMake. CMakeLists.txt
+        # stops when it is missing, when the cache differs, or when a probe it links does not
+        # start without LD_LIBRARY_PATH: this shell keeps the PATH of the machine, where
+        # another ld.lld can come first (J2 step A7, docs/J2_A7_SYNTHETIC_CHAIN.md §5).
         REXGLUE_LLD = "${pkgs.llvmPackages_20.bintools}/bin/ld.lld";
         # Puts the SDK package on CMAKE_PREFIX_PATH for find_package(rexglue).
         buildInputs = [ rexglue-sdk ];
