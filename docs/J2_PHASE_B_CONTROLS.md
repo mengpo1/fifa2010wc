@@ -13,12 +13,19 @@ L'outil est `tools/private_guard.py`, empaqueté par le flake. Il a trois comman
 |---|---|---|
 | `check-dir` | CP-1 | Le dossier privé est absolu. Il n'est ni dans `/nix/store`, ni dans le dépôt, ni dans un dépôt git. Il appartient à l'utilisateur, en mode `0700` ou plus strict. Ses sous-dossiers existent, et les fichiers de `iso/` sont en lecture seule |
 | `preflight` | CP-1, puis CP-4 avant | Destinations **obligatoires** (`--dest`, ou `--no-writes` pour une étape qui n'écrit rien), dossier de travail, `TMPDIR`, dossiers XDG et `REX_APP_ROOT` dans le dossier privé. Pas de root, masque `077`, *core dumps* désactivés. Aucun réglage de ReXGlue lu avant l'environnement, aucun `.xexp` imprévu, aucun objet `xenia_memory_*` restant |
-| `postflight` | CP-4 après | Fichiers créés, modifiés ou déplacés depuis le repère, hors du dossier privé, dans les emplacements surveillés. Objets `xenia_memory_*` restants. `nix store verify` du SDK et `git status` du dépôt, si on le demande |
+| `postflight` | CP-4 après | Fichiers et liens créés, modifiés ou déplacés depuis le repère, hors du dossier privé, dans les emplacements surveillés. Objets `xenia_memory_*` restants. `nix store verify` du SDK et `git status` du dépôt, si on le demande. Seuls les dossiers systemd vérifiés sont exclus de la recherche, et nommés en note (§3.1) |
 
 **Un contrôle qui ne peut pas s'exécuter en entier est un constat, jamais un `OK`** :
 - `/dev/shm` illisible ;
 - un emplacement surveillé absent, sauf s'il est déclaré par `--optional-watch` ;
-- un dossier ou un fichier illisible sous un emplacement surveillé.
+- un dossier ou un fichier illisible sous un emplacement surveillé ;
+- un dossier d'un autre système de fichiers, comme un point de montage, sous un emplacement
+  surveillé : il n'est pas cherché. Il ne l'est que s'il est lui-même un emplacement
+  `--watch` (§3.1).
+
+**Une seule exception** : un dossier `PrivateTmp` de systemd, vérifié selon toutes les
+conditions du §3.1. Il est exclu de la surveillance et nommé en note ; il ne compte jamais
+comme surveillé.
 
 L'outil ne lit pas le contenu de ces emplacements : il ne regarde que leurs noms et leurs
 dates.
@@ -168,6 +175,81 @@ Depuis le même shell :
 **Limite** : ces contrôles couvrent les destinations déclarées et les emplacements
 surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs.
 
+### 3.1 Dossiers systemd exclus de la surveillance, et autres systèmes de fichiers (ticket #30)
+
+`postflight` exclut de sa recherche une seule sorte de dossier illisible : les dossiers
+`PrivateTmp` de systemd vérifiés. Il les nomme chacun dans une ligne
+`note: excluded from the watched scope: …`, et son `OK` dit combien il en a exclu.
+
+**1. Les dossiers `PrivateTmp` de systemd.**
+- **Ce que c'est** : sous NixOS, plusieurs services du système ont leur propre `/tmp`, par
+  exemple polkit, logind, wpa_supplicant, nscd, bluetooth ou dbus-broker. Le gestionnaire
+  de services crée pour chacun `/tmp/systemd-private-<boot>-<unité>-XXXXXX`, propriété de
+  `root:root`, en mode `0700` (`setup_one_tmp_dir()` dans `src/core/namespace.c` de
+  systemd). systemd-tmpfiles les supprime au démarrage. Un processus sans privilèges ne
+  peut ni les lire ni y écrire.
+- **Conditions, toutes requises** : sinon le dossier reste un constat bloquant, avec la
+  raison du refus.
+
+  | Condition | Vérification |
+  |---|---|
+  | Emplacement | Directement sous `/tmp`, jamais dans un sous-dossier ni ailleurs |
+  | Nom | Exactement `systemd-private-` suivi de 32 chiffres hexadécimaux en minuscules, d'un nom d'unité de type `service`, `socket`, `mount` ou `swap`, puis de 6 lettres ou chiffres |
+  | Démarrage | Les 32 chiffres sont l'identifiant du démarrage en cours (`/proc/sys/kernel/random/boot_id`) |
+  | Type | Un vrai dossier selon `lstat`. Un lien n'est jamais suivi ni exclu |
+  | Propriétaire et droits | `root:root`, et mode exactement `0700` |
+  | Accès | L'ouverture du dossier échoue par `EACCES`, et par cette erreur seulement, et le contrôle ne tourne pas en root. `EPERM`, que Python range aussi sous `PermissionError`, ou toute autre erreur, est un refus (revue R-31-2). Un dossier que le contrôle peut ouvrir est cherché comme les autres |
+  | Stabilité | Le même `lstat` avant et après la tentative d'ouverture : appareil, inode, type, mode, propriétaire, groupe et date de changement d'état. Sinon, refus |
+
+- **Le nom ne prouve rien seul** : c'est la réunion de l'emplacement, du type, du
+  propriétaire et des droits qui compte. Un dossier `systemd-private-…` créé par
+  l'utilisateur, même en `0700`, n'est pas exclu. S'il est lisible, il est cherché ; sinon,
+  c'est un constat.
+- **Ce que l'exclusion ne couvre pas** :
+  - un processus root peut écrire dans ces dossiers ;
+  - la phase B n'exécute rien en root : `preflight` refuse une étape lancée en root ;
+  - le contrôle ne lit pas ces dossiers et ne peut rien en dire.
+
+**Les dossiers d'un autre système de fichiers** sous un emplacement surveillé, par exemple
+un point de montage, sont un **constat bloquant** (revue R-31-1).
+- Ils ne sont pas suivis, donc pas cherchés. Ils étaient déjà ignorés, mais sans constat :
+  `postflight` répondait alors `OK` sans les avoir cherchés.
+- Le constat dit `incomplete check: <chemin> under <emplacement> is on another file system
+  and was not searched`.
+- Pour le chercher, il faut le surveiller lui-même, avec `--watch <chemin>` : il est alors
+  cherché à part, et il n'est plus un constat sous l'emplacement parent.
+- Aucune dérogation ne se fait par son nom ou par son emplacement.
+
+**Inchangé** :
+- tout autre dossier illisible reste un constat bloquant ;
+- `/dev/shm`, `nix store verify` du SDK et `git status` du dépôt sont contrôlés comme avant ;
+- `.git` reste hors de la recherche du dépôt, car `git status` réécrit son index.
+
+**Liens** : un lien n'est jamais suivi. Il est un constat s'il est nouveau, même vers un
+dossier, ou s'il pointe dans le dossier privé : c'est l'emplacement du lien qui compte, pas
+sa cible.
+
+**Tests** : `tools/test_private_guard.py`, classes `SystemdPrivateTmpTest` et
+`ScopeNotesTest`.
+- Un test ne peut pas donner un dossier à root, ni le rendre illisible à root. Les tests
+  simulent donc ce que voit un processus sans privilèges, en remplaçant `os.lstat`,
+  `os.open`, `os.scandir` et `os.geteuid`, avec un `/tmp` et un identifiant de démarrage
+  synthétiques.
+- **Non couvert par les tests** : un vrai dossier `root:root 0700` créé par systemd. Il ne
+  se vérifie que sur la machine de l'utilisateur, à la revalidation ci-dessous.
+- Un test réel, sans simulation, tourne quand les tests s'exécutent sans privilèges, comme
+  dans le bac à sable de Nix : un dossier de l'utilisateur en mode `0000`, au nom de
+  systemd, reste un constat.
+
+**Revalidation sur la machine de l'utilisateur**, sans le jeu :
+1. Fermer le navigateur, et tout programme qui écrit dans le dossier personnel pendant le
+   contrôle.
+2. Refaire `preflight`, puis `postflight` avec la surveillance complète : le dossier
+   personnel, `/tmp`, le dépôt, `/dev/shm` et `--sdk`.
+3. N'accepter comme notes que les dossiers systemd vérifiés. Tout autre constat reste
+   bloquant.
+4. Consigner le résultat au titre de CP-4. PB-0 reste non franchi.
+
 ## 4. Avant de partager quoi que ce soit (CP-5)
 
 1. Copier ce qui doit être partagé dans un dossier à part, par exemple
@@ -202,6 +284,7 @@ Pour chaque étape, et sans contenu propriétaire :
 - le commit du dépôt ;
 - la sortie de `check-dir`, de `preflight` et de `postflight` : `OK`, ou la liste des
   constats ;
+- les notes de `postflight` : chaque dossier exclu de la surveillance (§3.1) ;
 - les résultats de CP-3 ;
 - la décision prise sur chaque constat.
 
