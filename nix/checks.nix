@@ -228,6 +228,113 @@ in
     ${private-guard}/bin/fifa2010wc-private-guard --help > "$out/help.txt"
   '';
 
+  # J2 step A6 (#21, docs/J2_A6_LINUX_GAPS.md): the settings of the phase B procedure
+  # (docs/J2_PHASE_B_CONTROLS.md) confine what a rexglue command writes, on a synthetic disc
+  # image made by the J0 test helpers (two text files, no game data). Not root (the build
+  # user), umask 077, no core dump, TMPDIR, XDG folders and REX_APP_ROOT in the private
+  # folder, private_guard preflight and postflight around `rexglue vfs dump`.
+  # 1. As the procedure says: preflight passes, the tree and the log land in the private
+  #    folder with private modes, nothing in the home folder, postflight passes.
+  # 2. Without the procedure's settings: preflight refuses; the same step run anyway writes
+  #    its log under the home folder, and postflight reports it.
+  # 3. With umask 022: preflight refuses.
+  linux-confinement =
+    pkgs.runCommand "linux-confinement" { nativeBuildInputs = [ pkgs.git ]; } ''
+      set -euo pipefail
+      mkdir -p "$out"
+      G=${private-guard}/bin/fifa2010wc-private-guard
+      REX=${rexglue-sdk}/bin/rexglue
+      W="$TMPDIR"
+      H="$W/home"
+      P="$W/private"
+      mkdir -m 700 "$H" "$P"
+      (cd "$P" && mkdir -m 700 iso game xex generated cache saves logs)
+      ${python}/bin/python3 -I -c '
+      import importlib.util, sys
+      spec = importlib.util.spec_from_file_location("t", sys.argv[1])
+      t = importlib.util.module_from_spec(spec)
+      spec.loader.exec_module(t)
+      t.write_image(sys.argv[2], {"default.txt": b"synthetic disc\n",
+                                  "media": {"readme.txt": b"no game data\n"}})
+      ' ${self}/tools/test_iso_identify.py "$P/iso/synthetic.iso"
+      chmod a-w "$P/iso/synthetic.iso"
+
+      # The environment of docs/J2_PHASE_B_CONTROLS.md section 2, in a subshell.
+      procedure() {
+        umask 077
+        ulimit -c 0
+        export HOME="$H" WC2010_PRIVATE_DIR="$P"
+        export TMPDIR="$P/tmp" XDG_CONFIG_HOME="$P/xdg/config" XDG_DATA_HOME="$P/xdg/data"
+        export XDG_CACHE_HOME="$P/xdg/cache" REX_APP_ROOT="$P/app"
+        mkdir -p "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$REX_APP_ROOT"
+        cd "$P"
+      }
+      pre() {
+        "$G" preflight --dest "$P/game" --game-root "$P/game" --sdk-bin ${rexglue-sdk}/bin \
+          --marker "$P/logs/$1.marker"
+      }
+      post() {
+        "$G" postflight --marker "$P/logs/$1.marker" --watch "$H" --watch "$W/outside"
+      }
+      mkdir -m 700 "$W/outside"
+
+      # 1. As the procedure says.
+      (
+        procedure
+        pre ok
+        "$REX" vfs dump "$P/iso/synthetic.iso" "$P/game"
+        post ok
+      ) > "$out/1-procedure.txt" 2>&1 || { cat "$out/1-procedure.txt"; exit 1; }
+      cat "$out/1-procedure.txt"
+      [ "$(cat "$P/game/default.txt")" = "synthetic disc" ] || { echo "bad default.txt"; exit 1; }
+      [ "$(cat "$P/game/media/readme.txt")" = "no game data" ] || { echo "bad readme.txt"; exit 1; }
+      logs=$(find "$P/app" -name '*.log')
+      [ -n "$logs" ] || { echo "no log under REX_APP_ROOT"; exit 1; }
+      for f in "$P/game/default.txt" "$P/game/media/readme.txt" $logs; do
+        mode=$(stat -c %a "$f")
+        [ "$mode" = 600 ] || { echo "$f has mode $mode, not 600 (umask 077)"; exit 1; }
+      done
+      [ -z "$(find "$H" -mindepth 1)" ] || { echo "the step wrote in the home folder"; exit 1; }
+      echo "1: tree and log in the private folder, mode 600, home folder untouched" \
+        >> "$out/1-procedure.txt"
+
+      # 2. Without the procedure's settings: HOME only, as in a plain shell.
+      rm -rf "$P/game"/* "$P/app"
+      status=0
+      (
+        umask 077
+        ulimit -c 0
+        export HOME="$H" WC2010_PRIVATE_DIR="$P"
+        unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME REX_APP_ROOT
+        export TMPDIR="$W/outside"
+        cd "$P"
+        pre bad || status=$?
+        echo "preflight status: $status"
+        [ "$status" -eq 1 ] || exit 10
+        # The marker is only written by a passing preflight: write it here, then run the
+        # step anyway, as someone who ignored the refusal would.
+        touch "$P/logs/bad.marker"
+        sleep 1
+        "$REX" vfs dump "$P/iso/synthetic.iso" "$P/game" || true
+        poststatus=0
+        post bad || poststatus=$?
+        echo "postflight status: $poststatus"
+        [ "$poststatus" -eq 1 ] || exit 11
+      ) > "$out/2-without-settings.txt" 2>&1 || { cat "$out/2-without-settings.txt"; exit 1; }
+      cat "$out/2-without-settings.txt"
+      grep -q "REX_APP_ROOT" "$out/2-without-settings.txt" \
+        || { echo "preflight did not name REX_APP_ROOT"; exit 1; }
+      grep -q "file written outside the private folder: $H/.config/rexglue" \
+        "$out/2-without-settings.txt" || { echo "postflight missed the log in HOME"; exit 1; }
+
+      # 3. umask 022.
+      status=0
+      ( procedure; umask 022; pre umask ) > "$out/3-umask.txt" 2>&1 || status=$?
+      cat "$out/3-umask.txt"
+      [ "$status" -eq 1 ] && grep -q "umask is 022" "$out/3-umask.txt" \
+        || { echo "preflight accepted umask 022"; exit 1; }
+    '';
+
   # J2 step A5: the codegen manifest template and tools/private_project.py, on synthetic
   # private folders only. The unit tests check the template (relative paths, no game data,
   # pinned SDK) and the init and check commands. Then ReXGlue's own parser reads the copy
