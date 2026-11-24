@@ -222,7 +222,7 @@ décision explicite) :
   (`src/rexglue/command/test_recompiler.cpp`). C'est une piste, à évaluer [H].
 - **Critère de sortie** : un ELF lié au SDK sans aucune donnée du jeu, ou un constat
   d'impossibilité documenté.
-- **État (2026-11-24)** : critère atteint, soumis à la revue
+- **État (2026-11-24)** : critère atteint ; revue favorable (6039473611), fusionnée (#26)
   (`docs/J2_A7_SYNTHETIC_CHAIN.md`). Le contrôle Nix `a7-synthetic-chain` construit un
   hôte par `rexglue_configure_target`, à partir du C++ que `rexglue recompile-tests` tire
   de 161 programmes de test d'amont, assemblés par les GNU binutils de nixpkgs.
@@ -285,8 +285,8 @@ décision explicite) :
   pas un nouveau consentement, seulement un point de revue.
 - **État (2026-11-24)** : rapport rédigé (`reports/J2_PHASE_A.md`).
   - **Première revue** (6039494135) : le rapport est recevable, mais **PA-1 n'est pas
-    franchi**. Il faut encore fusionner A7 (#26), ramener le rapport sur `main` avec une
-    CI verte, obtenir une seconde revue et la décision du porteur du projet.
+    franchi**. A7 (#26) est fusionnée et le rapport est ramené sur `main`. Il faut
+    encore une CI verte, une seconde revue et la décision du porteur du projet.
   - **Tests Debug de ReXGlue instables sous charge** (§4.1 du rapport, ticket #28) :
     l'orchestrateur retient l'option 2 à titre provisoire, sous réserve de la
     confirmation du porteur. La règle : une relance manuelle au plus, les preuves des

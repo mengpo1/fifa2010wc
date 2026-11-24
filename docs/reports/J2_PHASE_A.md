@@ -8,9 +8,9 @@
 > PA-1 est un point de revue (`J2_PLAN` §2 et §3.9). Ce n'est pas un nouveau consentement :
 > PJ2-3 est déjà accordée (D-015).
 >
-> **PA-1 n'est pas encore franchi.** Il faut d'abord trois choses (revue 6039494135 de #27) :
-> la fusion de A7 (#26), ce rapport ramené sur `main` avec une CI verte sur sa nouvelle
-> tête, puis une seconde revue et la décision du porteur du projet. **PB-0 n'est pas
+> **PA-1 n'est pas encore franchi** (revue 6039494135 de #27). A7 (#26) est fusionnée, et
+> ce rapport est ramené sur `main`. Restent une CI verte sur sa nouvelle tête, une seconde
+> revue et la décision du porteur du projet. **PB-0 n'est pas
 > franchi** non plus, et PA-1 ne vaut pas PB-0 ; ce rapport dit ce qui reste à remplir
 > (§5).
 >
@@ -21,7 +21,7 @@
 | Critère | État | Preuve |
 |---|---|---|
 | A1 à A6 et A8 fusionnées, chacune avec la CI verte | **Rempli** [V]. A8-bis (#24), ajoutée par l'arbitrage de A8, l'est aussi | §2 : chaque PR a fusionné après une CI verte sur sa tête exacte |
-| A7 faite, ou son impossibilité documentée | **Faite** [V], fusion en attente (#26) | `docs/J2_A7_SYNTHETIC_CHAIN.md` ; contrôle `a7-synthetic-chain` |
+| A7 faite, ou son impossibilité documentée | **Faite** [V], fusionnée (#26, `3964abb`), avec l'accord du porteur du projet, après une CI verte sur sa tête exacte | `docs/J2_A7_SYNTHETIC_CHAIN.md` ; contrôle `a7-synthetic-chain` |
 | `nix flake check -L --no-update-lock-file` et `check_proprietary_data.py repo` passent sur `main` | **Rempli, avec une réserve** (§4.1). `main` est vert sur `1d65df8`, après une relance manuelle. Des tests Debug de ReXGlue sont instables sous la charge de la CI, et aucun contrôle du projet n'a échoué | Passage 45371847463, 2ᵉ essai ; §4.1 |
 | Aucun fichier du jeu lu ni requis | **Rempli** [V] | CI sans le jeu ; §3 |
 | La série de correctifs ne touche ni le décodage des XEX, ni `excrypt`, ni les clés | **Rempli** [V] | Contrôle `sdk-patches` ; la série compte un correctif, `0001-function-table-base.patch` (A3) |
@@ -38,12 +38,13 @@
 | A4 — Contrôles du dossier privé | #16 | 2026-11-23 | `private_guard` (CP-1, CP-4) et procédure (`docs/J2_PHASE_B_CONTROLS.md`) | `private-guard-selftest` |
 | A5 — Gabarit de configuration | #20 | 2026-11-23 | Gabarit du manifeste sans adresse, outil `private_project` ; P-40 à P-42 corrigés (`docs/J2_A5_CONFIG_TEMPLATE.md`) | `private-project-selftest` |
 | A6 — Lacunes Linux | #23 | 2026-11-24 | Aucun changement du runtime ; confinement rejoué de bout en bout (`docs/J2_A6_LINUX_GAPS.md`) | `linux-confinement` |
-| A7 — Chaîne sans données du jeu | #26 | en attente | ELF lié au SDK à partir de code généré ; deux défauts de construction corrigés (A7-1, A7-2) ; 1 615 cas Catch2 réussis (`docs/J2_A7_SYNTHETIC_CHAIN.md`) | `a7-synthetic-chain`, `cmake-skeleton` |
+| A7 — Chaîne sans données du jeu | #26 | 2026-11-24 | ELF lié au SDK à partir de code généré ; deux défauts de construction corrigés (A7-1, A7-2) ; 1 615 cas Catch2 réussis (`docs/J2_A7_SYNTHETIC_CHAIN.md`) | `a7-synthetic-chain`, `cmake-skeleton` |
 | A8 — Méthode de validation des adresses | #18 | 2026-11-23 | Pistes M1, M2, M3 comparées ; arbitrage : M1, M3 en repli, M2 non autorisée (`docs/J2_A8_ADDRESS_VALIDATION.md`) | — |
 | A8-bis — Comparateur d'adresses | #24 | 2026-11-24 | `address_compare`, méthode M1 analytique ; P-43 à P-46 corrigés (`docs/J2_A8BIS_ADDRESS_COMPARE.md`) | `address-compare-selftest` |
 
 CI de `main` après chaque fusion : verte pour #15, #16, #18, #19, #20 et #23. Après #17 et
-#24, elle a échoué sur un test Debug de ReXGlue (§4.1).
+#24, elle a échoué sur un test Debug de ReXGlue (§4.1) ; après #24, elle est verte à la
+relance manuelle. Pour la fusion de #26, voir les vérifications de #27.
 
 ## 3. Ce que la phase A n'a pas touché [V]
 
@@ -207,16 +208,15 @@ PB-0 (`J2_PLAN` §2) demande quatre conditions :
 | Condition | État |
 |---|---|
 | Autorisation PJ2-3 expresse | Accordée le 2026-11-23 (D-015) |
-| PA-1 franchi | **Non franchi.** Ce rapport a reçu une première revue (6039494135). Restent la fusion de #26, ce rapport ramené sur `main` avec une CI verte, une seconde revue, puis la décision du porteur du projet |
+| PA-1 franchi | **Non franchi.** Ce rapport a reçu une première revue (6039494135). #26 est fusionnée et ce rapport est sur `main`. Restent une CI verte, une seconde revue, puis la décision du porteur du projet |
 | Contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6) | **À faire sur la machine de l'utilisateur**, avec la vérification des *core dumps* (§4.3). Aucun ne lit le jeu, sauf le contrôle que `iso/` est en lecture seule |
 | Méthode de validation des adresses décidée | Décidée : M1, M3 en repli, M2 non autorisée (§1) |
 
 **Ce qui reste avant la phase B**, dans l'ordre :
 
-1. la fusion de A7 (#26), avec l'accord explicite du porteur du projet, après une
-   dernière vérification de sa tête et de sa CI ;
-2. ce rapport ramené sur `main`, avec son seul diff documentaire, et une CI verte sur sa
-   nouvelle tête ; puis la seconde revue de l'orchestrateur ;
+1. *fait* : la fusion de A7 (#26), avec l'accord explicite du porteur du projet ;
+2. ce rapport ramené sur `main` (*fait* : son diff ne contient que de la documentation),
+   puis une CI verte sur sa nouvelle tête et la seconde revue de l'orchestrateur ;
 3. la décision PA-1 du porteur du projet, qui confirme aussi la règle du §4.1 ;
 4. sur la machine de l'utilisateur seulement, la procédure de
    `J2_PHASE_B_CONTROLS.md` §1 :
