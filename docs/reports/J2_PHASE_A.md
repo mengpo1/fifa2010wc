@@ -157,8 +157,16 @@ CI de `main` après chaque fusion : verte pour #15, #16, #18, #19, #20 et #23. A
 - A7 n'exerce ni `rexglue codegen` sur un XEX, ni `rexglue_project`, ni le chargement des
   modules à l'exécution. VMX128 (29 programmes de test), la taille du jeu et le Debug de
   l'hôte ne sont pas couverts.
-- L'exécutable du jeu se configure depuis `nix develop`, avec un preset : toute autre
-  valeur de `REXGLUE_LLD` arrête la configuration (A7-2).
+- L'exécutable du jeu se configure depuis `nix develop`, avec un preset (A7-2).
+  - La configuration s'arrête dans trois cas : `REXGLUE_LLD` manque ; le cache diffère
+    de l'environnement ; un programme sonde lié par cet éditeur de liens ne démarre pas
+    sans `LD_LIBRARY_PATH` (revue P-47).
+  - **C'est un contrôle de comportement sur un petit programme, pas d'identité** : un
+    environnement reconfiguré exprès peut le passer.
+  - Les dépendances de l'exécutable du jeu restent donc contrôlées après son vrai lien,
+    en B5 (`J2_PLAN` §4.5).
+- **La réussite d'A7 ne vaut pas validation de la compatibilité du jeu** (revue
+  6039473611).
 
 ### 4.6 Portée des essais
 
