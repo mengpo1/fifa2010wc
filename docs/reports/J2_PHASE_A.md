@@ -8,9 +8,10 @@
 > PA-1 est un point de revue (`J2_PLAN` §2 et §3.9). Ce n'est pas un nouveau consentement :
 > PJ2-3 est déjà accordée (D-015).
 >
-> **PA-1 n'est pas encore franchi** (revue 6039494135 de #27). A7 (#26) est fusionnée, et
-> ce rapport est ramené sur `main`. Restent une CI verte sur sa nouvelle tête, une seconde
-> revue et la décision du porteur du projet. **PB-0 n'est pas
+> **Décision du 2026-11-24 (D-016) : PA-1 est franchi.** Le porteur du projet l'a décidé
+> après la seconde revue de l'orchestrateur (6043202272) et la fusion de ce rapport (#27).
+> Il a confirmé la règle des tests Debug du §4.1. Le texte ci-dessous est celui que la
+> revue a acceptée ; seuls ces états sont mis à jour. **PB-0 n'est pas
 > franchi** non plus, et PA-1 ne vaut pas PB-0 ; ce rapport dit ce qui reste à remplir
 > (§5).
 >
@@ -119,8 +120,8 @@ relance manuelle. Pour la fusion de #26, voir les vérifications de #27.
      et allonge la CI.
   4. Écrire un correctif de ReXGlue (attendre la fin réelle du thread avant de détruire
      le runtime). Il demande d'abord un test qui reproduise le défaut à coup sûr.
-- **Arbitrage de l'orchestrateur** (revue 6039494135 de #27), **à confirmer par le
-  porteur du projet** lors de la décision PA-1 ; le suivi se fait dans le ticket #28.
+- **Arbitrage de l'orchestrateur** (revue 6039494135 de #27), **confirmé par le porteur
+  du projet le 2026-11-24 (D-016)** ; le suivi se fait dans le ticket #28.
   - **L'option 2 est retenue, à titre provisoire**. Tous les tests Debug et leur
     parallélisme sont gardés.
   - Un échec isolé de la suite Debug peut être relancé **une fois au plus**, à la main,
@@ -208,16 +209,17 @@ PB-0 (`J2_PLAN` §2) demande quatre conditions :
 | Condition | État |
 |---|---|
 | Autorisation PJ2-3 expresse | Accordée le 2026-11-23 (D-015) |
-| PA-1 franchi | **Non franchi.** Ce rapport a reçu une première revue (6039494135). #26 est fusionnée et ce rapport est sur `main`. Restent une CI verte, une seconde revue, puis la décision du porteur du projet |
+| PA-1 franchi | **Franchi le 2026-11-24** (D-016), après les revues 6039494135 et 6043202272, et la fusion de ce rapport (#27) |
 | Contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6) | **À faire sur la machine de l'utilisateur**, avec la vérification des *core dumps* (§4.3). Aucun ne lit le jeu, sauf le contrôle que `iso/` est en lecture seule |
 | Méthode de validation des adresses décidée | Décidée : M1, M3 en repli, M2 non autorisée (§1) |
 
 **Ce qui reste avant la phase B**, dans l'ordre :
 
 1. *fait* : la fusion de A7 (#26), avec l'accord explicite du porteur du projet ;
-2. ce rapport ramené sur `main` (*fait* : son diff ne contient que de la documentation),
-   puis une CI verte sur sa nouvelle tête et la seconde revue de l'orchestrateur ;
-3. la décision PA-1 du porteur du projet, qui confirme aussi la règle du §4.1 ;
+2. *fait* : ce rapport ramené sur `main`, avec une CI verte sur sa tête (`27fe85e`), puis
+   la seconde revue de l'orchestrateur (6043202272) et la fusion (#27) ;
+3. *fait* : la décision PA-1 du porteur du projet, qui confirme aussi la règle du §4.1
+   (D-016) ;
 4. sur la machine de l'utilisateur seulement, la procédure de
    `J2_PHASE_B_CONTROLS.md` §1 :
    préparation du dossier privé, `private_guard check-dir`, crochet de pré-commit

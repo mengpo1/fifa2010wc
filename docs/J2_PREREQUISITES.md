@@ -40,9 +40,11 @@
 
 La phase A, sans données du jeu, a sa propre autorisation (PA-0), accordée le 2026-11-23.
 **Aucun fichier du jeu n'est traité avant PB-0** (`docs/J2_PLAN.md` §2). Il faut d'abord :
-- PA-1 ;
-- les contrôles du §6, exécutés et consignés ;
-- la décision sur la méthode de validation des adresses (§3.3).
+- PA-1 : *franchi le 2026-11-24 (D-016)* ;
+- les contrôles du §6, exécutés et consignés : *à faire sur la machine de
+  l'utilisateur* ;
+- la décision sur la méthode de validation des adresses (§3.3) : *prise (M1 d'abord, M3
+  en repli, M2 non autorisée)*.
 
 Ce sont des conditions d'exécution, et non un nouveau consentement.
 
