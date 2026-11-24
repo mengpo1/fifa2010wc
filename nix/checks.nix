@@ -163,6 +163,194 @@ in
       '';
     };
 
+  # J2 step A7 (docs/J2_A7_SYNTHETIC_CHAIN.md): code generation, compilation, linking and
+  # running of a host program, the way the game executable will be built, with no game data.
+  # 1. The PowerPC instruction tests of the ReXGlue source (tests/ppc/asm, BSD-3-Clause) are
+  #    assembled by the GNU binutils of nixpkgs, built from source. Those binutils have no
+  #    VMX128: the tests they refuse must be exactly the list in tests/a7-chain.
+  # 2. The installed `rexglue recompile-tests` turns them into C++ and Catch2 cases.
+  # 3. tests/a7-chain builds them against the installed SDK through rexglue_configure_target,
+  #    with -DREXGLUE_LLD set to the wrapped ld.lld (J1 finding P-05).
+  # 4. Every dynamic dependency of the program resolves in the store or among the SDK
+  #    libraries staged next to it, which are byte-identical to the package's, so the Vulkan
+  #    driver keeps vulkan-loader on its RUNPATH (P-07). Then the Catch2 cases run.
+  # 5. Negative controls: without -DREXGLUE_LLD the configure step stops; with the plain lld
+  #    the dependency check refuses the program (P-05 reproduced).
+  # Nothing generated is kept in the output: only logs and reports.
+  a7-synthetic-chain =
+    let
+      ppcBinutils = pkgs.pkgsCross.ppc-embedded.buildPackages.binutils-unwrapped;
+      wrappedLld = "${pkgs.llvmPackages_20.bintools}/bin/ld.lld";
+      plainLld = "${pkgs.llvmPackages_20.lld}/bin/ld.lld";
+    in
+    pkgs.llvmPackages_20.stdenv.mkDerivation {
+      name = "a7-synthetic-chain";
+      src = self;
+      nativeBuildInputs = [
+        pkgs.cmake
+        pkgs.ninja
+        pkgs.patchelf
+        pkgs.file
+        ppcBinutils
+      ];
+      buildInputs = [
+        rexglue-sdk
+        pkgs.catch2_3
+      ];
+      # Same reason as for the SDK build (nix/rexglue-sdk.nix) and the dev shell.
+      hardeningDisable = [
+        "fortify"
+        "fortify3"
+      ];
+      dontUseCmakeConfigure = true;
+      buildPhase = ''
+        runHook preBuild
+        set -euo pipefail
+        W="$NIX_BUILD_TOP/a7"
+        R="$W/report"
+        mkdir -p "$W"/obj "$W"/bin "$W"/asm "$W"/gen "$W"/gen-small "$W"/bin-small "$W"/asm-small "$R"
+        export HOME="$W/home"
+        mkdir -p "$HOME"
+        upstream=${rexglue-src}/tests/ppc/asm
+
+        echo "== 1. Assembling $upstream with $(powerpc-none-eabi-as --version | head -n 1)" \
+          > "$R/chain.txt"
+        refused=""
+        for s in "$upstream"/*.s; do
+          n=$(basename "$s" .s)
+          # The upstream flags (cmake/ppc_test_pipeline.cmake) without -mvmx128.
+          if powerpc-none-eabi-as -a32 -be -mregnames -mpower7 -maltivec -mvsx -R \
+               -o "$W/obj/$n.o" "$s" 2> "$W/obj/$n.err"; then
+            powerpc-none-eabi-ld -A powerpc:common32 -melf32ppc -EB -nostdlib --oformat=binary \
+              -Ttext=0x82010000 -e 0x82010000 -o "$W/bin/$n.bin" "$W/obj/$n.o"
+            powerpc-none-eabi-nm --numeric-sort "$W/obj/$n.o" > "$W/bin/$n.map"
+            cp "$s" "$W/asm/"
+          else
+            refused="$refused$n"$'\n'
+          fi
+        done
+        printf '%s' "$refused" | sort > "$R/refused.txt"
+        grep -vE '^(#|$)' tests/a7-chain/vmx128-tests.txt | sort > "$W/expected-refused.txt"
+        if ! diff -u "$W/expected-refused.txt" "$R/refused.txt" >> "$R/chain.txt"; then
+          echo "the tests refused by the assembler differ from tests/a7-chain/vmx128-tests.txt" >&2
+          cat "$R/chain.txt" >&2
+          exit 1
+        fi
+        total=$(ls "$upstream"/*.s | wc -l)
+        built=$(ls "$W"/bin/*.bin | wc -l)
+        echo "$built of $total test programs assembled; the $((total - built)) refused are the VMX128 list" \
+          >> "$R/chain.txt"
+
+        echo "== 2. rexglue recompile-tests" >> "$R/chain.txt"
+        REX_LOG_FILE=false ${rexglue-sdk}/bin/rexglue recompile-tests --bin-dir="$W/bin" \
+          --asm-dir="$W/asm" --output="$W/gen" --case-files=8 > "$R/recompile-tests.log" 2>&1
+        cases=$(cat "$W"/gen/ppc_test_cases_*.cpp | grep -c '^TEST_CASE(' || true)
+        echo "exit status 0, $cases Catch2 cases" >> "$R/chain.txt"
+        if [ "$cases" -lt "$built" ]; then
+          echo "fewer cases ($cases) than test programs ($built)" >&2
+          exit 1
+        fi
+
+        configure() { # <build dir> <generated dir> [cmake arguments]
+          b=$1; g=$2; shift 2
+          cmake -S tests/a7-chain -B "$b" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS=-march=x86-64-v2 \
+            -DA7_GENERATED_DIR="$g" "$@"
+        }
+        interp=$(patchelf --print-interpreter ${rexglue-sdk}/bin/rexglue)
+        # Every dependency resolves in the store or in the program's own folder.
+        deps_ok() { # <elf file>
+          d=$(dirname "$1")
+          deps=$("$interp" --list "$1" 2>&1) || { printf '%s\n' "$deps"; return 1; }
+          printf '%s\n' "$deps"
+          if printf '%s\n' "$deps" | grep -q 'not found'; then return 1; fi
+          if printf '%s\n' "$deps" | grep -E '=> /' | grep -vE "=> (/nix/store/|$d/)"; then
+            return 1
+          fi
+          case "$(patchelf --print-interpreter "$1")" in /nix/store/*) ;; *) return 1 ;; esac
+        }
+
+        echo "== 3. Host build against ${rexglue-sdk}, REXGLUE_LLD=${wrappedLld}" >> "$R/chain.txt"
+        # The first A7 run found module locations under "''${PACKAGE_PREFIX_DIR}//nix/store/..."
+        # (an absolute CMAKE_INSTALL_LIBDIR joined to the prefix; nix/rexglue-sdk.nix).
+        if grep -nE 'PACKAGE_PREFIX_DIR[}]//' ${rexglue-sdk}/lib/cmake/rexglue/*.cmake; then
+          echo "the SDK package files join an absolute folder to their prefix" >&2; exit 1
+        fi
+        modules=0
+        while read -r location; do
+          [ -f "$location" ] || { echo "missing module file: $location" >&2; exit 1; }
+          modules=$((modules + 1))
+        done < <(sed -n -E 's@.*IMPORTED_LOCATION_RELEASE "\$\{PACKAGE_PREFIX_DIR\}/([^"]+)".*@${rexglue-sdk}/\1@p' \
+                   ${rexglue-sdk}/lib/cmake/rexglue/rexglueModules-Release.cmake)
+        [ "$modules" -gt 0 ] || { echo "no module location in rexglueModules-Release.cmake" >&2; exit 1; }
+        echo "$modules provider module locations of the package exist" >> "$R/chain.txt"
+        configure "$W/build" "$W/gen" -DREXGLUE_LLD=${wrappedLld} > "$R/configure.log" 2>&1
+        cmake --build "$W/build" > "$R/build.log" 2>&1
+        host="$W/build/a7_ppc_tests"
+        grep -q -- "--ld-path=${wrappedLld}" "$W/build/build.ninja"
+        echo "linked with --ld-path=${wrappedLld}" >> "$R/chain.txt"
+
+        echo "== 4. Dependencies, RUNPATH and staged libraries" >> "$R/chain.txt"
+        rpath=$(patchelf --print-rpath "$host")
+        echo "RUNPATH: $rpath" >> "$R/chain.txt"
+        case ":$rpath:" in *:'$ORIGIN':*) ;; *) echo "no \$ORIGIN on the RUNPATH" >&2; exit 1 ;; esac
+        deps_ok "$host" > "$R/host-deps.txt" || { cat "$R/host-deps.txt" >&2; exit 1; }
+        echo "a7_ppc_tests: every dependency resolved (host-deps.txt)" >> "$R/chain.txt"
+        staged=0
+        for f in "$W"/build/*.so*; do
+          name=$(basename "$f")
+          cmp "$f" ${rexglue-sdk}/lib/"$name"
+          staged=$((staged + 1))
+        done
+        echo "$staged staged files, each identical to the SDK package's" >> "$R/chain.txt"
+        rpath=$(patchelf --print-rpath "$W/build/librexgpu-xenos-vulkan.so")
+        case ":$rpath:" in
+          *:${pkgs.vulkan-loader}/lib:*) echo "staged librexgpu-xenos-vulkan.so: vulkan-loader on RUNPATH" >> "$R/chain.txt" ;;
+          *) echo "staged Vulkan driver without vulkan-loader on its RUNPATH" >&2; exit 1 ;;
+        esac
+
+        echo "== 5. Catch2 cases" >> "$R/chain.txt"
+        (cd "$W/build" && ./a7_ppc_tests --reporter console::out="$R/ppc-tests.txt" \
+          --reporter junit::out="$R/ppc-tests-junit.xml") || {
+          tail -n 40 "$R/ppc-tests.txt" >&2; exit 1; }
+        tail -n 3 "$R/ppc-tests.txt" >> "$R/chain.txt"
+
+        echo "== 6. Negative controls (P-05)" >> "$R/chain.txt"
+        # One small test program is enough for the controls.
+        cp "$W/bin/instr_add.bin" "$W/bin/instr_add.map" "$W/bin-small/"
+        cp "$W/asm/instr_add.s" "$W/asm-small/"
+        REX_LOG_FILE=false ${rexglue-sdk}/bin/rexglue recompile-tests --bin-dir="$W/bin-small" \
+          --asm-dir="$W/asm-small" --output="$W/gen-small" > "$R/recompile-small.log" 2>&1
+        # a. No -DREXGLUE_LLD and no ld.lld on PATH: the SDK stops the configure step.
+        if configure "$W/build-nolld" "$W/gen-small" > "$R/configure-nolld.log" 2>&1; then
+          echo "configure succeeded without REXGLUE_LLD" >&2; exit 1
+        fi
+        grep -q "ReXGlue links with lld" "$R/configure-nolld.log"
+        echo "a. without REXGLUE_LLD: configure stops with the SDK's lld message" >> "$R/chain.txt"
+        # b. The plain lld, outside the Nix linker wrapper: the program builds, and the
+        #    dependency check refuses it.
+        configure "$W/build-plain" "$W/gen-small" -DREXGLUE_LLD=${plainLld} \
+          > "$R/configure-plain.log" 2>&1
+        cmake --build "$W/build-plain" > "$R/build-plain.log" 2>&1
+        if deps_ok "$W/build-plain/a7_ppc_tests" > "$R/plain-deps.txt" 2>&1; then
+          echo "the program linked by the plain lld passed the dependency check" >&2
+          cat "$R/plain-deps.txt" >&2
+          exit 1
+        fi
+        echo "b. plain lld: dependency check refuses the program (plain-deps.txt)" >> "$R/chain.txt"
+        grep -E 'not found|interpreter|=> /' "$R/plain-deps.txt" | head -n 5 >> "$R/chain.txt" || true
+        echo "  interpreter: $(patchelf --print-interpreter "$W/build-plain/a7_ppc_tests")" \
+          >> "$R/chain.txt"
+        runHook postBuild
+      '';
+      installPhase = ''
+        mkdir -p "$out"
+        # Reports and logs only: no generated source, object or program.
+        for f in "$NIX_BUILD_TOP"/a7/report/*; do cat "$f" > "$out/$(basename "$f")"; done
+        cat "$out/chain.txt"
+      '';
+    };
+
   # D-015 (O3): the SDK patch series leaves XEX loading and decryption as upstream wrote
   # them. Lists every file the patches touch, and fails if one is an XEX or cryptography
   # file (src/filesystem/xex.cpp, src/kernel/xex_module.cpp, thirdparty/excrypt, ...).

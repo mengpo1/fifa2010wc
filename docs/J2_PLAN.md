@@ -222,6 +222,17 @@ décision explicite) :
   (`src/rexglue/command/test_recompiler.cpp`). C'est une piste, à évaluer [H].
 - **Critère de sortie** : un ELF lié au SDK sans aucune donnée du jeu, ou un constat
   d'impossibilité documenté.
+- **État (2026-11-24)** : critère atteint, soumis à la revue
+  (`docs/J2_A7_SYNTHETIC_CHAIN.md`). Le contrôle Nix `a7-synthetic-chain` construit un
+  hôte par `rexglue_configure_target`, à partir du C++ que `rexglue recompile-tests` tire
+  de 161 programmes de test d'amont, assemblés par les GNU binutils de nixpkgs.
+  - **Défaut trouvé et corrigé** : les emplacements des modules fournisseurs du paquet du
+    SDK étaient faux, ce qui empêchait de lier l'hôte. Le correctif est
+    `-DCMAKE_INSTALL_LIBDIR=lib` dans `nix/rexglue-sdk.nix`, sans toucher au SDK.
+  - P-05 est reproduit avec le `lld` brut, et vérifié corrigé avec le `ld.lld`
+    enveloppé. P-07 tient pour les copies faites à côté de l'hôte.
+  - Non couverts : un XEX (`rexglue codegen`, `rexglue_project`), VMX128 (29 programmes)
+    et le chargement des modules à l'exécution.
 
 ### 3.8 A8 — Proposition sur la source de l'image en clair
 

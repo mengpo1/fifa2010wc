@@ -158,6 +158,14 @@ llvmPackages_20.stdenv.mkDerivation {
     # package bypasses the Nix linker wrapper, so the binaries got no RUNPATH entry for
     # libstdc++, X11 or Wayland. The wrapped ld.lld of llvmPackages_20.bintools adds them.
     "-DREXGLUE_LLD=${llvmPackages_20.bintools}/bin/ld.lld"
+    # The CMake hook of nixpkgs passes an absolute CMAKE_INSTALL_LIBDIR ($out/lib). The
+    # package files of ReXGlue join it to their own prefix (cmake/rexglue_install.cmake:78
+    # and cmake/rexglueConfig.cmake.in), which gave provider module locations such as
+    # "${PACKAGE_PREFIX_DIR}//nix/store/...-rexglue-sdk-0.11.0/lib/librexfilesystem.so":
+    # a host built with rexglue_configure_target could not link (J2 step A7,
+    # docs/J2_A7_SYNTHETIC_CHAIN.md). The package has a single output, so the relative
+    # folder installs to the same place. This flag comes after the hook's and wins.
+    "-DCMAKE_INSTALL_LIBDIR=lib"
   ];
 
   doCheck = true;

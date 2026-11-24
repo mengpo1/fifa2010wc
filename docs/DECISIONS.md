@@ -293,6 +293,10 @@
   provenance est dans son en-tête et dans `THIRD_PARTY.md` (D-010). Le contrôle
   `sdk-patches` de `nix flake check` liste les fichiers touchés et refuse tout fichier
   des XEX ou du déchiffrement (O3, D-015).
+- **Option de construction (2026-11-24, soumise à la revue)** :
+  `-DCMAKE_INSTALL_LIBDIR=lib` dans `nix/rexglue-sdk.nix`. Ce n'est pas un correctif du
+  SDK. Elle rend justes les emplacements des modules fournisseurs du paquet, faux avec
+  le dossier absolu que passe nixpkgs (étape A7, `docs/J2_A7_SYNTHETIC_CHAIN.md` §4).
 
 ## D-012 — Hébergement du projet
 
