@@ -24,6 +24,7 @@
 | D-013 | Pas de lanceur graphique avant J5 | Proposée |
 | D-014 | Xenia seulement comme oracle de développement | Proposée |
 | D-015 | Lancement de J2 : autorisations PA-0 et PJ2-3, arbitrages de la phase A | **Acceptée** (2026-11-23) ; phase B soumise à PB-0, non franchi |
+| D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi |
 
 ---
 
@@ -362,3 +363,49 @@
     autorisation des titulaires de droits, ni un avis juridique ;
   - la fusion de chaque PR, le choix de la méthode A8 et les points d'arrêt PA-1, puis
     PB-1 à PB-4, restent des actes de revue distincts.
+
+## D-016 — Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug
+
+- **Statut** : **Acceptée** (2026-11-24). Sources :
+  - le rapport de phase A, `docs/reports/J2_PHASE_A.md`, fusionné par la
+    [PR #27](https://github.com/mengpo1/fifa2010wc/pull/27) ;
+  - les revues de l'orchestrateur
+    [6039494135](https://github.com/mengpo1/fifa2010wc/pull/27#pullrequestreview-6039494135)
+    et [6043202272](https://github.com/mengpo1/fifa2010wc/pull/27#pullrequestreview-6043202272)
+    de cette PR ;
+  - la décision du porteur du projet, donnée à Claude Code le 2026-11-24 : « PA-1
+    franchi, règle confirmée ».
+- **Décision 1 : PA-1 est franchi.**
+  - Les critères de `docs/J2_PLAN.md` §3.9 sont remplis (rapport, §1).
+  - A1 à A8, et A8-bis, sont fusionnées dans `main`, chacune après une CI verte sur sa
+    tête exacte.
+  - La CI de `main` porte la réserve du rapport, §4.1.
+- **Décision 2 : la règle des échecs intermittents des tests Debug de ReXGlue** est
+  confirmée. C'est l'option 2 du rapport (§4.1), proposée par l'orchestrateur ; son suivi
+  se fait dans le [ticket #28](https://github.com/mengpo1/fifa2010wc/issues/28).
+  - Tous les tests Debug et leur parallélisme sont gardés. **Aucun test n'est
+    désactivé, ignoré ni relancé automatiquement.**
+  - Un échec isolé de la suite Debug peut être relancé **une fois au plus**, à la main,
+    sur le même commit. Les journaux et l'identifiant des deux tentatives sont gardés.
+  - **Un second échec bloque**, et doit être examiné.
+  - Pour chaque incident, on consigne :
+    - le SHA ;
+    - le contexte de la machine ;
+    - le nom du test ;
+    - le signal ou le délai dépassé ;
+    - les traces.
+  - On réévalue la règle si la fréquence augmente, ou si un test devient reproductible.
+  - Les options écartées pour l'instant :
+    - signaler les cas à ReXGlue : seulement avec un accord explicite et distinct du
+      porteur, à partir d'informations publiques, sans aucun journal du jeu ;
+    - réduire le parallélisme, sans mesure préalable ;
+    - écrire un correctif du SDK, tant qu'aucun test ne reproduit la cause.
+  - La cause, liée à la durée de vie d'un thread, reste une **hypothèse**.
+- **Ce qui ne change pas** :
+  - **PB-0 n'est pas franchi.** PA-1 n'est pas PB-0.
+  - La phase B attend encore les contrôles CP-1 à CP-7, exécutés et consignés **sur la
+    machine du porteur du projet**, dont la vérification des *core dumps* transmis par
+    tube (rapport, §4.3). Elle attend ensuite la décision PB-0, distincte.
+  - **Aucune opération sur l'ISO ni sur les XEX n'a lieu avant PB-0.** Rien du jeu ne va
+    dans GitHub, en CI, dans le cloud ni dans `/nix/store` (D-007).
+  - Les limites consignées dans le rapport (§4.2 à §4.6) restent à respecter en phase B.

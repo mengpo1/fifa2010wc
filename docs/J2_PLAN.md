@@ -10,6 +10,12 @@
 >   décision sur la méthode A8 ;
 > - les points du §6 sont tranchés, sauf la méthode de validation des adresses ;
 > - J2 est commencé par l'étape A1, dont l'inventaire est `docs/J2_A1_SDK_INVENTORY.md`.
+>
+> Mise à jour du 2026-11-24 (D-016) :
+> - la phase A est close : **PA-1 est franchi** (`reports/J2_PHASE_A.md`) ;
+> - la méthode de validation des adresses est décidée (§6) ;
+> - **PB-0 n'est pas franchi** : la phase B attend les contrôles CP-1 à CP-7 sur la
+>   machine de l'utilisateur, puis la décision PB-0.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Cadre
@@ -52,8 +58,8 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 | Point | Quand | Qui décide | Condition |
 |---|---|---|---|
 | **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A. **Accordée le 2026-11-23** (D-015) |
-| **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9 |
-| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Non franchi** : la méthode est décidée (M1, §6) ; PA-1 est soumis à la revue (`reports/J2_PHASE_A.md`) ; les contrôles CP-1 à CP-7 restent à exécuter sur la machine de l'utilisateur |
+| **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9. **Franchi le 2026-11-24** (D-016) |
+| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Non franchi** : la méthode est décidée (M1, §6) et PA-1 est franchi (D-016). Les contrôles CP-1 à CP-7 restent à exécuter et à consigner sur la machine de l'utilisateur, dont la vérification des *core dumps* (`reports/J2_PHASE_A.md` §4.3) |
 | **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0 |
 | **PB-2** | Après le contrôle de compatibilité (B2) | Orchestrateur, puis porteur du projet | Validation des adresses ou nouvelle analyse |
 | **PB-3** | Avant de versionner un fichier tiré du disque | Orchestrateur, puis porteur du projet | Seules des adresses et des métadonnées, autorisées par D-007, après le contrôle des données |
@@ -291,6 +297,10 @@ décision explicite) :
     l'orchestrateur retient l'option 2 à titre provisoire, sous réserve de la
     confirmation du porteur. La règle : une relance manuelle au plus, les preuves des
     deux tentatives gardées, et un second échec bloque.
+  - **Seconde revue** (6043202272) : P-47 est levé, et le contenu est accepté. Le
+    rapport est fusionné (#27).
+  - **Décision du porteur du projet (2026-11-24, D-016)** : **PA-1 est franchi**, et la
+    règle des tests Debug est confirmée. PB-0 n'est pas franchi.
 
 ## 4. Phase B — traitement local des données privées, après PB-0
 
