@@ -170,3 +170,8 @@ relèvent de cette décision, avant J3.
   désassemblée et le code généré restent locaux, dans le dossier privé ;
 - il ne versionne au plus que des adresses et des métadonnées, après PB-3. Jamais de
   désassemblée ni de code généré (D-007).
+
+*A8-bis (2026-11-23) : `tools/address_compare.py`, décrit dans
+`docs/J2_A8BIS_ADDRESS_COMPARE.md`. Les faux positifs ci-dessus ont chacun leur test.
+Limite : N2 n'est pas calculé à partir du code généré, dont les commentaires
+d'instruction ne portent pas d'adresse ; il vient d'un relevé d'examen manuel.*
