@@ -5,13 +5,17 @@ Every folder is synthesized in a temporary folder at run time; no test reads, ne
 produces game data. Run with `python3 -I tools/test_private_guard.py`.
 """
 
+import contextlib
 import importlib.util
+import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -394,6 +398,386 @@ class PostflightTest(Base):
         self.assertTrue(has(findings, "file written outside the private folder"))
         # The .git folder itself is not searched: git status rewrites its index.
         self.assertFalse(any(os.sep + ".git" + os.sep in f for f in findings))
+
+
+def fake_stat(real, **changes):
+    """A stat result with some attributes replaced, for owners and modes a test cannot set."""
+    fields = {name: getattr(real, name) for name in (
+        "st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size",
+        "st_atime_ns", "st_mtime_ns", "st_ctime_ns")}
+    fields.update(changes)
+    return types.SimpleNamespace(**fields)
+
+
+ROOT_0700 = {"st_uid": 0, "st_gid": 0, "st_mode": stat.S_IFDIR | 0o700}
+
+
+class SystemdPrivateTmpTest(Base):
+    """#30: a verified systemd PrivateTmp folder under /tmp is a note, nothing else is.
+
+    The service manager makes these folders root:root 0700, and only a process without
+    privileges cannot read them. This container may run as root, and a test cannot chown a
+    folder to root or make it unreadable to root. The tests therefore simulate, by patching
+    os.lstat, os.open, os.scandir and os.geteuid, what an unprivileged process sees: the
+    owner, the mode, the refusal to open, and changes during the check. The parent /tmp and
+    the boot id file are replaced by synthetic ones. A real root-owned folder is not
+    covered here; test_unprivileged_real_unreadable_own_folder_is_a_finding runs for real
+    when the tests run without privileges, as in the Nix build sandbox."""
+
+    # Built, not written out: the repository check refuses any 128-bit hexadecimal token.
+    BOOT = "0123456789abcdef" * 2
+
+    def setUp(self):
+        super().setUp()
+        self.boot_file = os.path.join(self.root, "boot_id")
+        with open(self.boot_file, "w") as f:
+            f.write("01234567-89ab-cdef-0123-456789abcdef\n")
+        patch = mock.patch.object(guard, "BOOT_ID_PATH", self.boot_file)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.cases = 0
+        self.fresh_tmp()
+        self.euid = 1000
+
+    def fresh_tmp(self):
+        """A new synthetic /tmp, so that each case of a loop is checked alone."""
+        self.cases += 1
+        self.tmpdir = os.path.join(self.root, f"tmp{self.cases}")
+        os.mkdir(self.tmpdir)
+        patch = mock.patch.object(guard, "SYSTEMD_TMP_PARENT", self.tmpdir)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.fake = {}        # path -> attributes lstat reports
+        self.on_open = {}     # path -> attributes lstat reports once open has been tried
+        self.vanish = set()   # paths whose lstat fails once open has been tried
+        self.locked = set()   # paths this process cannot open or list
+
+    def name(self, unit="polkit.service", boot=None, suffix="AbC123"):
+        return f"systemd-private-{boot or self.BOOT}-{unit}-{suffix}"
+
+    def make(self, name, parent=None, **attributes):
+        path = os.path.join(parent or self.tmpdir, name)
+        os.makedirs(path)
+        if attributes:
+            self.fake[path] = attributes
+            self.locked.add(path)
+        return path
+
+    def marker(self):
+        path = os.path.join(self.private, "logs", "marker")
+        guard.write_marker(self.private, path)
+        time.sleep(0.05)
+        return path
+
+    @contextlib.contextmanager
+    def unprivileged(self):
+        real_lstat, real_open, real_scandir = os.lstat, os.open, os.scandir
+        tried = set()
+
+        def lstat(path, *args, **kwargs):
+            key = os.fspath(path)
+            if key in tried and key in self.vanish:
+                raise FileNotFoundError(2, "No such file or directory", key)
+            st = real_lstat(path, *args, **kwargs)
+            if key in tried and key in self.on_open:
+                return fake_stat(st, **self.on_open[key])
+            if key in self.fake:
+                return fake_stat(st, **self.fake[key])
+            return st
+
+        def open_(path, flags, *args, **kwargs):
+            key = os.fspath(path)
+            tried.add(key)
+            if key in self.locked:
+                raise PermissionError(13, "Permission denied", key)
+            return real_open(path, flags, *args, **kwargs)
+
+        def scandir(path="."):
+            key = os.fspath(path)
+            if key in self.locked:
+                raise PermissionError(13, "Permission denied", key)
+            return real_scandir(path)
+
+        with mock.patch("os.lstat", lstat), mock.patch("os.open", open_), \
+                mock.patch("os.scandir", scandir), mock.patch("os.geteuid", lambda: self.euid):
+            yield
+
+    def postflight(self, marker, watch=None, **kw):
+        kw.setdefault("shm_dir", self.shm)
+        with self.unprivileged():
+            return guard.postflight(self.private, marker,
+                                    watch=[self.tmpdir] if watch is None else watch, **kw)
+
+    def assert_refused(self, findings, notes, path, reason=None):
+        self.assertTrue(has(findings, "incomplete check"), findings)
+        self.assertTrue(has(findings, path), findings)
+        if reason:
+            self.assertTrue(has(findings, reason), findings)
+        self.assertFalse(has(notes, path), notes)
+
+    # Accepted: the six folders of the user's NixOS machine (#30), and nothing is hidden.
+    def test_verified_systemd_folder_is_a_note_not_a_finding(self):
+        path = self.make(self.name(), **ROOT_0700)
+        findings, notes = self.postflight(self.marker())
+        self.assertEqual(findings, [])
+        self.assertTrue(has(notes, f"{guard.EXCLUDED}: {path}"))
+        self.assertTrue(has(notes, "polkit.service (root:root, mode 0700, this boot)"))
+        self.assertTrue(has(notes, "does not search it"))
+
+    def test_the_six_folders_seen_on_the_user_machine_are_notes(self):
+        units = ("polkit.service", "systemd-logind.service", "wpa_supplicant.service",
+                 "nscd.service", "bluetooth.service", "dbus-broker.service")
+        paths = [self.make(self.name(unit, suffix=f"Ab{i}c{i}d"), **ROOT_0700)
+                 for i, unit in enumerate(units)]
+        findings, notes = self.postflight(self.marker())
+        self.assertEqual(findings, [])
+        for path in paths:
+            self.assertTrue(has(notes, path))
+        self.assertEqual(len(notes), 6)
+
+    def test_writes_elsewhere_under_tmp_are_still_found(self):
+        self.make(self.name(), **ROOT_0700)
+        marker = self.marker()
+        os.makedirs(os.path.join(self.tmpdir, "other"))
+        with open(os.path.join(self.tmpdir, "other", "leak.log"), "w") as f:
+            f.write("x")
+        findings, notes = self.postflight(marker)
+        self.assertTrue(has(findings, "leak.log"))
+        self.assertEqual(len(notes), 1)
+
+    def test_shm_check_still_runs_with_an_excluded_folder(self):
+        self.make(self.name(), **ROOT_0700)
+        marker = self.marker()
+        open(os.path.join(self.shm, "xenia_memory_7_0000beef"), "w").close()
+        findings, notes = self.postflight(marker)
+        self.assertTrue(has(findings, "xenia_memory_7_0000beef"))
+        self.assertEqual(len(notes), 1)
+
+    def test_readable_folder_with_the_systemd_name_is_searched(self):
+        path = self.make(self.name())  # owned by this process and readable
+        marker = self.marker()
+        with open(os.path.join(path, "inside.log"), "w") as f:
+            f.write("x")
+        findings, notes = self.postflight(marker)
+        self.assertTrue(has(findings, os.path.join(path, "inside.log")))
+        self.assertEqual(notes, [])
+
+    # Refused: the owner, the group and the mode.
+    def test_folder_owned_by_the_user_is_a_finding(self):
+        path = self.make(self.name(), st_uid=1000, st_gid=1000,
+                         st_mode=stat.S_IFDIR | 0o700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "owner 1000:1000, not root:root")
+
+    def test_folder_of_another_group_is_a_finding(self):
+        path = self.make(self.name(), st_uid=0, st_gid=100, st_mode=stat.S_IFDIR | 0o700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "owner 0:100")
+
+    def test_other_modes_are_findings(self):
+        for mode in (0o750, 0o755, 0o711, 0o701, 0o1700, 0o2700, 0o4700, 0o600, 0o000):
+            with self.subTest(mode=f"{mode:04o}"):
+                self.fresh_tmp()
+                path = self.make(self.name(), st_uid=0, st_gid=0, st_mode=stat.S_IFDIR | mode)
+                findings, notes = self.postflight(self.marker())
+                self.assert_refused(findings, notes, path, f"mode {mode:04o}, not 0700")
+
+    # Refused: names that only look like the systemd form.
+    def test_near_names_are_ordinary_unreadable_folders(self):
+        near = (
+            self.name(boot=self.BOOT.upper()),          # upper case boot id
+            self.name(boot=self.BOOT[:31]),             # 31 digits
+            self.name(boot=self.BOOT + "0"),            # 33 digits
+            self.name(unit="polkit"),                   # no unit type
+            self.name(unit="multi-user.target"),        # a type without PrivateTmp=
+            self.name(suffix="AbC12"),                  # five random characters
+            self.name(suffix="AbC1234"),                # seven
+            self.name(suffix="AbC_12"),                 # not a letter or digit
+            self.name() + "-x",                         # something after the name
+            "x" + self.name(),                          # something before
+            "systemd-private-",
+            f"systemd-private-{self.BOOT}-polkit.service",
+            f"systemd-private-{self.BOOT}--AbC123",
+        )
+        for name in near:
+            with self.subTest(name=name):
+                self.fresh_tmp()
+                path = self.make(name, **ROOT_0700)
+                findings, notes = self.postflight(self.marker())
+                self.assert_refused(findings, notes, path)
+                # Refused by the name rule itself, before any other condition is looked at.
+                self.assertFalse(has(findings, "not accepted as a systemd"), findings)
+
+    def test_folder_of_another_boot_is_a_finding(self):
+        path = self.make(self.name(boot="f" * 32), **ROOT_0700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "not named for the current boot")
+
+    def test_unreadable_boot_id_is_a_finding(self):
+        path = self.make(self.name(), **ROOT_0700)
+        with mock.patch.object(guard, "BOOT_ID_PATH", os.path.join(self.root, "absent")):
+            findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "the boot id cannot be read")
+
+    def test_entry_that_is_not_a_folder_is_a_finding(self):
+        for label, kind in (("file", stat.S_IFREG), ("socket", stat.S_IFSOCK),
+                            ("fifo", stat.S_IFIFO), ("device", stat.S_IFBLK)):
+            with self.subTest(kind=label):
+                self.fresh_tmp()
+                path = self.make(self.name(), st_uid=0, st_gid=0, st_mode=kind | 0o700)
+                findings, notes = self.postflight(self.marker())
+                self.assert_refused(findings, notes, path, "not a real folder")
+
+    # Refused: the place.
+    def test_nested_folder_is_a_finding(self):
+        path = self.make(self.name(), parent=os.path.join(self.tmpdir, "sub"), **ROOT_0700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, f"not directly under {self.tmpdir}")
+
+    def test_folder_inside_a_systemd_folder_is_a_finding(self):
+        outer = self.make(self.name())  # readable, so searched
+        path = self.make(self.name(suffix="Inner1"), parent=outer, **ROOT_0700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "not directly under")
+
+    def test_folder_outside_tmp_is_a_finding(self):
+        path = self.make(self.name(), parent=self.home, **ROOT_0700)
+        findings, notes = self.postflight(self.marker(), watch=[self.home])
+        self.assert_refused(findings, notes, path, "not directly under")
+
+    # Refused: links.
+    def test_link_with_the_systemd_name_is_never_excluded_nor_followed(self):
+        target = os.path.join(self.root, "target")
+        os.mkdir(target)
+        link = os.path.join(self.tmpdir, self.name())
+        os.symlink(target, link)
+        marker = self.marker()
+        with open(os.path.join(target, "behind-the-link.log"), "w") as f:
+            f.write("x")
+        findings, notes = self.postflight(marker)
+        self.assertEqual(notes, [])
+        self.assertFalse(has(findings, "behind-the-link.log"))
+        self.assertEqual(findings, [])
+
+    def test_new_link_with_the_systemd_name_is_a_finding(self):
+        target = os.path.join(self.root, "target")
+        os.mkdir(target)
+        marker = self.marker()
+        link = os.path.join(self.tmpdir, self.name())
+        os.symlink(target, link)
+        findings, notes = self.postflight(marker)
+        self.assertTrue(has(findings, f"file written outside the private folder: {link}"))
+        self.assertEqual(notes, [])
+
+    # Refused: a change while the folder is checked.
+    def test_change_during_the_check_is_a_finding(self):
+        changes = {
+            "owner": {"st_uid": 1000},
+            "group": {"st_gid": 100},
+            "mode": {"st_mode": stat.S_IFDIR | 0o755},
+            "type": {"st_mode": stat.S_IFLNK | 0o700},
+            "inode": {"st_ino": 1},
+            "status change": {"st_ctime_ns": 1},
+        }
+        for label, change in changes.items():
+            with self.subTest(change=label):
+                self.fresh_tmp()
+                path = self.make(self.name(), **ROOT_0700)
+                self.on_open[path] = dict(ROOT_0700, **change)
+                findings, notes = self.postflight(self.marker())
+                self.assert_refused(findings, notes, path, "changed while it was checked")
+
+    def test_folder_that_vanishes_during_the_check_is_a_finding(self):
+        path = self.make(self.name(), **ROOT_0700)
+        self.vanish.add(path)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "vanished while it was checked")
+
+    # Refused: a check run as root, and unrelated folders.
+    def test_check_run_as_root_excludes_nothing(self):
+        self.euid = 0
+        path = self.make(self.name(), **ROOT_0700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path, "this check runs as root")
+
+    def test_unrelated_unreadable_folder_under_tmp_is_a_finding(self):
+        path = self.make("some-root-tool", **ROOT_0700)
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read any folder")
+    def test_unprivileged_real_unreadable_own_folder_is_a_finding(self):
+        # Not simulated: a folder of this process with mode 0000 and the systemd name.
+        path = os.path.join(self.tmpdir, self.name())
+        os.mkdir(path)
+        os.chmod(path, 0o000)
+        with mock.patch.object(guard, "BOOT_ID_PATH", self.boot_file):
+            findings, notes = guard.postflight(self.private, self.marker(),
+                                               watch=[self.tmpdir], shm_dir=self.shm)
+        self.assert_refused(findings, notes, path, f"owner {os.geteuid()}:")
+
+    @unittest.skipUnless(os.path.exists("/proc/sys/kernel/random/boot_id"), "not Linux")
+    def test_boot_id_of_the_running_kernel_is_read(self):
+        with mock.patch.object(guard, "BOOT_ID_PATH", "/proc/sys/kernel/random/boot_id"):
+            value = guard.current_boot_id()
+        self.assertRegex(value, r"^[0-9a-f]{32}$")
+
+    def test_command_line_says_what_is_excluded(self):
+        self.make(self.name(), **ROOT_0700)
+        marker = self.marker()
+        out = io.StringIO()
+        with self.unprivileged(), contextlib.redirect_stdout(out):
+            status = guard.main(["--private-dir", self.private, "postflight", "--marker",
+                                 marker, "--shm-dir", self.shm, "--watch", self.tmpdir])
+        self.assertEqual(status, 0, out.getvalue())
+        self.assertIn(f"note: {guard.EXCLUDED}", out.getvalue())
+        self.assertIn("except 1 folder(s) excluded from the watched scope", out.getvalue())
+
+
+class ScopeNotesTest(PostflightTest):
+    """Folders left out of the search are named, and links are never followed (#30)."""
+
+    def test_folder_on_another_file_system_is_a_note(self):
+        mount = os.path.join(self.home, "mnt")
+        os.mkdir(mount)
+        marker = self.marker()
+        with open(os.path.join(mount, "inside.log"), "w") as f:
+            f.write("x")
+        real_lstat = os.lstat
+
+        def lstat(path, *args, **kwargs):
+            st = real_lstat(path, *args, **kwargs)
+            if os.fspath(path) == mount:
+                return fake_stat(st, st_dev=st.st_dev + 1)
+            return st
+
+        with mock.patch("os.lstat", lstat):
+            findings, notes = guard.postflight(self.private, marker, watch=[self.home],
+                                               shm_dir=self.shm)
+        self.assertEqual(findings, [])
+        self.assertTrue(has(notes, f"{guard.EXCLUDED}: {mount} is on another file system"))
+
+    def test_new_link_to_a_folder_is_found(self):
+        target = os.path.join(self.root, "elsewhere")
+        os.mkdir(target)
+        marker = self.marker()
+        link = os.path.join(self.home, "link-to-folder")
+        os.symlink(target, link)
+        findings, _ = guard.postflight(self.private, marker, watch=[self.home],
+                                       shm_dir=self.shm)
+        self.assertTrue(has(findings, f"file written outside the private folder: {link}"))
+
+    def test_new_link_into_the_private_folder_is_found(self):
+        marker = self.marker()
+        links = (os.path.join(self.home, "to-private-folder"),
+                 os.path.join(self.home, "to-private-file"))
+        os.symlink(os.path.join(self.private, "generated"), links[0])
+        os.symlink(os.path.join(self.private, "logs", "marker"), links[1])
+        findings, _ = guard.postflight(self.private, marker, watch=[self.home],
+                                       shm_dir=self.shm)
+        for link in links:
+            self.assertTrue(has(findings, f"file written outside the private folder: {link}"),
+                            findings)
 
 
 @unittest.skipIf(GIT is None, "git is needed for the work tree check")
