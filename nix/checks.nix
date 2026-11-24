@@ -445,7 +445,9 @@ in
              test_near_names_are_ordinary_unreadable_folders \
              test_change_during_the_check_is_a_finding \
              test_unprivileged_real_unreadable_own_folder_is_a_finding \
-             test_new_link_into_the_private_folder_is_found; do
+             test_new_link_into_the_private_folder_is_found \
+             test_eperm_is_a_finding \
+             test_folder_on_another_file_system_is_a_finding; do
       grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }
     done
     ${private-guard}/bin/fifa2010wc-private-guard --help > "$out/help.txt"

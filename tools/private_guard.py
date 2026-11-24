@@ -31,9 +31,11 @@ no write destination, unless --no-writes says it writes nothing.
 One kind of unreadable folder is a note instead (#30): a systemd PrivateTmp= folder, when
 every condition of systemd_private_tmp() holds. It is directly under /tmp, named as the
 service manager names it for this boot, a real folder (not a link), owned by root:root,
-mode 0700, unchanged while it is checked, and this check runs without privileges. Such a
-folder is excluded from the watched scope and never searched, and the note says so. A
-folder on another file system is not searched either, and a note says so too.
+mode 0700, unchanged while it is checked, opening it fails with EACCES, and this check
+runs without privileges. Such a folder is excluded from the watched scope and never
+searched, and the note says so. A folder on another file system, such as a mount point, is
+not searched either: that is an incomplete check, a finding, unless the folder is itself one
+of the watched places, which is then searched on its own.
 
 These checks cover the declared destinations and the watched places only. They do not
 prove that nothing was written anywhere else (docs/J2_PREREQUISITES.md section 6.1). A
@@ -44,6 +46,7 @@ Only the Python standard library is used. Run it with `python3 -I`.
 """
 
 import argparse
+import errno
 import os
 import re
 import resource
@@ -291,14 +294,16 @@ def systemd_private_tmp(path, first):
     `first` is its lstat() from the traversal. Returns ("search", None) when this process
     can open the folder, which is then searched like any other; ("exclude", note) when it is
     a verified systemd folder that this process cannot read; ("refuse", reason) otherwise,
-    which the caller reports as a location that could not be read. The name alone proves
+    which the caller reports as a location that could not be read. Only EACCES counts as
+    the refusal to open: EPERM or any other error is a refusal here. The name alone proves
     nothing: the place, the type, the owner, the mode and their stability are all needed."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except PermissionError:
-        pass
     except OSError as exc:
-        return "refuse", f"cannot be opened ({exc.strerror or exc})"
+        if exc.errno != errno.EACCES:
+            # EPERM, which PermissionError also carries, is not the refusal of a folder
+            # mode to an unprivileged user (review R-31-2).
+            return "refuse", f"cannot be opened ({exc.strerror or exc})"
     else:
         os.close(fd)
         return "search", None
@@ -333,16 +338,21 @@ def systemd_private_tmp(path, first):
                        "unprivileged check cannot read it and does not search it")
 
 
-def changed_since(top, marker_ns, private):
+def changed_since(top, marker_ns, private, searched_elsewhere=()):
     """Files and symbolic links under `top`, on the same file system, outside the private
     folder, whose modification or status change time is after the marker. Links are never
-    followed. Returns (changed, unreadable_locations, notes): a note names each folder left
-    out of the search, a verified systemd PrivateTmp folder or another file system."""
-    changed, unreadable, notes = [], [], []
+    followed. Returns (changed, unreadable_locations, unsearched, notes).
+
+    `unsearched` lists the folders on another file system: they are not searched here, which
+    makes the check incomplete, unless their canonical path is in `searched_elsewhere`, the
+    watched places searched on their own (review R-31-1). A note names each verified systemd
+    PrivateTmp folder left out of the search."""
+    changed, unreadable, unsearched, notes = [], [], [], []
+    searched_elsewhere = {canonical(path) for path in searched_elsewhere}
     try:
         top_dev = os.lstat(top).st_dev
     except OSError:
-        return changed, [top], notes
+        return changed, [top], unsearched, notes
     private = canonical(private)
 
     def on_error(error):
@@ -371,8 +381,9 @@ def changed_since(top, marker_ns, private):
             if within(path, private):
                 continue
             if st.st_dev != top_dev:
-                notes.append(f"{EXCLUDED}: {path} is on another file system, which is not "
-                             "searched")
+                # Not followed: another file system is searched only as a watched place.
+                if canonical(path) not in searched_elsewhere:
+                    unsearched.append(path)
                 continue
             if SYSTEMD_PRIVATE_RE.fullmatch(name):
                 outcome, detail = systemd_private_tmp(path, st)
@@ -397,7 +408,7 @@ def changed_since(top, marker_ns, private):
                 continue
             if is_new(st):
                 changed.append(path)
-    return sorted(changed), unreadable, notes
+    return sorted(changed), unreadable, unsearched, notes
 
 
 def postflight(private, marker, watch=(), shm_dir="/dev/shm", sdk=None, nix="nix", repo=None,
@@ -407,14 +418,18 @@ def postflight(private, marker, watch=(), shm_dir="/dev/shm", sdk=None, nix="nix
     Every place in `watch` must be searched in full. A place that is absent, or a folder or
     file under it that cannot be read, makes the check incomplete, which is a finding.
     Only the places listed in `optional` may be absent, and that is reported as a note.
-    The folders that changed_since() leaves out of the search are reported as notes too."""
+    A folder on another file system under a watched place is a finding too, unless it is
+    itself a watched place. The verified systemd PrivateTmp folders that changed_since()
+    leaves out of the search are reported as notes."""
     findings, notes = [], []
     try:
         marker_ns = os.stat(marker).st_mtime_ns
     except OSError:
         return [f"marker not found: {marker} (run preflight --marker first)"], notes
     optional = {canonical(path) for path in optional}
-    for top in list(watch) + sorted(optional - {canonical(t) for t in watch}):
+    tops = list(watch) + sorted(optional - {canonical(t) for t in watch})
+    searched = {canonical(top) for top in tops if os.path.isdir(top)}
+    for top in tops:
         if not os.path.isdir(top):
             if canonical(top) in optional:
                 notes.append(f"optional watched folder absent: {top}")
@@ -422,8 +437,12 @@ def postflight(private, marker, watch=(), shm_dir="/dev/shm", sdk=None, nix="nix
                 findings.append(f"incomplete check: watched folder absent or not a folder: "
                                 f"{top}")
             continue
-        changed, unreadable, scope_notes = changed_since(top, marker_ns, private)
+        changed, unreadable, unsearched, scope_notes = changed_since(
+            top, marker_ns, private, searched_elsewhere=searched - {canonical(top)})
         notes.extend(note for note in scope_notes if note not in notes)
+        for path in unsearched:
+            findings.append(f"incomplete check: {path} under {top} is on another file system "
+                            "and was not searched; watch it with --watch to search it")
         for path in changed:
             finding = f"file written outside the private folder: {path}"
             if finding not in findings:

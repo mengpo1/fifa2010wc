@@ -6,6 +6,7 @@ produces game data. Run with `python3 -I tools/test_private_guard.py`.
 """
 
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -451,6 +452,7 @@ class SystemdPrivateTmpTest(Base):
         self.on_open = {}     # path -> attributes lstat reports once open has been tried
         self.vanish = set()   # paths whose lstat fails once open has been tried
         self.locked = set()   # paths this process cannot open or list
+        self.open_errno = {}  # path -> errno of the refused open (default EACCES)
 
     def name(self, unit="polkit.service", boot=None, suffix="AbC123"):
         return f"systemd-private-{boot or self.BOOT}-{unit}-{suffix}"
@@ -489,7 +491,8 @@ class SystemdPrivateTmpTest(Base):
             key = os.fspath(path)
             tried.add(key)
             if key in self.locked:
-                raise PermissionError(13, "Permission denied", key)
+                code = self.open_errno.get(key, errno.EACCES)
+                raise OSError(code, os.strerror(code), key)
             return real_open(path, flags, *args, **kwargs)
 
         def scandir(path="."):
@@ -693,6 +696,31 @@ class SystemdPrivateTmpTest(Base):
         findings, notes = self.postflight(self.marker())
         self.assert_refused(findings, notes, path, "vanished while it was checked")
 
+    # Review R-31-2: only EACCES is the refusal of the mode to an unprivileged process.
+    def test_eacces_with_verified_attributes_is_the_only_accepted_refusal(self):
+        path = self.make(self.name(), **ROOT_0700)
+        self.open_errno[path] = errno.EACCES
+        findings, notes = self.postflight(self.marker())
+        self.assertEqual(findings, [])
+        self.assertTrue(has(notes, path))
+
+    def test_eperm_is_a_finding(self):
+        path = self.make(self.name(), **ROOT_0700)
+        self.open_errno[path] = errno.EPERM
+        findings, notes = self.postflight(self.marker())
+        self.assert_refused(findings, notes, path,
+                            f"cannot be opened ({os.strerror(errno.EPERM)})")
+
+    def test_other_open_errors_are_findings(self):
+        for code in (errno.EIO, errno.ELOOP, errno.ENOTDIR, errno.ENOENT):
+            with self.subTest(error=errno.errorcode[code]):
+                self.fresh_tmp()
+                path = self.make(self.name(), **ROOT_0700)
+                self.open_errno[path] = code
+                findings, notes = self.postflight(self.marker())
+                self.assert_refused(findings, notes, path,
+                                    f"cannot be opened ({os.strerror(code)})")
+
     # Refused: a check run as root, and unrelated folders.
     def test_check_run_as_root_excludes_nothing(self):
         self.euid = 0
@@ -737,25 +765,57 @@ class SystemdPrivateTmpTest(Base):
 class ScopeNotesTest(PostflightTest):
     """Folders left out of the search are named, and links are never followed (#30)."""
 
-    def test_folder_on_another_file_system_is_a_note(self):
+    @contextlib.contextmanager
+    def mounted(self, mount):
+        """`mount` and everything under it appear to be on another file system."""
+        real_lstat = os.lstat
+
+        def lstat(path, *args, **kwargs):
+            st = real_lstat(path, *args, **kwargs)
+            key = os.fspath(path)
+            if key == mount or key.startswith(mount + os.sep):
+                return fake_stat(st, st_dev=st.st_dev + 1)
+            return st
+
+        with mock.patch("os.lstat", lstat):
+            yield
+
+    # Review R-31-1: a folder that is not searched cannot give an OK.
+    def test_folder_on_another_file_system_is_a_finding(self):
         mount = os.path.join(self.home, "mnt")
         os.mkdir(mount)
         marker = self.marker()
         with open(os.path.join(mount, "inside.log"), "w") as f:
             f.write("x")
-        real_lstat = os.lstat
-
-        def lstat(path, *args, **kwargs):
-            st = real_lstat(path, *args, **kwargs)
-            if os.fspath(path) == mount:
-                return fake_stat(st, st_dev=st.st_dev + 1)
-            return st
-
-        with mock.patch("os.lstat", lstat):
+        with self.mounted(mount):
             findings, notes = guard.postflight(self.private, marker, watch=[self.home],
                                                shm_dir=self.shm)
-        self.assertEqual(findings, [])
-        self.assertTrue(has(notes, f"{guard.EXCLUDED}: {mount} is on another file system"))
+        self.assertTrue(has(findings, f"incomplete check: {mount} under {self.home} is on "
+                                      "another file system and was not searched"), findings)
+        self.assertEqual(notes, [])
+
+    def test_folder_on_another_file_system_fails_the_command(self):
+        mount = os.path.join(self.home, "mnt")
+        os.mkdir(mount)
+        marker = self.marker()
+        out = io.StringIO()
+        with self.mounted(mount), contextlib.redirect_stdout(out):
+            status = guard.main(["--private-dir", self.private, "postflight", "--marker",
+                                 marker, "--shm-dir", self.shm, "--watch", self.home])
+        self.assertEqual(status, 1, out.getvalue())
+        self.assertIn("FINDING: incomplete check", out.getvalue())
+
+    def test_mount_that_is_itself_watched_is_searched(self):
+        mount = os.path.join(self.home, "mnt")
+        os.mkdir(mount)
+        marker = self.marker()
+        with open(os.path.join(mount, "inside.log"), "w") as f:
+            f.write("x")
+        with self.mounted(mount):
+            findings, _ = guard.postflight(self.private, marker, watch=[self.home, mount],
+                                           shm_dir=self.shm)
+        self.assertFalse(has(findings, "another file system"), findings)
+        self.assertTrue(has(findings, os.path.join(mount, "inside.log")), findings)
 
     def test_new_link_to_a_folder_is_found(self):
         target = os.path.join(self.root, "elsewhere")

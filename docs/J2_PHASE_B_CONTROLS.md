@@ -13,12 +13,15 @@ L'outil est `tools/private_guard.py`, empaqueté par le flake. Il a trois comman
 |---|---|---|
 | `check-dir` | CP-1 | Le dossier privé est absolu. Il n'est ni dans `/nix/store`, ni dans le dépôt, ni dans un dépôt git. Il appartient à l'utilisateur, en mode `0700` ou plus strict. Ses sous-dossiers existent, et les fichiers de `iso/` sont en lecture seule |
 | `preflight` | CP-1, puis CP-4 avant | Destinations **obligatoires** (`--dest`, ou `--no-writes` pour une étape qui n'écrit rien), dossier de travail, `TMPDIR`, dossiers XDG et `REX_APP_ROOT` dans le dossier privé. Pas de root, masque `077`, *core dumps* désactivés. Aucun réglage de ReXGlue lu avant l'environnement, aucun `.xexp` imprévu, aucun objet `xenia_memory_*` restant |
-| `postflight` | CP-4 après | Fichiers et liens créés, modifiés ou déplacés depuis le repère, hors du dossier privé, dans les emplacements surveillés. Objets `xenia_memory_*` restants. `nix store verify` du SDK et `git status` du dépôt, si on le demande. Les dossiers exclus de la recherche sont nommés en note (§3.1) |
+| `postflight` | CP-4 après | Fichiers et liens créés, modifiés ou déplacés depuis le repère, hors du dossier privé, dans les emplacements surveillés. Objets `xenia_memory_*` restants. `nix store verify` du SDK et `git status` du dépôt, si on le demande. Seuls les dossiers systemd vérifiés sont exclus de la recherche, et nommés en note (§3.1) |
 
 **Un contrôle qui ne peut pas s'exécuter en entier est un constat, jamais un `OK`** :
 - `/dev/shm` illisible ;
 - un emplacement surveillé absent, sauf s'il est déclaré par `--optional-watch` ;
-- un dossier ou un fichier illisible sous un emplacement surveillé.
+- un dossier ou un fichier illisible sous un emplacement surveillé ;
+- un dossier d'un autre système de fichiers, comme un point de montage, sous un emplacement
+  surveillé : il n'est pas cherché. Il ne l'est que s'il est lui-même un emplacement
+  `--watch` (§3.1).
 
 **Une seule exception** : un dossier `PrivateTmp` de systemd, vérifié selon toutes les
 conditions du §3.1. Il est exclu de la surveillance et nommé en note ; il ne compte jamais
@@ -172,9 +175,10 @@ Depuis le même shell :
 **Limite** : ces contrôles couvrent les destinations déclarées et les emplacements
 surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs.
 
-### 3.1 Dossiers exclus de la surveillance, nommés en note (ticket #30)
+### 3.1 Dossiers systemd exclus de la surveillance, et autres systèmes de fichiers (ticket #30)
 
-`postflight` ne cherche pas dans deux sortes de dossiers. Il les nomme chacun dans une ligne
+`postflight` exclut de sa recherche une seule sorte de dossier illisible : les dossiers
+`PrivateTmp` de systemd vérifiés. Il les nomme chacun dans une ligne
 `note: excluded from the watched scope: …`, et son `OK` dit combien il en a exclu.
 
 **1. Les dossiers `PrivateTmp` de systemd.**
@@ -194,7 +198,7 @@ surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs.
   | Démarrage | Les 32 chiffres sont l'identifiant du démarrage en cours (`/proc/sys/kernel/random/boot_id`) |
   | Type | Un vrai dossier selon `lstat`. Un lien n'est jamais suivi ni exclu |
   | Propriétaire et droits | `root:root`, et mode exactement `0700` |
-  | Accès | Le contrôle ne peut pas ouvrir le dossier, et il ne tourne pas en root. Un dossier qu'il peut ouvrir est cherché comme les autres |
+  | Accès | L'ouverture du dossier échoue par `EACCES`, et par cette erreur seulement, et le contrôle ne tourne pas en root. `EPERM`, que Python range aussi sous `PermissionError`, ou toute autre erreur, est un refus (revue R-31-2). Un dossier que le contrôle peut ouvrir est cherché comme les autres |
   | Stabilité | Le même `lstat` avant et après la tentative d'ouverture : appareil, inode, type, mode, propriétaire, groupe et date de changement d'état. Sinon, refus |
 
 - **Le nom ne prouve rien seul** : c'est la réunion de l'emplacement, du type, du
@@ -206,9 +210,15 @@ surveillés. Ils ne prouvent pas qu'aucune sortie n'a été écrite ailleurs.
   - la phase B n'exécute rien en root : `preflight` refuse une étape lancée en root ;
   - le contrôle ne lit pas ces dossiers et ne peut rien en dire.
 
-**2. Les dossiers d'un autre système de fichiers** sous un emplacement surveillé, par
-exemple un point de montage. Ils n'étaient pas cherchés auparavant non plus, mais sans le
-dire. Une note les nomme maintenant.
+**Les dossiers d'un autre système de fichiers** sous un emplacement surveillé, par exemple
+un point de montage, sont un **constat bloquant** (revue R-31-1).
+- Ils ne sont pas suivis, donc pas cherchés. Ils étaient déjà ignorés, mais sans constat :
+  `postflight` répondait alors `OK` sans les avoir cherchés.
+- Le constat dit `incomplete check: <chemin> under <emplacement> is on another file system
+  and was not searched`.
+- Pour le chercher, il faut le surveiller lui-même, avec `--watch <chemin>` : il est alors
+  cherché à part, et il n'est plus un constat sous l'emplacement parent.
+- Aucune dérogation ne se fait par son nom ou par son emplacement.
 
 **Inchangé** :
 - tout autre dossier illisible reste un constat bloquant ;
