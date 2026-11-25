@@ -87,6 +87,42 @@
         runtimeInputs = [ pkgs.python3 ];
         text = ''exec python3 -I ${./tools/address_compare.py} "$@"'';
       };
+
+      # J2, step B1 (ticket #32): the controlled extraction of the disc tree with
+      # `rexglue vfs dump`, run by hand on the user's machine after PB-0
+      # (docs/J2_B1_EXTRACTION.md). The SDK is a dependency, so building this command builds
+      # the SDK first, before any control starts. The extraction runs in a bubblewrap sandbox,
+      # without privileges: no network, and writes only in its destinations. The disc image
+      # and the private folder are run time arguments and never enter the store. `nix` and
+      # `coredumpctl` come from the user's system, so that they match its daemon and its
+      # journal.
+      b1-tool = ./tools/b1_extract.py;
+      # The only part of the store the sandbox of B1 shows (owner's arbitration on PR #33,
+      # D-019): the closure of what runs inside it, Python, the SDK and the tool, as Nix
+      # computes it at build time from the references of these paths. No list is kept by
+      # hand. `store-paths` lists the paths, `registration` holds their references.
+      b1-closure = pkgs.closureInfo {
+        rootPaths = [
+          pkgs.python3
+          rexglue-sdk
+          b1-tool
+        ];
+      };
+      b1-extract = pkgs.writeShellApplication {
+        name = "fifa2010wc-b1-extract";
+        runtimeInputs = [
+          pkgs.python3
+          pkgs.git
+          pkgs.findutils
+          pkgs.util-linux
+          pkgs.bubblewrap
+        ];
+        text = ''
+          exec python3 -I ${b1-tool} \
+            --guard ${./tools/private_guard.py} --sdk ${rexglue-sdk} \
+            --store-closure ${b1-closure} "$@"
+        '';
+      };
     in
     {
       packages.${system} = {
@@ -97,6 +133,7 @@
           private-guard
           private-project
           address-compare
+          b1-extract
           ;
         default = rexglue-sdk;
       };
@@ -127,6 +164,11 @@
           program = "${address-compare}/bin/fifa2010wc-address-compare";
           meta.description = "Compare ReXGlue address lists with configured entries (J2)";
         };
+        b1-extract = {
+          type = "app";
+          program = "${b1-extract}/bin/fifa2010wc-b1-extract";
+          meta.description = "Controlled extraction of the disc tree, step B1 (J2)";
+        };
       };
 
       checks.${system} = import ./nix/checks.nix {
@@ -140,6 +182,8 @@
           private-guard
           private-project
           address-compare
+          b1-extract
+          b1-closure
           ;
       };
 

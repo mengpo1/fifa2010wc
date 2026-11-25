@@ -94,6 +94,8 @@
   l'utilisateur, seulement après PB-0. Le plan seul n'autorise aucune exécution.
 - **État (2026-11-23)** : PA-0 et PJ2-3 sont accordées (D-015), et PB-0 n'est pas
   franchi. J2 commence par l'étape A1 : `docs/J2_A1_SDK_INVENTORY.md`.
+- **État (2026-11-24)** : PA-1 est franchi (D-016). PB-0 est franchi pour B1 seulement
+  (D-017) ; la procédure de B1 est `docs/J2_B1_EXTRACTION.md`. PB-1 n'est pas franchi.
 - Correctifs du SDK nécessaires à ce jeu transposés vers le commit retenu. Au minimum
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
   0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite. *Analyse de

@@ -23,8 +23,11 @@
 | D-012 | Hébergement du projet | Acceptée |
 | D-013 | Pas de lanceur graphique avant J5 | Proposée |
 | D-014 | Xenia seulement comme oracle de développement | Proposée |
-| D-015 | Lancement de J2 : autorisations PA-0 et PJ2-3, arbitrages de la phase A | **Acceptée** (2026-11-23) ; phase B soumise à PB-0, non franchi |
-| D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi |
+| D-015 | Lancement de J2 : autorisations PA-0 et PJ2-3, arbitrages de la phase A | **Acceptée** (2026-11-23) ; phase B soumise à PB-0, franchi le 2026-11-24 (D-017) |
+| D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi à cette date, franchi ensuite (D-017) |
+| D-017 | Entrée en phase B de J2 : PB-0 franchi, B1 seulement | **Acceptée** (2026-11-24) ; PB-1 non franchi |
+| D-018 | Arbitrages de B1 : plantages de l'extraction (option B) et rapport J0 local obligatoire | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
+| D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
 
 ---
 
@@ -409,3 +412,131 @@
   - **Aucune opération sur l'ISO ni sur les XEX n'a lieu avant PB-0.** Rien du jeu ne va
     dans GitHub, en CI, dans le cloud ni dans `/nix/store` (D-007).
   - Les limites consignées dans le rapport (§4.2 à §4.6) restent à respecter en phase B.
+
+## D-017 — Entrée en phase B de J2 : PB-0 franchi, B1 seulement
+
+- **Statut** : **Acceptée** (2026-11-24). Sources :
+  - la décision consignée par l'orchestrateur dans le
+    [ticket #14, commentaire 7143518212](https://github.com/mengpo1/fifa2010wc/issues/14#issuecomment-7143518212) ;
+  - le bilan des contrôles CP-1 à CP-7 présenté au porteur du projet, dans le
+    [commentaire 7143470897](https://github.com/mengpo1/fifa2010wc/issues/14#issuecomment-7143470897)
+    du même ticket ;
+  - la réponse du porteur, dans la conversation d'orchestration, à la question
+    « autorises-tu formellement le passage à la phase B et le traitement local des
+    fichiers du jeu sur ton NixOS ? » : **« oui »**.
+- **Décision : PB-0 est franchi**, sous les conditions déjà documentées.
+- **Prérequis présentés au porteur**, tels que le ticket #14 les consigne :
+  - PJ2-3 accordée (D-015) ; PA-1 franchi (D-016) ; méthode des adresses : M1 d'abord, M3
+    en repli, sans présumer un code identique à celui du projet A ;
+  - **CP-1** : `private_guard check-dir` et `private-project init` passent sur la machine
+    du porteur ; l'ISO est en lecture seule ;
+  - **CP-2** : aucun dossier privé en entrée Nix, d'après la revue des fichiers Nix ; CI
+    publique verte, sans données du jeu. Le `nix flake check` local a répondu
+    `all checks passed!`, mais avec `running 0 flake checks` ;
+  - **CP-3** : avant l'opération, la seule grande correspondance du magasin est le fichier
+    `nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude`, déjà relevé et non ouvert. Aucun `*.xex`,
+    aucune grande `*.iso`. Contrôle non exhaustif ;
+  - **CP-4** : essai à blanc de `preflight` et `postflight` réussi, avec la surveillance du
+    dossier personnel, de `/tmp`, de 31 montages Btrfs persistants, du dépôt et du SDK ;
+    6 dossiers `PrivateTmp` de systemd exclus et nommés (#30) ; aucun constat.
+    - Un `SIGSEGV` synthétique sous `ulimit -c 0` a donné `COREFILE none`. Ce n'est pas
+      une preuve pour tous les plantages.
+    - `kernel.core_pattern` reste un tube vers systemd-coredump ;
+  - **CP-5** : `logs/share` vide, aucun fichier à partager. Analyse et relecture
+    obligatoires avant tout partage ;
+  - **CP-6** : `main` à `fda9971`, propre ; crochet `.githooks` actif ; 57 fichiers du dépôt
+    analysés sans donnée propriétaire ; aucun fichier indexé ;
+  - **CP-7** : manifeste public sans adresse ; comparaison obligatoire avant toute
+    réutilisation des adresses du projet A.
+- **Portée exacte** :
+  - **B1 seulement**, sur la machine NixOS du porteur, avec son propre exemplaire, et
+    exclusivement dans `$WC2010_PRIVATE_DIR` : ni dépôt, ni cloud, ni CI, ni magasin Nix ;
+  - B1 est l'extraction par `rexglue vfs dump`, sans décodage des XEX
+    (`docs/J2_A1_SDK_INVENTORY.md` §3.3). Sa procédure versionnée et sa revue
+    indépendante sont préparées **sans aucune donnée du jeu**
+    ([ticket #32](https://github.com/mengpo1/fifa2010wc/issues/32),
+    `docs/J2_B1_EXTRACTION.md`) ;
+  - avant et après chaque opération privée :
+    - CP-3 et CP-4 ;
+    - la surveillance explicite des montages d'impermanence ;
+    - des journaux confinés au dossier privé ;
+    - refus du root, `umask 077`, `ulimit -c 0` ;
+    - l'ISO en lecture seule ;
+  - aucune sortie ni aucun contenu propriétaire dans les PR ou en CI.
+- **Ce qui n'est pas décidé** :
+  - **PB-1 n'est pas franchi.** Après B1, on compare 49 fichiers, 8 dossiers, les SHA-256
+    des deux XEX et celui de l'ISO avec J0, et l'on s'arrête en cas d'écart.
+    L'orchestrateur décide sur les résultats locaux ;
+  - **B2 ne commence pas avant la décision PB-1** ;
+  - aucune décision PB-2, PB-3 ou PB-4 n'est anticipée ;
+  - aucune PR n'est fusionnée sans un consentement distinct du porteur ;
+  - le risque juridique résiduel **R-01 reste ouvert** ;
+  - pas de distribution, ni de modification du déchiffrement de ReXGlue.
+- **Limite** : le passage de PB-0 autorise le travail local dans ce cadre. Il ne prétend
+  pas garantir l'absence de fuite hors du périmètre couvert par les contrôles
+  (`docs/J2_PHASE_B_CONTROLS.md` §3, « Limite »).
+
+## D-018 — Arbitrages de B1 : plantages de l'extraction et rapport J0 local
+
+- **Statut** : **Acceptée** (2026-11-25). Source : la décision du porteur du projet,
+  consignée dans la PR #33,
+  [commentaire 7161970968](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7161970968).
+  Elle répond aux questions posées après la revue
+  [7158108520](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7158108520) (B1-R03 et
+  B1-R06).
+- **Décision 1 : option B pour les plantages de l'extraction** (`docs/J2_B1_EXTRACTION.md`
+  §6) :
+  - `RLIMIT_CORE` exactement à `1` pour le seul processus d'extraction, dans le bac à
+    sable ;
+  - sous réserve d'une **validation synthétique** sur le noyau et le mode `core_pattern`
+    effectivement utilisés ;
+  - `private_guard` adapté de façon ciblée, sans affaiblir les autres contrôles. Dans
+    l'implémentation, aucun de ses contrôles n'a dû changer : l'outil garde une limite
+    souple de `0`, que `private_guard` contrôle, et seul le processus confiné reçoit `1` ;
+  - **seul le mode tube est accepté** ; le mode socket, ou tout mode non validé, est refusé ;
+  - **`run` reste bloqué** tant que la preuve locale n'est pas acquise ;
+  - aucun `sudo`, aucune modification globale de NixOS ;
+  - les cas négatifs et le protocole local, sans données propriétaires, sont documentés et
+    testés.
+- **Décision 2 : pas de B1 sans rapport J0 local.** Le rapport valide et concordant est
+  obligatoire ; son absence, une erreur ou une discordance bloquent l'extraction
+  (`docs/J2_B1_EXTRACTION.md` §7).
+- **Ce qui ne change pas** :
+  - ces arbitrages ne valent **ni autorisation de fusion, ni autorisation d'extraction
+    réelle** ;
+  - **PB-1 n'est pas franchi**, et B2 reste interdit ;
+  - D-017 reste en vigueur : B1 seulement, sur la machine du porteur.
+
+## D-019 — Arbitrage de B1 : accès du bac à sable au magasin Nix
+
+- **Statut** : **Acceptée** (2026-11-25). Source : la décision du porteur du projet,
+  consignée dans la PR #33,
+  [commentaire 7172181035](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7172181035).
+  Elle répond à la question posée après la revue de la version 3
+  ([7164470853](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7164470853), R02 ;
+  `docs/J2_B1_EXTRACTION.md` §3.4).
+- **Décision : option B.** Le processus confiné n'accède qu'aux seules dépendances
+  nécessaires, en lecture seule, et non à tout `/nix/store` :
+  - la **fermeture transitive des dépendances Nix** de la commande empaquetée et du SDK
+    nécessaires à l'extraction et aux sondes, **calculée lors de la construction**, sans
+    liste de bibliothèques maintenue à la main ;
+  - **provenance et validité des chemins vérifiées** ; le démarrage est refusé si la liste
+    est absente, invalide ou incomplète ;
+  - **aucun montage global du magasin en guise de repli** ;
+  - aucune donnée propriétaire dans les dérivations ou les artefacts Nix.
+- **Mise en œuvre** (`docs/J2_B1_EXTRACTION.md` §3.4) :
+  - `closureInfo` de nixpkgs, sur Python, le SDK et le fichier de l'outil, passée par la
+    commande empaquetée (`--store-closure`) ;
+  - chaque chemin de la fermeture est lié en lecture seule, et rien d'autre du magasin ;
+  - la preuve de l'option B (D-018) est liée à cette fermeture.
+- **Critères demandés** : vraie extraction synthétique et sonde dans le confinement
+  restreint ; test négatif d'accès à une entrée synthétique du magasin extérieure à la
+  fermeture ; test de dépendance manquante et de refus avant extraction ; maintien des
+  contrôles existants.
+- **Ce qui ne change pas** :
+  - D-018 reste en vigueur, dont le rapport J0 local obligatoire ;
+  - cet arbitrage ne vaut **ni autorisation de fusion, ni autorisation d'extraction
+    réelle** ;
+  - **PB-1 n'est pas franchi**, et B2 reste interdit ;
+  - aucun `sudo`, aucune modification globale de NixOS ;
+  - une nouvelle revue indépendante est demandée avant toute approbation.

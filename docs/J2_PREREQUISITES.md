@@ -8,6 +8,8 @@
 > d'exécution de J2 est dans `docs/J2_PLAN.md`.
 > Mis à jour le 2026-11-23 (D-015) : **PA-0 et PJ2-3 sont accordées. PB-0 n'est pas
 > franchi.** Aucun fichier du jeu n'est encore traité.
+> Mis à jour le 2026-11-24 (D-017) : **PB-0 est franchi, pour B1 seulement.** La procédure
+> de B1 est `docs/J2_B1_EXTRACTION.md` ; PB-1 n'est pas franchi.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Point de départ
@@ -41,12 +43,14 @@
 La phase A, sans données du jeu, a sa propre autorisation (PA-0), accordée le 2026-11-23.
 **Aucun fichier du jeu n'est traité avant PB-0** (`docs/J2_PLAN.md` §2). Il faut d'abord :
 - PA-1 : *franchi le 2026-11-24 (D-016)* ;
-- les contrôles du §6, exécutés et consignés : *à faire sur la machine de
-  l'utilisateur* ;
+- les contrôles du §6, exécutés et consignés : *faits sur la machine de l'utilisateur et
+  consignés dans le ticket #14 (D-017)* ;
 - la décision sur la méthode de validation des adresses (§3.3) : *prise (M1 d'abord, M3
   en repli, M2 non autorisée)*.
 
 Ce sont des conditions d'exécution, et non un nouveau consentement.
+*PB-0 est franchi le 2026-11-24 (D-017), pour B1 seulement : l'extraction par `rexglue vfs
+dump`, sur la machine de l'utilisateur.*
 
 ## 3. Établir si le code du disque est celui du projet A
 

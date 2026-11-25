@@ -9,6 +9,8 @@
   private-guard,
   private-project,
   address-compare,
+  b1-extract,
+  b1-closure,
 }:
 
 let
@@ -560,6 +562,237 @@ in
         || { echo "preflight accepted umask 022"; exit 1; }
     '';
 
+  # J2 step B1 (ticket #32, review of PR #33, docs/J2_B1_EXTRACTION.md):
+  # tools/b1_extract.py, with no game data.
+  # 1. Its unit tests, as the unprivileged build user: fake rexglue, findmnt, coredumpctl,
+  #    nix and bwrap for the orchestration; the real private_guard, find, git; and the real
+  #    bubblewrap for the confinement test. None may be skipped.
+  # 2. The packaged command, with the real bubblewrap and the real `rexglue vfs dump`, on a
+  #    synthetic XDVDFS disc image made by the J0 test helpers (text files only, two of them
+  #    named like the modules), with a synthetic local J0 report.
+  #    - When the sandbox can start here: prepare writes nothing; run passes, with the
+  #      confinement probe, ReXGlue's node count (root included), its log in the run folder,
+  #      and writes only in game/ and the run folder; a second run is refused; on a file
+  #      that is not a container, rexglue fails, postflight runs and game/ stays empty.
+  #    - When it cannot start (no unprivileged user namespaces): run must refuse, with
+  #      sandbox-unavailable, and extract nothing.
+  #    sandbox-mode.txt says which case ran.
+  # Stubs, because they cannot run in the build sandbox: `nix store verify` (no daemon) and
+  # coredumpctl (no journal). The core dump setting is a synthetic pipe to systemd-coredump,
+  # since the handler of the build machine is not the user's, and the proof of option B
+  # (D-018) is written with the tool's own functions: only rehearse on the user's machine
+  # makes the real one. /tmp of the procedure is a folder of the build (--tmp-watch).
+  b1-extract-selftest =
+    pkgs.runCommand "b1-extract-selftest"
+      {
+        nativeBuildInputs = [
+          pkgs.git
+          pkgs.util-linux
+          pkgs.bubblewrap
+        ];
+      }
+      ''
+        set -euo pipefail
+        mkdir -p "$out"
+        B1_REAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap B1_SANDBOX_MODE_FILE="$out/sandbox-mode.txt" \
+          B1_PYTHON_CLOSURE=${pkgs.closureInfo { rootPaths = [ python ]; }} \
+          ${python}/bin/python3 -I ${self}/tools/test_b1_extract.py > "$out/selftest.txt" 2>&1 \
+          || { cat "$out/selftest.txt"; exit 1; }
+        tail -n 3 "$out/selftest.txt"
+        if grep -q "skipped" "$out/selftest.txt"; then
+          echo "a test was skipped: they must all run as the unprivileged build user"; exit 1
+        fi
+        # Each of these tests ran and passed (a docstring moves "ok" to the next line).
+        ${python}/bin/python3 -I -c '
+        import re, sys
+        text = open(sys.argv[1]).read()
+        missing = [t for t in sys.argv[2:] if not re.search(
+            "^" + t + r" \([^)]*\)(\n[^\n]*)? \.\.\. ok$", text, re.M)]
+        sys.exit("did not run or failed: " + ", ".join(missing) if missing else 0)
+        ' "$out/selftest.txt" \
+          test_run_success test_failed_dump_runs_postflight_and_deletes_nothing \
+          test_marker_rules test_mount_identity_changes_are_findings \
+          test_mount_table_errors_stop_everything test_mount_point_inside_the_private_folder_is_refused \
+          test_folder_links_and_xdg_components_are_refused test_unsafe_parent_folder_is_refused \
+          test_core_settings_and_modes test_core_dumps_and_coredumpctl_errors \
+          test_rehearse_acquires_the_proof_then_run_passes test_j0_report_gates \
+          test_run_needs_a_proof_of_this_boot_kernel_and_setting \
+          test_proof_fails_when_the_handler_or_the_kernel_misbehaves \
+          test_a_late_control_entry_is_still_found \
+          test_an_entry_at_limit_one_after_the_window_is_still_a_finding \
+          test_a_foreign_entry_is_never_ours_and_still_stops_the_rehearsal \
+          test_an_error_in_one_control_lets_the_others_run_and_resume_finishes \
+          test_an_unreadable_image_after_the_step_is_incomplete_evidence \
+          test_socket_or_fifo_in_the_private_folder_is_refused test_sandbox_options \
+          test_a_valid_closure_is_checked_and_reported test_absent_closure_refuses_everything \
+          test_invalid_closure_is_refused_before_anything_starts \
+          test_missing_dependency_is_refused_before_anything_starts test_sandbox_blockers \
+          test_image_hash_mismatch_with_the_j0_report_stops_before_rexglue test_sandbox_failures_stop_before_the_image_is_read \
+          test_summary_holds_no_free_text test_summary_validators_reject_free_text \
+          test_sigterm_and_repeated_signals_finish_the_controls test_killed_supervisor_leaves_a_detectable_state_and_resume_finishes \
+          test_real_sandbox_confines_the_extraction test_nothing_is_sent_anywhere \
+          test_root_is_refused_before_anything test_reference_is_the_j0_report
+        cat "$out/sandbox-mode.txt"
+        B=${b1-extract}/bin/fifa2010wc-b1-extract
+        "$B" --help > "$out/help.txt"
+
+        W="$TMPDIR/b1"
+        H="$W/home"
+        P="$H/private"
+        R="$H/repo"
+        S="$W/stubs"
+        mkdir -p "$H" "$W/tmp" "$S"
+        chmod 700 "$H" "$W/tmp"
+        mkdir -m 700 "$P"
+        (cd "$P" && mkdir -m 700 iso game xex generated cache saves logs)
+        git init -q "$R"
+        echo synthetic > "$R/README"
+        git -C "$R" add README
+        git -C "$R" -c user.name=test -c user.email=test@example.invalid commit -q -m init
+        # The stub nix: the guard's `store verify` of the SDK, and the tool's check that the
+        # paths of the store closure are valid, each of them listed in the closure.
+        printf '#!%s\nif [ "$1 $2 $3 $4" = "store verify --no-contents --no-trust" ]; then\n  shift 4; [ $# -gt 0 ] || exit 64\n  for p in "$@"; do grep -qxF -- "$p" %s/store-paths || exit 65; done; exit 0\nfi\n[ "$1 $2" = "store verify" ] && [ "$3" = %s ] && [ $# -eq 3 ]\n' \
+          "${pkgs.bash}/bin/bash" "${b1-closure}" "${rexglue-sdk}" > "$S/nix"
+        printf '#!%s\n[ "$1 $2 $3" = "--no-pager --json=short list" ] || exit 64\necho "No coredumps found." >&2\nexit 1\n' \
+          "${pkgs.bash}/bin/bash" > "$S/coredumpctl"
+        chmod 755 "$S/nix" "$S/coredumpctl"
+        echo "|/nix/store/synthetic-systemd/lib/systemd/systemd-coredump %P %u %g %s %t %c %h" \
+          > "$S/core_pattern"
+        echo 2 > "$S/suid_dumpable"
+        ${python}/bin/python3 -I -c '
+        import hashlib, importlib.util, json, os, sys
+        spec = importlib.util.spec_from_file_location("t", sys.argv[1])
+        t = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(t)
+        tree = {"default.xex": b"synthetic entry module, not a XEX\n",
+                "fifadllzf.xex": b"synthetic second module, not a XEX\n",
+                ".hidden": b"a name that starts with a dot\n",
+                "media": {"a.txt": b"a\n", "sub": {"b.txt": b"b" * 5000}},
+                "$SystemUpdate": {}}
+        t.write_image(sys.argv[2], tree)
+        modules = {name: hashlib.sha256(tree[name]).hexdigest()
+                   for name in ("default.xex", "fifadllzf.xex")}
+        json.dump({"source": "synthetic image of the Nix check", "files": 5,
+                   "directories": 3, "modules": modules}, open(sys.argv[3], "w"))
+        image = open(sys.argv[2], "rb").read()
+        json.dump({"source": {"kind": "image", "size": len(image),
+                              "sha256": hashlib.sha256(image).hexdigest()},
+                   "disc": {"files": 5, "directories": 3},
+                   "modules": [{"path": k, "sha256": v} for k, v in modules.items()]},
+                  open(sys.argv[4], "w"))
+        ' ${self}/tools/test_iso_identify.py "$P/iso/fifa2010wc.iso" "$W/reference.json" \
+          "$P/logs/j0-identification.json"
+        chmod a-w "$P/iso/fifa2010wc.iso"
+        # A proof as rehearse writes it, bound to this boot, kernel and settings, and to the
+        # tool, bubblewrap, Python and store closure of the packaged command (same pkgs,
+        # same files).
+        ${python}/bin/python3 -I -c '
+        import importlib.util, os, sys, time, types
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location("b1", sys.argv[1])
+        b1 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(b1)
+        folder = os.path.join(sys.argv[2], "logs", "b1-rehearse-20000101T000000Z")
+        os.mkdir(folder, 0o700)
+        ctx = types.SimpleNamespace(args=types.SimpleNamespace(
+            core_pattern_file=sys.argv[3], suid_dumpable_file=sys.argv[4], bwrap=sys.argv[5],
+            store_closure=sys.argv[6]))
+        identity = b1.proof_identity(ctx)
+        b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
+                                "phase": "complete", "controls_clean": True,
+                                "evidence_incomplete": [],
+                                "core_proof": dict(identity, result="validated",
+                                                   proved_at=time.time())})
+        ' ${self}/tools/b1_extract.py "$P" "$S/core_pattern" "$S/suid_dumpable" \
+          ${pkgs.bubblewrap}/bin/bwrap ${b1-closure}
+        b1() {
+          (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
+            --nix "$S/nix" --coredumpctl "$S/coredumpctl" --reference "$W/reference.json" \
+            --core-pattern-file "$S/core_pattern" --suid-dumpable-file "$S/suid_dumpable" "$@")
+        }
+
+        # prepare writes nothing.
+        b1 prepare > "$out/1-prepare.txt" || { cat "$out/1-prepare.txt"; exit 1; }
+        [ "$(ls -A "$P/logs" | tr '\n' ' ')" = "b1-rehearse-20000101T000000Z j0-identification.json " ] \
+          || { ls -A "$P/logs"; echo "prepare wrote"; exit 1; }
+
+        if ! grep -q "REAL SANDBOX: available" "$out/sandbox-mode.txt"; then
+          status=0
+          b1 run > "$out/2-run.txt" || status=$?
+          cat "$out/2-run.txt"
+          [ "$status" -eq 1 ] || { echo "run must refuse without a sandbox"; exit 1; }
+          grep -q "finding sandbox-unavailable" "$out/2-run.txt"
+          [ -z "$(ls -A "$P/game")" ] || { echo "extracted without a sandbox"; exit 1; }
+          echo "the sandbox cannot start here: run refused, nothing extracted" \
+            >> "$out/sandbox-mode.txt"
+          exit 0
+        fi
+
+        # run, in the real sandbox.
+        b1 run > "$out/2-run.txt" || { cat "$out/2-run.txt"; exit 1; }
+        cat "$out/2-run.txt"
+        run=$(echo "$P"/logs/b1-run-*)
+        for line in "vfs-dump             ok       exit 0   type GDFX, nodes 9" \
+                    "probe_checks_passed 26" \
+                    "closure_closed True, closure_roots_covered True, closure_registered True" \
+                    "proof_found True" \
+                    "files: expected 5, found 5: match" \
+                    "directories (root not counted): expected 3, found 3: match" \
+                    "ReXGlue nodes = files + directories + root: expected 9, found 9: match" \
+                    "ReXGlue container type is GDFX: match" \
+                    "image sha256 = local J0 report, before and after: match" \
+                    "names starting with a dot: 1 (counted)" "outcome: no finding"; do
+          grep -qF "$line" "$run/summary.txt" || { echo "summary lacks: $line"; exit 1; }
+        done
+        if grep -qE -e "$W" -e "Source" -e "[0-9a-f]{64}" "$run/summary.txt" "$out/2-run.txt"; then
+          echo "a path or a hash reached the summary"; exit 1
+        fi
+        grep -q "^Extracting container:" "$run/vfs-dump.stderr" \
+          || { echo "the summary block of rexglue is not on its stderr"; exit 1; }
+        ls "$run"/rexglue_*.log > /dev/null || { echo "no ReXGlue log in the run folder"; exit 1; }
+        # Where the step wrote after the marker: game/ and the run folder, nothing else.
+        find "$P" -newer "$run/b1.marker" | sed "s|^$P|\$WC2010_PRIVATE_DIR|" | sort \
+          > "$out/3-written.txt"
+        cat "$out/3-written.txt"
+        if grep -v -E '^\$WC2010_PRIVATE_DIR/(game|logs/b1-run-[0-9TZ]+)(/|$)' "$out/3-written.txt"; then
+          echo "the step wrote somewhere else than game/ and its run folder"; exit 1
+        fi
+        [ -z "$(find "$H" -path "$P" -prune -o -path "$R/.git" -prune -o -newer "$run/b1.marker" -print)" ] \
+          || { echo "the step wrote in the home folder"; exit 1; }
+        find "$P/game" -type f ! -perm 600 > "$out/modes.txt"
+        [ ! -s "$out/modes.txt" ] || { cat "$out/modes.txt"; echo "a file is not private"; exit 1; }
+        b1 verify > "$out/4-verify.txt" || { cat "$out/4-verify.txt"; exit 1; }
+
+        # A second run is refused: the game folder is not empty.
+        status=0
+        b1 run > "$out/5-second.txt" || status=$?
+        [ "$status" -eq 1 ] || { cat "$out/5-second.txt"; echo "a second run must stop"; exit 1; }
+        grep -q "finding game-not-empty" "$out/5-second.txt"
+
+        # A file that is not a container: rexglue fails, postflight runs, nothing is left.
+        chmod u+w "$P/iso/fifa2010wc.iso"
+        echo "not a container" > "$P/iso/fifa2010wc.iso"
+        chmod a-w "$P/iso/fifa2010wc.iso"
+        ${python}/bin/python3 -I -c '
+        import hashlib, json, sys
+        report = json.load(open(sys.argv[1]))
+        image = open(sys.argv[2], "rb").read()
+        report["source"].update(size=len(image), sha256=hashlib.sha256(image).hexdigest())
+        json.dump(report, open(sys.argv[1] + ".new", "w"))
+        ' "$P/logs/j0-identification.json" "$P/iso/fifa2010wc.iso"
+        mv "$P/logs/j0-identification.json.new" "$P/logs/j0-identification.json"
+        rm -r "$P/game" "$run"
+        mkdir -m 700 "$P/game"
+        status=0
+        b1 run > "$out/6-failure.txt" || status=$?
+        cat "$out/6-failure.txt"
+        [ "$status" -eq 1 ] || { echo "a failed extraction must be a finding"; exit 1; }
+        grep -q "^  vfs-dump  *finding  exit 1" "$out/6-failure.txt"
+        grep -q "finding dump-failed (x1)" "$out/6-failure.txt"
+        grep -q "^  postflight  *ok  *exit 0" "$out/6-failure.txt"
+        [ -z "$(ls -A "$P/game")" ] || { echo "the failed extraction left files"; exit 1; }
+      '';
+
   # J2 step A5: the codegen manifest template and tools/private_project.py, on synthetic
   # private folders only. The unit tests check the template (relative paths, no game data,
   # pinned SDK) and the init and check commands. Then ReXGlue's own parser reads the copy
@@ -691,8 +924,8 @@ in
   '';
 
   # D-007: no proprietary data in the store paths this flake builds or fetches: the runtime
-  # closure of the SDK, of the Vulkan probe, of the identification tool and of the two
-  # private folder tools, plus the ReXGlue source with its submodules.
+  # closure of the SDK, of the Vulkan probe, of the identification tool, of the private
+  # folder tools and of the B1 command, plus the ReXGlue source with its submodules.
   proprietary-data-closure =
     let
       closure = pkgs.closureInfo {
@@ -703,6 +936,7 @@ in
           private-guard
           private-project
           address-compare
+          b1-extract
         ];
       };
     in

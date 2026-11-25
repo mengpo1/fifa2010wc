@@ -16,6 +16,14 @@
 > - la méthode de validation des adresses est décidée (§6) ;
 > - **PB-0 n'est pas franchi** : la phase B attend les contrôles CP-1 à CP-7 sur la
 >   machine de l'utilisateur, puis la décision PB-0.
+>
+> Mise à jour du 2026-11-24 (D-017, ticket #14) :
+> - **PB-0 est franchi**, pour **B1 seulement**, sur la machine NixOS de l'utilisateur et
+>   dans `$WC2010_PRIVATE_DIR` ;
+> - la procédure de B1 est préparée sans données du jeu (ticket #32,
+>   `J2_B1_EXTRACTION.md`). B1 n'est pas encore exécutée ;
+> - **PB-1 n'est pas franchi** ; B2 attend sa décision.
+>
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Cadre
@@ -33,7 +41,7 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 | PJ2-2 | Atteint | `J2_PREREQUISITES.md` §2 |
 | PA-0 | **Accordée** le 2026-11-23 | `DECISIONS.md`, D-015 |
 | PJ2-3 | **Accordée sur le principe** le 2026-11-23, phase B comprise, sur la machine de l'utilisateur | `DECISIONS.md`, D-015 ; `J2_PREREQUISITES.md` §2 |
-| PB-0 | **Non franchi** | §2 |
+| PB-0 | **Franchi** le 2026-11-24, pour B1 seulement | `DECISIONS.md`, D-017 ; §2 |
 
 **Règles qui valent pour toutes les étapes** :
 
@@ -59,8 +67,8 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 |---|---|---|---|
 | **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A. **Accordée le 2026-11-23** (D-015) |
 | **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9. **Franchi le 2026-11-24** (D-016) |
-| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Non franchi** : la méthode est décidée (M1, §6) et PA-1 est franchi (D-016). Les contrôles CP-1 à CP-7 restent à exécuter et à consigner sur la machine de l'utilisateur, dont la vérification des *core dumps* (`reports/J2_PHASE_A.md` §4.3) |
-| **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0 |
+| **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Franchi le 2026-11-24** (D-017), pour B1 seulement : la méthode est décidée (M1, §6), PA-1 est franchi (D-016), et les contrôles CP-1 à CP-7 sont exécutés sur la machine de l'utilisateur et consignés dans le ticket #14, dont la vérification des *core dumps* |
+| **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0. **Non franchi**. Chiffres comparés : `J2_B1_EXTRACTION.md` §6 |
 | **PB-2** | Après le contrôle de compatibilité (B2) | Orchestrateur, puis porteur du projet | Validation des adresses ou nouvelle analyse |
 | **PB-3** | Avant de versionner un fichier tiré du disque | Orchestrateur, puis porteur du projet | Seules des adresses et des métadonnées, autorisées par D-007, après le contrôle des données |
 | **PB-4** | Fin de J2 | Orchestrateur, puis porteur du projet | C2.1 à C2.4. J3 ne commence pas sans décision |
@@ -324,6 +332,26 @@ décision explicite) :
 - **Fait relevé** : [V] la commande ouvre le conteneur et l'extrait (`OpenContainer`,
   puis `Extract`), sans appel au décodage des XEX
   (`src/rexglue/command/vfs_command.cpp`).
+- **Procédure** : `J2_B1_EXTRACTION.md` (ticket #32), outil `.#b1-extract`.
+  - [V] Syntaxe : `rexglue vfs dump <source> <destination>`, sans option propre.
+  - [V] L'extraction écrase les fichiers existants : la destination doit être vide.
+  - [V] Le nombre de nœuds de ReXGlue compte la racine ; celui de J0 ne la compte pas.
+- **État (2026-11-24)** : procédure et tests synthétiques en PR brouillon. B1 n'est pas
+  exécutée.
+- **Revue de la PR #33 (2026-11-25)** : corrections B1-R01 à B1-R07, dont le confinement
+  de l'extraction dans un bac à sable bubblewrap.
+- **Arbitrages du porteur (D-018)** :
+  - option B pour les plantages : limite `1` pour l'extraction seule, mode tube seul ;
+  - rapport J0 local obligatoire.
+
+  `run` reste bloqué tant que `rehearse` n'a pas apporté la preuve locale du
+  `J2_B1_EXTRACTION.md` §6.3, dans le même démarrage.
+- **Revue de la version 3 (2026-11-25)** : plantages de la preuve identifiés par leur pid,
+  preuve liée au protocole, à l'outil et à bubblewrap, contrôles après coup isolés, et
+  bac à sable par liste positive.
+- **Arbitrage du porteur (D-019)** : du magasin Nix, le bac à sable ne montre que la
+  fermeture de la commande empaquetée, calculée à la construction ; sans fermeture valide
+  et complète, rien ne démarre (`J2_B1_EXTRACTION.md` §3.4).
 - **Critère de sortie** (PB-1) :
   - 49 fichiers et 8 dossiers, comme dans le rapport J0 ;
   - les SHA-256 de `default.xex` et `fifadllzf.xex` extraits sont ceux du rapport J0 ;

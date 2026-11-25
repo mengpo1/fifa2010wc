@@ -80,7 +80,9 @@ n'est traité avant PB-0, et jamais en CI.
 | Paquet | Version | Rôle |
 |---|---|---|
 | `patchelf`, `file` | 0.15.2, 5.47 | Vérification de l'interpréteur ELF et du RUNPATH (`rexglue-cli-runs`) |
-| `git` | 2.54.0 | Environnement de développement |
+| `git` | 2.54.0 | Environnement de développement ; contrôles du dépôt par `private-guard`, `private-project` et `b1-extract` |
+| `findutils` (`find`), `util-linux` (`findmnt`) | 4.10.0, 2.42.4 | Étape B1 (`b1-extract`, `docs/J2_B1_EXTRACTION.md`) : les recherches CP-3 du magasin, et la table des montages, avec leur identité, à surveiller et à comparer. `nix` et `coredumpctl` viennent du système de l'utilisateur, pour correspondre à son démon et à son journal |
+| `bubblewrap` (`bwrap`) | 0.12.0 | Étape B1 : le bac à sable sans privilèges de l'extraction, sans réseau, inscriptible seulement dans ses destinations (`docs/J2_B1_EXTRACTION.md` §3). Non setuid : il demande les espaces de noms utilisateur sans privilèges |
 | `vulkan-tools` (`vulkaninfo`) | 1.4.341.0 | Sonde Vulkan (C1.4), même version que le chargeur du SDK |
 | `mesa` (lavapipe) | 26.1.8 | **Non utilisé par le projet** ; seulement pour valider la sonde pendant J1, sans GPU |
 

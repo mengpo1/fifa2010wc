@@ -6,6 +6,8 @@
 > **Elle ne vaut pas PB-0** (`docs/J2_PLAN.md` §2).
 > Les contrôles sont définis dans `docs/J2_PREREQUISITES.md` §6. Les destinations
 > d'écriture de ReXGlue sont dans `docs/J2_A1_SDK_INVENTORY.md` §6.
+> Pour B1, après PB-0 (D-017), l'outil `.#b1-extract` enchaîne ces contrôles autour de
+> `rexglue vfs dump` (`docs/J2_B1_EXTRACTION.md`).
 
 L'outil est `tools/private_guard.py`, empaqueté par le flake. Il a trois commandes :
 
