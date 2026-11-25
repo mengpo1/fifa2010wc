@@ -30,11 +30,13 @@ import os
 import re
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -62,8 +64,9 @@ b1 = load_tool()
 # environment and what it tried, into the run folder (REX_APP_LOG_ROOT), the only place it
 # may write besides its destinations. Then it follows the plan of the test.
 FAKE_REXGLUE = r'''
-import errno, json, os, resource, signal, sys, time
-plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
+import errno, json, os, resource, signal, socket, sys, time
+plan = json.loads(os.environ["B1_FAKE_PLAN_JSON"]) if "B1_FAKE_PLAN_JSON" in os.environ \
+    else json.load(open(os.environ["B1_FAKE_PLAN"]))
 mask = os.umask(0o077)
 os.umask(mask)
 keep = ("REX_", "TMPDIR", "XDG_", "NO_COLOR", "HOME", "WC2010_PRIVATE_DIR")
@@ -127,6 +130,11 @@ if plan.get("modify_image"):
     attempt("image", action)
 for path in plan.get("lock", []):
     attempt("lock", lambda: os.chmod(path, 0))
+for path in plan.get("connect_sockets", []):
+    def action(path=path):
+        with socket.socket(socket.AF_UNIX) as s:
+            s.connect(path)
+    attempt("socket " + path, action)
 save()
 if plan.get("sleep"):
     time.sleep(plan["sleep"])
@@ -218,27 +226,67 @@ if plan.get("bwrap_broken"):
 sep = args.index("--")
 opts, cmd = args[:sep], args[sep + 1:]
 head = ["--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent",
-        "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+        "--new-session", "--tmpfs", "/"]
 if opts[:len(head)] != head:
     sys.exit(64)
 fd = int(opts[opts.index("--json-status-fd") + 1])
 def status(doc):
-    os.write(fd, (json.dumps(doc) + "\n").encode())
+    # The tool may be gone (a test kills it): the fake sandbox outlives it all the same.
+    try:
+        os.write(fd, (json.dumps(doc) + "\n").encode())
+    except OSError:
+        pass
 if "_probe" in cmd:
     status({"child-pid": os.getpid()})
     print(json.dumps(plan["probe_results"]))
     status({"exit-code": 0})
     sys.exit(0)
 if "_crash" in cmd:
+    # The fake handler: a crash "reaches" it only with a core limit of 0, as the kernel
+    # does with a pipe. The plan can break the handler, the kernel, the identification of
+    # the program, the journal or the settings.
     import resource, time
     status({"child-pid": os.getpid()})
-    sys.stdin.buffer.read(1)
     soft = resource.getrlimit(resource.RLIMIT_CORE)[0]
-    if (soft == 0 and not plan.get("handler_silent")) or \
-            (soft == 1 and plan.get("limit_one_ignored")):
-        with open(os.environ["B1_FAKE_JOURNAL"], "a") as f:
-            f.write(json.dumps({"time": int(time.time() * 1000000), "pid": os.getpid(),
-                                "sig": 11, "corefile": "none", "exe": sys.executable}) + "\n")
+    reaches = (soft == 0 and not plan.get("handler_silent")) or \
+        (soft == 1 and plan.get("limit_one_ignored"))
+    journal = os.environ["B1_FAKE_JOURNAL"]
+    def entry(pid):
+        return {"time": int(time.time() * 1000000), "pid": pid, "uid": os.getuid(),
+                "sig": 11, "corefile": "none", "exe": os.path.realpath(sys.executable)}
+    def record(item, delay=0):
+        if delay and os.fork() == 0:
+            time.sleep(delay)
+        elif delay:
+            return
+        with open(journal, "a") as f:
+            f.write(json.dumps(item) + "\n")
+        if delay:
+            os._exit(0)
+    if plan.get("change_pattern") and soft == 1:
+        with open(os.path.join(records, "core_pattern"), "a") as f:
+            f.write(" changed\n")
+    count = 0 if plan.get("crash_no_child") else 2 if plan.get("crash_two_children") else 1
+    children = []
+    for i in range(count):
+        pid = os.fork()
+        if pid == 0:
+            if i == 0:
+                sys.stdin.buffer.read(1)
+            else:
+                time.sleep(2)
+            os._exit(0)
+        children.append(pid)
+    if not children:
+        sys.stdin.buffer.read(1)
+    for pid in children:
+        os.waitpid(pid, 0)
+    target = children[0] if children else os.getpid()
+    if reaches:
+        record(entry(target), plan.get("limit_one_delay", 0) if soft == 1
+               else plan.get("journal_delay", 0))
+    if plan.get("foreign_entry"):
+        record(entry(target + 100000))
     status({"exit-code": 139})
     sys.exit(139)
 os.chdir(opts[opts.index("--chdir") + 1])
@@ -288,6 +336,14 @@ if __name__ == "__main__":
             if mode == "sentinel":
                 print("FINDING: file written outside the private folder: /{sentinel}/x")
                 sys.exit(1)
+            if mode in ("collide-cp3", "lock-image"):
+                marker = sys.argv[sys.argv.index("--marker") + 1]
+                if mode == "collide-cp3":
+                    open(os.path.join(os.path.dirname(marker), "cp3-after.txt"), "w").close()
+                else:
+                    os.chmod(os.path.join(os.environ["WC2010_PRIVATE_DIR"], "iso",
+                                          "fifa2010wc.iso"), 0)
+                break
             if mode.startswith("slow-"):
                 open(os.environ["B1_FAKE_TRAP"] + ".slow", "w").write("started")
                 import time
@@ -463,16 +519,24 @@ class Fixture(unittest.TestCase):
                 mount(12, self.persist_space, parent=10, fsroot="/@persist b"),
                 mount(13, self.bound_file, parent=10)]
 
-    def write_proof(self, **changes):
-        """A completed rehearsal holding the proof of option B for this boot, as the tool
-        writes it; `changes` alter the identity it holds."""
+    def write_proof(self, state_changes=None, proved_at=None, **changes):
+        """A completed rehearsal holding the proof of option B, as the tool writes it, for
+        this boot, kernel, settings, tool, bubblewrap and Python; `changes` alter the
+        identity it holds, `state_changes` its state."""
         folder = os.path.join(self.logs, PROOF_DIR)
         os.makedirs(folder, exist_ok=True)
-        identity = b1.core_identity(self.core_pattern, self.suid)
+        ctx = types.SimpleNamespace(args=types.SimpleNamespace(
+            core_pattern_file=self.core_pattern, suid_dumpable_file=self.suid,
+            bwrap=self.bwrap))
+        identity = b1.proof_identity(ctx)
         identity.update(changes)
-        b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
-                                "phase": "complete", "controls_clean": True,
-                                "core_proof": dict(identity, result="validated")})
+        state = {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
+                 "phase": "complete", "controls_clean": True, "evidence_incomplete": [],
+                 "core_proof": dict(identity, result="validated",
+                                    proved_at=time.time() if proved_at is None
+                                    else proved_at)}
+        state.update(state_changes or {})
+        b1.write_state(folder, state)
 
     def remove_proof(self):
         shutil.rmtree(os.path.join(self.logs, PROOF_DIR), ignore_errors=True)
@@ -513,6 +577,7 @@ class Fixture(unittest.TestCase):
                "B1_FAKE_TRAP": self.trap, "B1_FAKE_BWRAP_LOG": self.bwrap_log,
                "B1_FAKE_MOUNT_CALLS": os.path.join(self.records, "mount-calls"),
                "B1_FAKE_JOURNAL": os.path.join(self.records, "journal.jsonl"),
+               "B1_FAKE_PLAN_JSON": json.dumps(self.plan),
                # Inherited ReXGlue settings that the tool must drop.
                "REX_LOG_LEVEL": "trace", "REX_LOG_FILE": "true"}
         env.update(self.extra_env)
@@ -649,6 +714,19 @@ class PrepareTest(Fixture):
                 if os.path.isdir(outside + "-old"):
                     os.rename(outside + "-old", path)
 
+    def test_socket_or_fifo_in_the_private_folder_is_refused(self):
+        """Review v3 R02: the sandbox shows the private folder, so no socket or FIFO may
+        lie in it."""
+        os.mkfifo(os.path.join(self.private, "cache", "pipe"))
+        self.assertEqual(self.tool("prepare"), 1)
+        self.assertIn("finding private-ipc (x1)", self.output)
+        os.unlink(os.path.join(self.private, "cache", "pipe"))
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(os.path.join(self.private, "saves", "s.sock"))
+            self.assertEqual(self.tool("run"), 1)
+            self.assertIn("finding private-ipc (x1)", self.output)
+            self.assertIsNone(self.recorded())
+
     def test_unsafe_parent_folder_is_refused(self):
         """R07: a parent of the private folder that others can change."""
         os.chmod(self.w, 0o777)
@@ -716,33 +794,46 @@ class PrepareTest(Fixture):
         self.assertIn("proof_found True", self.output)
 
     def test_run_needs_a_proof_of_this_boot_kernel_and_setting(self):
-        """R03 option B: no proof, a proof of another boot, kernel or setting, or a proof
-        from a rehearsal with findings: run refuses and rexglue never starts."""
-        cases = (("none", None), ("boot", {"boot_id": "another-boot"}),
-                 ("kernel", {"kernel_release": "0.0.0"}),
-                 ("pattern", {"core_pattern_sha256": "0" * 64}),
-                 ("suid", {"suid_dumpable": "0"}))
-        for name, changes in cases:
+        """R03 option B and review v3 R03-B: no proof, or a proof of another boot, kernel,
+        setting, suid_dumpable, protocol, tool version or file, bubblewrap or Python, a
+        stale one, or one from a rehearsal that had findings, was interrupted or killed,
+        was resumed or lacks evidence: run refuses and rexglue never starts."""
+        cases = [("none", None, None), ("boot", {"boot_id": "another-boot"}, None),
+                 ("kernel", {"kernel_release": "0.0.0"}, None),
+                 ("pattern", {"core_pattern_sha256": "0" * 64}, None),
+                 ("suid", {"suid_dumpable": "0"}, None),
+                 ("protocol", {"protocol": b1.PROOF_PROTOCOL - 1}, None),
+                 ("tool version", {"tool_version": b1.TOOL_VERSION - 1}, None),
+                 ("tool file", {"tool_sha256": "1" * 64}, None),
+                 ("bwrap", {"bwrap_sha256": "2" * 64}, None),
+                 ("python", {"python": "/nix/store/other-python/bin/python3"}, None),
+                 ("findings", {}, {"controls_clean": False}),
+                 ("interrupted", {}, {"controls_clean": False}),
+                 ("killed", {}, {"phase": "postflight"}),
+                 ("resumed", {}, {"resumed": True, "resumes": 1}),
+                 ("incomplete", {}, {"phase": "evidence-incomplete"}),
+                 ("older tool", {}, {"tool_version": b1.TOOL_VERSION - 1})]
+        for name, changes, state_changes in cases:
             with self.subTest(name=name):
                 self.remove_proof()
-                if changes:
-                    self.write_proof(**changes)
+                if changes is not None:
+                    self.write_proof(state_changes=state_changes, **changes)
                 self.assertEqual(self.tool("run"), 1)
                 self.assertIn("finding core-proof-missing", self.output)
                 self.assertIsNone(self.recorded())
-                self.assertEqual(self.run_dirs(), [])
-        self.remove_proof()
-        self.write_proof()
-        state = b1.read_state(os.path.join(self.logs, PROOF_DIR))
-        state["controls_clean"] = False
-        b1.write_state(os.path.join(self.logs, PROOF_DIR), state)
-        self.assertEqual(self.tool("run"), 1)
-        self.assertIn("finding core-proof-missing", self.output)
-        self.remove_proof()
-        self.write_proof()
-        self.set_core_pattern(PIPE + " changed")
-        self.assertEqual(self.tool("run"), 1)
-        self.assertIn("finding core-proof-missing", self.output)
+                self.assertEqual([d for d in self.run_dirs()
+                                  if "b1-run-" in d], [])
+        with self.subTest(name="stale"):
+            self.remove_proof()
+            self.write_proof(proved_at=time.time() - b1.PROOF_MAX_AGE - 60)
+            self.assertEqual(self.tool("run"), 1)
+            self.assertIn("finding core-proof-missing", self.output)
+        with self.subTest(name="setting changed after the proof"):
+            self.remove_proof()
+            self.write_proof()
+            self.set_core_pattern(PIPE + " changed")
+            self.assertEqual(self.tool("run"), 1)
+            self.assertIn("finding core-proof-missing", self.output)
 
     def test_j0_report_gates(self):
         """R06: no report, an unreadable one, or one that differs from J0: no extraction."""
@@ -1063,9 +1154,12 @@ class RunTest(Fixture):
         self.assertEqual(self.tool("rehearse"), 1, self.output)
         report = self.report()
         probe = self.step(report, "core-probe")
-        self.assertEqual(probe["facts"], {"control_signal": 11, "control_entry_found": True,
+        self.assertEqual(probe["facts"], {"control_signal": 11, "control_identified": True,
+                                          "control_entry_found": True,
                                           "control_corefile": "none", "limit_one_signal": 11,
+                                          "limit_one_identified": True,
                                           "limit_one_entry_found": False,
+                                          "foreign_entries": 0, "settings_stable": True,
                                           "proof_acquired": True})
         self.assertEqual(self.codes(report), ["core-proof-missing"])
         self.assertEqual(self.step(report, "core-dumps")["facts"]["core_dumps_since_start"], 0)
@@ -1081,15 +1175,23 @@ class RunTest(Fixture):
         self.assertEqual(len(runs), 1)
 
     def test_proof_fails_when_the_handler_or_the_kernel_misbehaves(self):
-        """R03 option B, negative cases: no entry for the control crash (handler or
-        coredumpctl not working), or an entry for the crash at limit 1 (a kernel that does
-        not drop it), or coredumpctl failing: no proof, and run stays blocked."""
-        for name, plan in (("silent handler", {"handler_silent": True}),
-                           ("limit 1 ignored", {"limit_one_ignored": True}),
-                           ("coredumpctl", {"coredumpctl_status": 2})):
+        """R03 option B, negative cases, and review v3 R03-A and R03-B: no entry for the
+        control crash, an entry for the crash at limit 1 (also late), coredumpctl failing,
+        a program that cannot be identified (no pid, two pids), only a foreign entry, or
+        settings changed during the probe: no proof, and run stays blocked."""
+        cases = (("silent handler", {"handler_silent": True}),
+                 ("limit 1 ignored", {"limit_one_ignored": True}),
+                 ("limit 1 ignored, late entry", {"limit_one_ignored": True,
+                                                  "journal_delay": 3}),
+                 ("coredumpctl", {"coredumpctl_status": 2}),
+                 ("no pid", {"crash_no_child": True}),
+                 ("two pids", {"crash_two_children": True}),
+                 ("foreign entry only", {"handler_silent": True, "foreign_entry": True}),
+                 ("settings changed", {"change_pattern": True}))
+        for name, plan in cases:
             with self.subTest(name=name):
-                self.remove_proof() if os.path.isdir(os.path.join(self.logs, PROOF_DIR)) \
-                    else None
+                self.remove_proof()
+                self.set_core_pattern(PIPE)
                 saved = dict(self.plan)
                 self.plan.update(plan)
                 self.assertEqual(self.tool("rehearse"), 1)
@@ -1098,10 +1200,60 @@ class RunTest(Fixture):
                 self.assertNotIn("core_proof", b1.read_state(self.run_dir))
                 self.plan = saved
                 shutil.rmtree(self.run_dir)
+                self.set_core_pattern(PIPE)
                 self.assertEqual(self.tool("run"), 1)
                 self.assertIn("finding core-proof-missing", self.output)
                 if os.path.exists(os.path.join(self.records, "journal.jsonl")):
                     os.unlink(os.path.join(self.records, "journal.jsonl"))
+
+    def test_a_late_control_entry_is_still_found(self):
+        """R03-A: a control entry that the journal writes late is found within the wait."""
+        self.remove_proof()
+        self.plan["journal_delay"] = 2
+        self.assertEqual(self.tool("rehearse"), 1, self.output)
+        self.assertEqual(self.codes(self.report()), ["core-proof-missing"])
+        probe = self.step(self.report(), "core-probe")
+        self.assertTrue(probe["facts"]["proof_acquired"])
+        self.assertEqual(probe["facts"]["foreign_entries"], 0)
+        self.assertIn("core_proof", b1.read_state(self.run_dir))
+
+    def test_an_entry_at_limit_one_after_the_window_is_still_a_finding(self):
+        """R03-A: the absence of an entry is only an observation over a window. An entry for
+        the crash at limit 1 that comes after it is not left out by the after-check: the
+        rehearsal has a finding, and its proof is not usable."""
+        self.remove_proof()
+        self.use_fake_guard()
+        self.plan.update(limit_one_ignored=True, limit_one_delay=6.5,
+                         guard_postflight="slow-4")
+        self.assertEqual(self.tool("rehearse"), 1)
+        report = self.report()
+        self.assertFalse(self.step(report, "core-probe")["facts"]["limit_one_entry_found"])
+        self.assertEqual(self.step(report, "core-dumps")["facts"],
+                         {"core_dumps_since_start": 1})
+        self.assertEqual(sorted(set(self.codes(report))),
+                         ["core-dump-recorded", "core-proof-missing"])
+        self.assertFalse(b1.read_state(self.run_dir)["controls_clean"])
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding core-proof-missing", self.output)
+        self.assertIsNone(self.recorded())
+
+    def test_a_foreign_entry_is_never_ours_and_still_stops_the_rehearsal(self):
+        """R03-A: an entry of another process (same user and program, other pid) is not
+        taken for the control; the probe holds, but the after-check counts it as a crash
+        during B1, so the rehearsal has a finding and its proof is not usable."""
+        self.remove_proof()
+        self.plan["foreign_entry"] = True
+        self.assertEqual(self.tool("rehearse"), 1)
+        report = self.report()
+        probe = self.step(report, "core-probe")
+        self.assertTrue(probe["facts"]["proof_acquired"])
+        self.assertGreaterEqual(probe["facts"]["foreign_entries"], 1)
+        self.assertEqual(sorted(set(self.codes(report))),
+                         ["core-dump-recorded", "core-proof-missing"])
+        shutil.rmtree(os.path.join(self.logs, PROOF_DIR), ignore_errors=True)
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding core-proof-missing", self.output)
+        self.assertIsNone(self.recorded())
 
     def test_sandbox_failures_stop_before_the_image_is_read(self):
         """R02: no bubblewrap, a too old one, one that cannot start, or a probe check that
@@ -1122,9 +1274,15 @@ class RunTest(Fixture):
                 self.assertIsNone(self.recorded())
                 self.plan = saved
                 shutil.rmtree(self.run_dir)
+        # No bubblewrap: the proof is bound to it (R03-B), so run stops at the gate, and
+        # rehearse cannot start the sandbox.
         self.bwrap = os.path.join(self.w, "no-such-bwrap")
         self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding core-proof-missing", self.output)
+        self.assertIsNone(self.recorded())
+        self.assertEqual(self.tool("rehearse"), 1)
         self.assertIn("sandbox-unavailable", self.codes(self.report()))
+        self.assertIsNone(self.recorded())
 
     def test_verify_reads_only(self):
         self.assertEqual(self.tool("run"), 0, self.output)
@@ -1164,6 +1322,53 @@ class RunTest(Fixture):
         allowed = set(b1.FINDING_CODES)
         for code in re.findall(r"finding ([a-z0-9-]+) \(x", summary):
             self.assertIn(code, allowed)
+
+
+class EvidenceTest(Fixture):
+    def test_an_error_in_one_control_lets_the_others_run_and_resume_finishes(self):
+        """Review v3 R05-A: a write error in cp3-after is a finding, the following controls
+        still run, the state says evidence-incomplete, every command sees an incomplete run,
+        and resume completes the evidence."""
+        self.use_fake_guard()
+        self.plan["guard_postflight"] = "collide-cp3"
+        self.assertEqual(self.tool("run"), 1)
+        report = self.report()
+        steps = [item["step"] for item in report["steps"]]
+        for name in ("private-tree-after", "image-after", "pb1-figures"):
+            self.assertIn(name, steps)
+        self.assertIn("evidence-incomplete", self.codes(report))
+        state = b1.read_state(self.run_dir)
+        self.assertEqual(state["phase"], "evidence-incomplete")
+        self.assertEqual(state["evidence_incomplete"], ["cp3-after"])
+        self.assertIn("finished", state)
+        self.assertEqual(self.tool("prepare"), 1)
+        self.assertIn("finding incomplete-run", self.output)
+        del self.plan["guard_postflight"]
+        self.assertEqual(self.tool("resume", "--run-folder", os.path.basename(self.run_dir)), 1)
+        state = b1.read_state(self.run_dir)
+        self.assertEqual(state["phase"], "complete", state.get("evidence_incomplete"))
+        self.assertTrue(os.path.exists(os.path.join(self.run_dir, "cp3-after-resume.txt")))
+        self.tool("prepare")
+        self.assertNotIn("finding incomplete-run", self.output)
+
+    def test_an_unreadable_image_after_the_step_is_incomplete_evidence(self):
+        """Review v3 R05-A: a read error is incomplete evidence, not a complete run; two
+        resumes get their own files."""
+        self.use_fake_guard()
+        self.plan["guard_postflight"] = "lock-image"
+        self.assertEqual(self.tool("run"), 1)
+        state = b1.read_state(self.report() and self.run_dir)
+        self.assertEqual(state["evidence_incomplete"], ["image-after"])
+        name = os.path.basename(self.run_dir)
+        self.assertEqual(self.tool("resume", "--run-folder", name), 1)
+        self.assertEqual(b1.read_state(self.run_dir)["phase"], "evidence-incomplete")
+        os.chmod(self.iso, 0o444)
+        del self.plan["guard_postflight"]
+        self.tool("resume", "--run-folder", name)
+        self.assertEqual(b1.read_state(self.run_dir)["phase"], "complete")
+        for suffix in ("-resume", "-resume-2"):
+            self.assertTrue(os.path.exists(os.path.join(self.run_dir,
+                                                        f"report{suffix}.json")))
 
 
 class InterruptTest(Fixture):
@@ -1207,6 +1412,11 @@ class InterruptTest(Fixture):
         self.plan["sleep"] = 300
         proc = self.start("run")
         state = self.wait_for_phase("extracting")
+        record_file = os.path.join(self.run_dirs()[0], "fake-record.json")
+        for _ in range(100):  # the fake rexglue has started: the sandbox is up
+            if os.path.exists(record_file):
+                break
+            time.sleep(0.05)
         proc.kill()
         proc.communicate()
         name = os.path.basename(self.run_dirs()[0])
@@ -1277,8 +1487,11 @@ class RealSandboxTest(Fixture):
     def setUp(self):
         super().setUp()
         self.real, self.reason = real_bwrap()
-        hidden = [p for p in b1.SANDBOX_HIDDEN if b1.under_or_self(self.w, p)]
-        self.assertFalse(hidden, "set TMPDIR outside /tmp, /run and /var/tmp for this test")
+        # The sandbox shows an empty /tmp and runs only programs of the store.
+        self.assertFalse(b1.under_or_self(self.w, "/tmp"),
+                         "set TMPDIR outside /tmp for this test")
+        self.assertTrue(os.path.realpath(sys.executable).startswith(b1.SANDBOX_STORE + "/"),
+                        "run this test with a Python of /nix/store")
 
     def test_real_sandbox_confines_the_extraction(self):
         """R02 with the real bubblewrap: the probe passes, and a fake rexglue that writes
@@ -1310,8 +1523,23 @@ class RealSandboxTest(Fixture):
                    os.path.join(self.private, "iso", "leak"), os.path.join(self.repo, "leak")]
         self.plan["write_outside"] = targets
         self.plan["modify_image"] = True
+        # Sockets of the machine the sandbox must not reach: one under the home folder, one
+        # elsewhere, outside every folder of its positive list.
+        outside = os.path.join(self.w, "outside")
+        os.mkdir(outside)
+        sockets = [os.path.join(self.home, "agent.sock"), os.path.join(outside, "srv.sock")]
+        servers = []
+        for path in sockets:
+            server = socket.socket(socket.AF_UNIX)
+            server.bind(path)
+            server.listen(1)
+            servers.append(server)
+            self.addCleanup(server.close)
+        self.plan["connect_sockets"] = sockets
         self.assertEqual(self.tool("run"), 0, self.output)
         record = self.recorded()
+        for path in sockets:
+            self.assertEqual(record["attempts"]["socket " + path], "ENOENT")
         for target in targets:
             self.assertEqual(record["attempts"][target], "EROFS")
             self.assertFalse(os.path.exists(target))
@@ -1358,7 +1586,8 @@ class UnitTest(unittest.TestCase):
         # socket serves only the confinement probe and its two local listeners.
         self.assertEqual(names, {"argparse", "datetime", "errno", "hashlib",
                                  "importlib.util", "json", "os", "re", "resource", "select",
-                                 "signal", "socket", "stat", "subprocess", "sys", "time"})
+                                 "shutil", "signal", "socket", "stat", "subprocess", "sys",
+                                 "time"})
 
     def test_summary_codes_and_steps_are_fixed(self):
         for code in b1.FINDING_CODES:
@@ -1490,37 +1719,35 @@ class UnitTest(unittest.TestCase):
             self.assertEqual([code for code, _ in findings], ["folder-mount"])
 
     def test_sandbox_options(self):
+        """Review v3 R02: a positive list. An empty root, the store and the private folder
+        read-only, the destinations writable, then the root read-only."""
         with tempfile.TemporaryDirectory() as private:
-            ctx = mock.Mock(private=private, home=os.path.dirname(private))
+            ctx = mock.Mock(private=private, home=os.path.dirname(private), store=private)
             ctx.args.bwrap = "bwrap"
             argv = b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
-            home = argv.index(ctx.home)
-            self.assertEqual(argv[home - 1], "--tmpfs")
-            self.assertEqual(argv[argv.index("--remount-ro") + 1], ctx.home)
-            self.assertGreater(argv.index("--remount-ro"),
-                               max(i for i, a in enumerate(argv) if a == "--bind"))
-            self.assertEqual(argv[:13], ["bwrap", "--unshare-all", "--unshare-user",
-                                         "--disable-userns", "--die-with-parent",
-                                         "--new-session", "--ro-bind", "/", "/", "--dev",
-                                         "/dev", "--proc", "/proc"])
+            self.assertEqual(argv[:8], ["bwrap", "--unshare-all", "--unshare-user",
+                                        "--disable-userns", "--die-with-parent",
+                                        "--new-session", "--tmpfs", "/"])
             self.assertNotIn("--share-net", argv)
-            self.assertEqual(argv[-3:], ["9", "--", "cmd"])
+            self.assertNotIn("/", [argv[i + 1] for i, a in enumerate(argv)
+                                   if a in ("--bind", "--ro-bind")])
+            self.assertIn(["--ro-bind", "/nix/store", "/nix/store"],
+                          [argv[i:i + 3] for i in range(len(argv))])
             binds = [argv[i + 1] for i, a in enumerate(argv) if a == "--bind"]
             self.assertEqual(binds, [private + "/logs/r"] +
                              [os.path.join(private, n) for n in b1.SANDBOX_WRITABLE])
-            # The private folder is bound read-only after every tmpfs, before its binds.
-            ro = argv.index(private)
-            tmpfs = [i for i, a in enumerate(argv) if a == "--tmpfs"]
-            self.assertTrue(all(i < ro for i in tmpfs))
+            self.assertEqual(argv[argv.index("--remount-ro") + 1], "/")
+            self.assertGreater(argv.index("--remount-ro"),
+                               max(i for i, a in enumerate(argv) if a == "--bind"))
+            self.assertEqual(argv[-3:], ["9", "--", "cmd"])
 
     def test_sandbox_blockers(self):
-        """The sandbox hides the home folder: the tool, Python and the SDK must lie
-        elsewhere, as with the packaged command in /nix/store."""
-        ctx = mock.Mock(home="/nonexistent-home", sdk="/nix/store/x-rexglue-sdk-0.11.0")
-        self.assertEqual(b1.sandbox_blockers(ctx), [])
-        ctx.home = os.path.dirname(os.path.realpath(TOOL))
-        self.assertEqual([code for code, _ in b1.sandbox_blockers(ctx)],
-                         ["sandbox-unavailable"])
+        """Python and the SDK must be in the store, the only programs of the positive list."""
+        ctx = mock.Mock(store="/nix/store", sdk="/nix/store/x-rexglue-sdk-0.11.0")
+        in_store = os.path.realpath(sys.executable).startswith("/nix/store/")
+        self.assertEqual(b1.sandbox_blockers(ctx) == [], in_store)
+        ctx.sdk = "/opt/rexglue-sdk-0.11.0"
+        self.assertIn("sandbox-unavailable", [code for code, _ in b1.sandbox_blockers(ctx)])
 
     def test_core_limits(self):
         self.assertEqual(b1.EXTRACTION_CORE_LIMIT, (1, 1))

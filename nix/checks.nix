@@ -616,6 +616,12 @@ in
           test_rehearse_acquires_the_proof_then_run_passes test_j0_report_gates \
           test_run_needs_a_proof_of_this_boot_kernel_and_setting \
           test_proof_fails_when_the_handler_or_the_kernel_misbehaves \
+          test_a_late_control_entry_is_still_found \
+          test_an_entry_at_limit_one_after_the_window_is_still_a_finding \
+          test_a_foreign_entry_is_never_ours_and_still_stops_the_rehearsal \
+          test_an_error_in_one_control_lets_the_others_run_and_resume_finishes \
+          test_an_unreadable_image_after_the_step_is_incomplete_evidence \
+          test_socket_or_fifo_in_the_private_folder_is_refused test_sandbox_options \
           test_image_hash_mismatch_with_the_j0_report_stops_before_rexglue test_sandbox_failures_stop_before_the_image_is_read \
           test_summary_holds_no_free_text test_summary_validators_reject_free_text \
           test_sigterm_and_repeated_signals_finish_the_controls test_killed_supervisor_leaves_a_detectable_state_and_resume_finishes \
@@ -670,19 +676,26 @@ in
         ' ${self}/tools/test_iso_identify.py "$P/iso/fifa2010wc.iso" "$W/reference.json" \
           "$P/logs/j0-identification.json"
         chmod a-w "$P/iso/fifa2010wc.iso"
+        # A proof as rehearse writes it, bound to this boot, kernel and settings, and to the
+        # tool, bubblewrap and Python of the packaged command (same pkgs, same files).
         ${python}/bin/python3 -I -c '
-        import importlib.util, os, sys
+        import importlib.util, os, sys, time, types
         sys.dont_write_bytecode = True
         spec = importlib.util.spec_from_file_location("b1", sys.argv[1])
         b1 = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(b1)
         folder = os.path.join(sys.argv[2], "logs", "b1-rehearse-20000101T000000Z")
         os.mkdir(folder, 0o700)
-        identity = b1.core_identity(sys.argv[3], sys.argv[4])
+        ctx = types.SimpleNamespace(args=types.SimpleNamespace(
+            core_pattern_file=sys.argv[3], suid_dumpable_file=sys.argv[4], bwrap=sys.argv[5]))
+        identity = b1.proof_identity(ctx)
         b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
                                 "phase": "complete", "controls_clean": True,
-                                "core_proof": dict(identity, result="validated")})
-        ' ${self}/tools/b1_extract.py "$P" "$S/core_pattern" "$S/suid_dumpable"
+                                "evidence_incomplete": [],
+                                "core_proof": dict(identity, result="validated",
+                                                   proved_at=time.time())})
+        ' ${self}/tools/b1_extract.py "$P" "$S/core_pattern" "$S/suid_dumpable" \
+          ${pkgs.bubblewrap}/bin/bwrap
         b1() {
           (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
             --nix "$S/nix" --coredumpctl "$S/coredumpctl" --reference "$W/reference.json" \
@@ -711,7 +724,7 @@ in
         cat "$out/2-run.txt"
         run=$(echo "$P"/logs/b1-run-*)
         for line in "vfs-dump             ok       exit 0   type GDFX, nodes 9" \
-                    "probe_checks_passed 23" \
+                    "probe_checks_passed 24" \
                     "proof_found True" \
                     "files: expected 5, found 5: match" \
                     "directories (root not counted): expected 3, found 3: match" \

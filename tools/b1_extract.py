@@ -45,6 +45,7 @@ import os
 import re
 import resource
 import select
+import shutil
 import signal
 import socket
 import stat
@@ -52,7 +53,7 @@ import subprocess
 import sys
 import time
 
-TOOL_VERSION = 3
+TOOL_VERSION = 4
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GUARD = os.path.join(HERE, "private_guard.py")
 ISO_NAME = "fifa2010wc.iso"
@@ -81,11 +82,12 @@ PRIVATE_COMPONENTS = ("iso", "game", "logs", "tmp", "app", "xdg", "xdg/config",
 # Folders the extraction may write, besides the run folder: bound writable in the sandbox
 # and declared to preflight.
 SANDBOX_WRITABLE = ("game", "app", "tmp")
-# Host folders replaced by an empty tmpfs in the sandbox, when they exist: they hold the
-# sockets of system services (D-Bus, journal, the Nix daemon) and shared temporary files.
-SANDBOX_HIDDEN = ("/tmp", "/run", "/var/tmp", "/nix/var/nix/daemon-socket")
-SANDBOX_TMPFS_BYTES = 16 << 20
-HOME_TMPFS_BYTES = 1 << 20
+# The sandbox is built from a positive list (review v3, R02): an empty read-only root that
+# holds only the Nix store (read-only; a valid store path holds no socket or FIFO, which
+# NAR cannot represent), /dev and /proc of the sandbox, an empty /tmp, the tool itself,
+# the private folder (read-only) and the writable destinations. Nothing else of the
+# machine is visible: no home folder, /run, /var, /etc, nor the /tmp of the machine.
+SANDBOX_STORE = "/nix/store"
 BWRAP_MIN_VERSION = (0, 8, 0)
 # Core dump limits (D-018, option B of docs/J2_B1_EXTRACTION.md section 6): the sandboxed
 # extraction and the confinement probe run with exactly 1, which makes the kernel drop a
@@ -96,6 +98,9 @@ EXTRACTION_CORE_LIMIT = (1, 1)
 SUPERVISOR_CORE_LIMIT = (0, 1)
 CONTROL_CORE_LIMIT = (0, 0)
 PROOF_MIN_WAIT = 5
+# Version of the protocol of the proof of option B (review v3, R03-B), and its lifetime.
+PROOF_PROTOCOL = 2
+PROOF_MAX_AGE = 24 * 3600
 BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
 # The store entry already found by CP-3 before PB-0: never opened, never deleted.
 KNOWN_STORE_ENTRY = "nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude"
@@ -144,6 +149,7 @@ FINDING_CODES = {
     "repo-invalid": "the repository is missing, not clean or git failed",
     "mounts-unavailable": "the mount table could not be read",
     "private-mount": "a mount point lies inside the private folder",
+    "private-ipc": "a socket or a FIFO lies inside the private folder",
     "watch-unusable": "a watched place is absent or not readable",
     "mount-changed": "a mount in scope appeared, disappeared or changed",
     "mount-events": "the mount table changed during the step",
@@ -173,6 +179,7 @@ FINDING_CODES = {
     "dump-not-started": "the sandboxed extraction did not start",
     "interrupted": "the step was interrupted",
     "internal-error": "an unexpected error in the tool",
+    "evidence-incomplete": "a mandatory control did not complete: resume can retry it",
     "pb1-differs": "a PB-1 figure differs from the reference",
     "tree-anomaly": "an entry of the extracted tree is a link, special or elsewhere",
 }
@@ -197,7 +204,7 @@ PROBE_CHECKS = (
     "write-denied-store", "write-denied-repo", "write-allowed-run-folder",
     "writable-game", "writable-app", "writable-tmp", "image-read-only",
     "tmp-private-empty", "run-hidden", "nix-daemon-socket-hidden", "home-hidden",
-    "net-loopback-only",
+    "root-allowlist-only", "net-loopback-only",
     "net-tcp-host-unreachable", "net-tcp-remote-unreachable", "net-udp-unreachable",
     "net-abstract-unix-isolated", "userns-disabled", "core-limit-one", "no-capabilities",
     "pid-isolated",
@@ -208,7 +215,7 @@ STEP_NAMES = (
     "core-probe", "mounts-before", "image-before", "cp3-before", "preflight",
     "before-extraction", "vfs-dump", "postflight", "mounts-after", "core-dumps",
     "cp3-after", "image-after", "private-tree-after", "pb1-figures", "interrupted",
-    "internal-error", "resume",
+    "internal-error", "resume", "evidence", "private-ipc",
 )
 
 
@@ -257,9 +264,11 @@ SUMMARY_FACTS = {
     "j0-report": {"report_present": _bool, "report_matches_j0": _bool},
     "sandbox": {"bwrap_version_ok": _bool, "probe_checks": _int,
                 "probe_checks_passed": _int, "probe_failed_checks": _names(PROBE_CHECKS)},
-    "core-probe": {"control_signal": SIGNAL_NUMBER, "control_entry_found": _bool,
-                   "control_corefile": COREFILE, "limit_one_signal": SIGNAL_NUMBER,
-                   "limit_one_entry_found": _bool, "proof_acquired": _bool},
+    "core-probe": {"control_signal": SIGNAL_NUMBER, "control_identified": _bool,
+                   "control_entry_found": _bool, "control_corefile": COREFILE,
+                   "limit_one_signal": SIGNAL_NUMBER, "limit_one_identified": _bool,
+                   "limit_one_entry_found": _bool, "foreign_entries": _int,
+                   "settings_stable": _bool, "proof_acquired": _bool},
     "mounts-before": {"mounts_in_scope": _int, "mount_points_watched": _int},
     "image-before": {"image_matches_j0_report": _bool},
     "cp3-before": {"matches": _int, "known_entry_listed": _bool, "other_matches": _int},
@@ -276,6 +285,7 @@ SUMMARY_FACTS = {
     "pb1-figures": {"files": _int, "directories": _int, "hidden_names": _int,
                     "anomalies": _int},
     "interrupted": {"signals": _int},
+    "private-ipc": {"sockets": _int, "fifos": _int},
 }
 STATUSES = ("ok", "finding", "skipped")
 
@@ -609,6 +619,27 @@ def compare_identities(before, after):
             for name, ident in before.items() if after.get(name) != ident]
 
 
+def private_ipc(ctx):
+    """Sockets and FIFOs inside the private folder. The sandbox shows the private folder,
+    so they would be the only paths through which the extraction could reach another
+    process (review v3, R02). Links are never followed. Returns (sockets, fifos, unreadable)."""
+    sockets, fifos, unreadable = [], [], []
+    for root, dirs, files in os.walk(ctx.private, onerror=lambda e: unreadable.append(
+            e.filename)):
+        for name in dirs + files:
+            path = os.path.join(root, name)
+            try:
+                mode = os.lstat(path).st_mode
+            except OSError:
+                unreadable.append(path)
+                continue
+            if stat.S_ISSOCK(mode):
+                sockets.append(path)
+            elif stat.S_ISFIFO(mode):
+                fifos.append(path)
+    return sockets, fifos, unreadable
+
+
 def check_image(ctx, findings, notes, facts):
     rel = f"iso/{ISO_NAME}"
     try:
@@ -846,7 +877,9 @@ def core_identity(pattern_file, suid_file, boot_file=BOOT_ID_FILE):
 
 
 def find_core_proof(ctx, identity):
-    """The newest complete rehearsal whose proof holds for `identity`, or None."""
+    """The newest rehearsal whose proof holds for `identity` (see proof_identity()): complete
+    with all its evidence, not resumed, with no finding but the extraction gates, made by
+    this version of the tool and protocol, and less than PROOF_MAX_AGE old. Or None."""
     if not identity:
         return None
     try:
@@ -854,12 +887,19 @@ def find_core_proof(ctx, identity):
     except OSError:
         return None
     for name in names:
-        if RUN_DIR_RE.fullmatch(name) and name.startswith("b1-rehearse-"):
-            state = read_state(os.path.join(ctx.logs, name))
-            if state and state.get("phase") == "complete" and \
-                    state.get("controls_clean") is True and \
-                    state.get("core_proof") == dict(identity, result="validated"):
-                return name
+        if not (RUN_DIR_RE.fullmatch(name) and name.startswith("b1-rehearse-")):
+            continue
+        state = read_state(os.path.join(ctx.logs, name))
+        if not state or state.get("phase") != "complete" or state.get("resumed") or \
+                state.get("controls_clean") is not True or \
+                state.get("tool_version") != TOOL_VERSION:
+            continue
+        proof = dict(state.get("core_proof") or {})
+        proved_at = proof.pop("proved_at", None)
+        if proof == dict(identity, result="validated") and \
+                isinstance(proved_at, (int, float)) and \
+                0 <= time.time() - proved_at <= PROOF_MAX_AGE:
+            return name
     return None
 
 
@@ -884,11 +924,13 @@ def core_settings(ctx, findings):
         handler = os.path.basename(words[0]) if words else ""
         facts["core_handler"] = "systemd-coredump" if handler == "systemd-coredump" \
             else "other"
-        identity = core_identity(ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)
+        identity = proof_identity(ctx)
         proof = find_core_proof(ctx, identity)
         facts["proof_found"] = proof is not None
         if identity is None:
-            findings.append(("core-settings-unreadable", "cannot read the boot id"))
+            # Nothing a proof could be bound to (R03-B): it is missing, as for run.
+            findings.append(("core-proof-missing", "no proof can be bound: the boot id, the "
+                                                   "tool file or bubblewrap cannot be read"))
         elif proof is None:
             findings.append(("core-proof-missing", "no rehearsal of this boot proves that a "
                                                    "crash at limit 1 reaches no handler"))
@@ -999,35 +1041,51 @@ def bwrap_version(ctx):
     return tuple(int(x) for x in match.groups()) if match else None
 
 
+def sandbox_stores(ctx):
+    """The store folders bound read-only: /nix/store, and the test store when another."""
+    return [path for path in dict.fromkeys([SANDBOX_STORE, ctx.store]) if os.path.isdir(path)]
+
+
 def sandbox_blockers(ctx):
-    """The sandbox hides the home folder: what it needs must lie elsewhere."""
-    needed = [os.path.realpath(sys.executable), os.path.realpath(__file__)]
+    """What the sandbox runs must be in its positive list: Python and the SDK in the
+    store; the tool is bound on its own."""
+    stores = sandbox_stores(ctx)
+    needed = [os.path.realpath(sys.executable)]
     if ctx.sdk:
         needed.append(os.path.realpath(ctx.sdk))
-    return [("sandbox-unavailable", f"needed by the sandbox, but inside the home folder, "
-                                    f"which it hides: {path} (use the packaged command)")
-            for path in needed if under_or_self(path, ctx.home)]
+    return [("sandbox-unavailable", f"needed by the sandbox, but outside the store: {path} "
+                                    "(use the packaged command)")
+            for path in needed if not any(under_or_self(path, store) for store in stores)]
+
+
+def sandbox_root_names(ctx, run_dir):
+    """The names the root of the sandbox may show."""
+    names = {"nix", "dev", "proc", "tmp"}
+    for path in sandbox_stores(ctx) + [os.path.realpath(__file__), ctx.private, run_dir]:
+        names.add(path.strip("/").split("/")[0])
+    return sorted(names)
 
 
 def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
-    """bubblewrap around one command: every namespace unshared (no network: only a
-    loopback of its own), no further user namespace, killed with this process, the whole
-    file system read-only, an empty tmpfs over the folders of system sockets and shared
-    temporary files, an empty read-only tmpfs over the home folder (its sockets and files
-    are out of reach), the private folder read-only, and only the run folder, game/, app/
-    and tmp/ writable."""
+    """bubblewrap around one command, from a positive list: every namespace unshared (no
+    network: only a loopback of its own), no further user namespace, killed with this
+    process; an empty root holding only the store (read-only), /dev and /proc of the
+    sandbox, an empty /tmp, the tool, the private folder (read-only) and the run folder,
+    game/, app/ and tmp/ (writable); then the root is remounted read-only."""
     argv = [ctx.args.bwrap, "--unshare-all", "--unshare-user", "--disable-userns",
-            "--die-with-parent", "--new-session",
-            "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
-    for path in SANDBOX_HIDDEN:
-        if os.path.isdir(path) and not os.path.islink(path):
-            argv += ["--size", str(SANDBOX_TMPFS_BYTES), "--tmpfs", path]
-    argv += ["--size", str(HOME_TMPFS_BYTES), "--tmpfs", ctx.home]
+            "--die-with-parent", "--new-session", "--tmpfs", "/"]
+    stores = sandbox_stores(ctx)
+    for store in stores:
+        argv += ["--ro-bind", store, store]
+    argv += ["--dev", "/dev", "--proc", "/proc", "--dir", "/tmp"]
+    tool = os.path.realpath(__file__)
+    if not any(under_or_self(tool, store) for store in stores):
+        argv += ["--ro-bind", tool, tool]
     argv += ["--ro-bind", ctx.private, ctx.private, "--bind", run_dir, run_dir]
     for name in SANDBOX_WRITABLE:
         path = os.path.join(ctx.private, name)
         argv += ["--bind", path, path]
-    argv += ["--remount-ro", ctx.home]
+    argv += ["--remount-ro", "/"]
     argv += ["--chdir", chdir or ctx.private, "--json-status-fd", str(status_fd), "--"]
     return argv + list(command)
 
@@ -1123,8 +1181,7 @@ def probe_spec(ctx, run_dir, tcp_port, abstract):
             "game": ctx.game, "app": os.path.join(ctx.private, "app"),
             "tmp": os.path.join(ctx.private, "tmp"), "image": ctx.iso,
             "tcp_port": tcp_port, "abstract": abstract,
-            "hidden": [path for path in SANDBOX_HIDDEN
-                       if os.path.isdir(path) and not os.path.islink(path)]}
+            "root_names": sandbox_root_names(ctx, run_dir)}
 
 
 def run_probe(ctx, steps, run_dir, env):
@@ -1235,9 +1292,8 @@ def probe_main(argv):
         check(f"writable-{name}", os.access(spec[name], os.W_OK))
     check("image-read-only", os.access(spec["image"], os.R_OK)
           and not os.access(spec["image"], os.W_OK))
-    hidden = set(spec["hidden"])
-    check("tmp-private-empty", "/tmp" not in hidden or os.listdir("/tmp") == [])
-    check("run-hidden", "/run" not in hidden or os.listdir("/run") == [])
+    check("tmp-private-empty", os.listdir("/tmp") == [])
+    check("run-hidden", not os.path.lexists("/run"))
     check("nix-daemon-socket-hidden",
           not os.path.lexists("/nix/var/nix/daemon-socket/socket"))
     rel = os.path.relpath(spec["private"], spec["home"])
@@ -1245,8 +1301,12 @@ def probe_main(argv):
     try:
         visible = set(os.listdir(spec["home"]))
         check("home-hidden", visible <= allowed, str(len(visible)))
+    except FileNotFoundError:
+        check("home-hidden", True, "absent")
     except OSError as exc:
         check("home-hidden", False, errno.errorcode.get(exc.errno, ""))
+    root = sorted(os.listdir("/"))
+    check("root-allowlist-only", set(root) <= set(spec["root_names"]), ",".join(root))
     names = [name for _, name in socket.if_nameindex()]
     check("net-loopback-only", names == ["lo"], ",".join(names))
 
@@ -1293,9 +1353,12 @@ def crash_main(argv):
 
 def synthetic_crash(ctx, run_dir, name, core_limit):
     """One synthetic crash in the sandbox, from / and with an empty environment, so that
-    the journal entry of a handler names no private path. Returns (signal, pids)."""
+    the journal entry of a handler names no private path. Returns (signal, host pid of the
+    crashing program, window) where the pid is None unless exactly one program was found
+    under the init of the sandbox, and the window is (start, end) in microseconds."""
     command = [sys.executable, "-I", os.path.abspath(__file__), "_crash"]
     read_end, write_end = os.pipe()
+    start_us = time.time_ns() // 1000
     with open(os.path.join(run_dir, f"{name}.stdout"), "xb") as out, \
             open(os.path.join(run_dir, f"{name}.stderr"), "xb") as err:
         try:
@@ -1304,7 +1367,7 @@ def synthetic_crash(ctx, run_dir, name, core_limit):
         except OSError:
             os.close(read_end)
             os.close(write_end)
-            return None, []
+            return None, None, (start_us, start_us)
         os.close(read_end)
         pids = []
         for _ in range(100):
@@ -1312,6 +1375,8 @@ def synthetic_crash(ctx, run_dir, name, core_limit):
             if pids:
                 break
             time.sleep(0.05)
+        time.sleep(0.05)
+        pids = box.command_pids() or pids
         try:
             os.write(write_end, b"x")
         except OSError:
@@ -1322,56 +1387,115 @@ def synthetic_crash(ctx, run_dir, name, core_limit):
         except subprocess.TimeoutExpired:
             code = box.stop()
         box.close()
-    return (code - 128 if isinstance(code, int) and code > 128 else None), pids
+    sig = code - 128 if isinstance(code, int) and code > 128 else None
+    return sig, (pids[0] if len(pids) == 1 else None), (start_us, time.time_ns() // 1000)
 
 
-def crash_entries(ctx, since, pids, lines):
+def entry_signal(value):
+    names = {"SEGV": signal.SIGSEGV, "SIGSEGV": signal.SIGSEGV}
+    return names.get(value, value) if isinstance(value, str) else value
+
+
+def crash_entries(ctx, since, pid, window, lines):
+    """The coredumpctl entries of one synthetic crash: the same pid, uid, signal and
+    executable, recorded inside its window or after it. Other entries are counted, never
+    taken for it. Returns (entries, foreign count, error)."""
     entries, raw, error = coredumps_since(ctx, since)
     lines.append(raw.decode("utf-8", "replace"))
     if error:
-        return None, error
-    return [e for e in entries if e.get("pid") in pids or
-            (not pids and e.get("exe") == sys.executable)], None
+        return None, 0, error
+    exe = os.path.realpath(sys.executable)
+    ours, foreign = [], 0
+    for entry in entries:
+        stamp = entry.get("time")
+        if (pid is not None and entry.get("pid") == pid and entry.get("uid") == os.getuid()
+                and entry_signal(entry.get("sig")) == signal.SIGSEGV
+                and isinstance(entry.get("exe"), str)
+                and os.path.realpath(entry["exe"]) == exe
+                and isinstance(stamp, int) and stamp >= window[0] - 1000000):
+            ours.append(entry)
+        else:
+            foreign += 1
+    return ours, foreign, None
+
+
+def proof_identity(ctx):
+    """What a proof of option B holds for (review v3, R03-B): this boot, kernel,
+    core_pattern and suid_dumpable, the protocol and version of this tool, the tool file,
+    bubblewrap and Python. Returns None if one of them cannot be read."""
+    identity = core_identity(ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)
+    bwrap = shutil.which(ctx.args.bwrap)
+    if identity is None or not bwrap:
+        return None
+    try:
+        identity.update(protocol=PROOF_PROTOCOL, tool_version=TOOL_VERSION,
+                        tool_sha256=file_sha256(os.path.realpath(__file__)),
+                        bwrap=os.path.realpath(bwrap),
+                        bwrap_sha256=file_sha256(os.path.realpath(bwrap)),
+                        python=os.path.realpath(sys.executable))
+    except OSError:
+        return None
+    return identity
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def run_core_probe(ctx, steps, run_dir, state):
     """The local proof of option B (D-018), with synthetic programs only, in the sandbox of
-    the extraction. A control crash with RLIMIT_CORE 0 must reach the handler: coredumpctl
-    lists it, which shows that the handler and coredumpctl work. The same crash with
-    RLIMIT_CORE 1 must reach nothing: no entry, after waiting at least PROOF_MIN_WAIT
-    seconds and three times the delay of the control. The proof holds for this boot, this
-    kernel, this core_pattern and this suid_dumpable only."""
+    the extraction.
+    1. A control crash with RLIMIT_CORE 0 must reach the handler: coredumpctl lists an
+       entry with its pid, uid, signal and executable. This shows that the handler and
+       coredumpctl work, and measures the delay of the journal.
+    2. The same crash with RLIMIT_CORE 1 must reach nothing: no entry for its pid, after
+       waiting at least PROOF_MIN_WAIT seconds and three times the delay of the control.
+    Both programs must be identified by a single host pid. The settings must be the same
+    at the start and at the end. The absence of an entry is an observation over a window,
+    not an absolute proof; the control and the kernel code (fs/coredump.c) support it."""
     findings, facts, lines = [], {}, []
-    identity = core_identity(ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)
+    identity = proof_identity(ctx)
     started = time.monotonic()
     since = int(time.time()) - 1
-    signal_0, pids_0 = synthetic_crash(ctx, run_dir, "core-control", CONTROL_CORE_LIMIT)
+    signal_0, pid_0, window_0 = synthetic_crash(ctx, run_dir, "core-control",
+                                                CONTROL_CORE_LIMIT)
     crashed = time.monotonic()
     facts["control_signal"] = signal_0
-    control = None
+    facts["control_identified"] = pid_0 is not None
+    control, foreign = None, 0
     for _ in range(30):
-        matching, error = crash_entries(ctx, since, pids_0, lines)
+        if pid_0 is None:
+            break
+        matching, foreign, error = crash_entries(ctx, since, pid_0, window_0, lines)
         if error:
             findings.append(("coredumpctl-failed", error))
             break
-        if matching:
+        if len(matching) == 1:
             control = matching[0]
+            break
+        if len(matching) > 1:
             break
         time.sleep(0.5)
     latency = time.monotonic() - crashed
     facts["control_entry_found"] = control is not None
     facts["control_corefile"] = control.get("corefile", "unknown") if control else "unknown"
-    probe_pids = set(pids_0) | ({control["pid"]} if control and
-                                isinstance(control.get("pid"), int) else set())
     since_1 = int(time.time()) + 1
     while time.time() < since_1:
         time.sleep(0.05)
-    signal_1, pids_1 = synthetic_crash(ctx, run_dir, "core-limit-one", EXTRACTION_CORE_LIMIT)
+    signal_1, pid_1, window_1 = synthetic_crash(ctx, run_dir, "core-limit-one",
+                                                EXTRACTION_CORE_LIMIT)
     facts["limit_one_signal"] = signal_1
+    facts["limit_one_identified"] = pid_1 is not None
     deadline = time.monotonic() + max(PROOF_MIN_WAIT, 3 * latency)
     reached = None
-    while time.monotonic() < deadline and reached is None and not findings:
-        matching, error = crash_entries(ctx, since_1, pids_1, lines)
+    while pid_1 is not None and time.monotonic() < deadline and reached is None \
+            and not findings:
+        matching, more, error = crash_entries(ctx, since_1, pid_1, window_1, lines)
+        foreign = max(foreign, more)
         if error:
             findings.append(("coredumpctl-failed", error))
         elif matching:
@@ -1379,18 +1503,23 @@ def run_core_probe(ctx, steps, run_dir, state):
         else:
             time.sleep(0.5)
     facts["limit_one_entry_found"] = reached is not None
-    if reached and isinstance(reached.get("pid"), int):
-        probe_pids.add(reached["pid"])
+    facts["foreign_entries"] = foreign
     write_new(os.path.join(run_dir, "core-probe-coredumpctl.txt"), "\n".join(lines))
-    acquired = (identity is not None and signal_0 == signal.SIGSEGV and control is not None
-                and signal_1 == signal.SIGSEGV and reached is None and not findings)
+    stable = identity is not None and proof_identity(ctx) == identity
+    facts["settings_stable"] = stable
+    acquired = (stable and signal_0 == signal.SIGSEGV and pid_0 is not None
+                and control is not None and signal_1 == signal.SIGSEGV
+                and pid_1 is not None and reached is None and not findings)
     facts["proof_acquired"] = acquired
     if acquired:
-        state["core_proof"] = dict(identity, result="validated")
+        state["core_proof"] = dict(identity, result="validated", proved_at=time.time())
     else:
-        findings.append(("core-probe-failed", "control crash with an entry, then a crash at "
-                                              "limit 1 without one, were not both observed"))
-    state["core_probe_pids"] = sorted(probe_pids)
+        findings.append(("core-probe-failed", "two identified synthetic crashes, the "
+                                              "control listed and the one at limit 1 not, "
+                                              "with stable settings, were not all observed"))
+    # Only the control crash is expected in the journal. An entry for the crash at limit 1
+    # that comes after the window is not left out: the after-check counts it.
+    state["core_probe_pids"] = [pid_0] if pid_0 is not None else []
     return steps.add("core-probe", "ok", facts=facts, findings=findings,
                      output="core-probe-coredumpctl.txt",
                      duration=time.monotonic() - started)
@@ -1812,7 +1941,10 @@ def finish(ctx, steps, command, started, run_dir=None, pb1=None, state=None, suf
                   json.dumps(report, indent=2, ensure_ascii=False) + "\n")
         write_new(os.path.join(run_dir, f"summary{suffix}.txt"), summary)
         if state is not None:
-            state["phase"] = "complete"
+            # The end of the execution, apart from the completeness of the evidence.
+            state["finished"] = utc_stamp()
+            state["phase"] = "evidence-incomplete" if state.get("evidence_incomplete") \
+                else "complete"
             # A rehearsal proves option B only if nothing but the extraction gates came up.
             state["controls_clean"] = all(code in EXTRACTION_GATES for code in steps.codes())
             write_state(run_dir, state)
@@ -1863,6 +1995,13 @@ def prepare_checks(ctx, steps):
                                            "components_checked": len(PRIVATE_COMPONENTS)},
               findings=findings)
 
+    sockets, fifos, unreadable = private_ipc(ctx)
+    steps.add("private-ipc", "ok", facts={"sockets": len(sockets), "fifos": len(fifos)},
+              findings=[("private-ipc", f"socket: {path}") for path in sockets]
+              + [("private-ipc", f"FIFO: {path}") for path in fifos]
+              + [("folder-invalid", f"unreadable inside the private folder: {path}")
+                 for path in unreadable])
+
     findings, facts = [], {}
     check_sdk(ctx, findings, facts)
     steps.add("sdk", "ok", facts=facts, findings=findings)
@@ -1910,36 +2049,61 @@ def cmd_verify(ctx):
     return finish(ctx, steps, "verify", started, pb1=pb1)
 
 
+def resume_suffix(state):
+    """"" for a first pass, then -resume, -resume-2, ... for each resume."""
+    count = state.get("resumes", 0)
+    return "" if not count else "-resume" if count == 1 else f"-resume-{count}"
+
+
 def after_checks(ctx, steps, run_dir, state, events=None):
     """The controls after the extraction, also used by `resume`. They only read, and write
-    their outputs in the run folder. Returns the PB-1 figures of a run."""
-    suffix = "-resume" if state.get("resumed") else ""
-    marker = os.path.join(run_dir, "b1.marker")
-    if os.path.lexists(marker):
+    their outputs in the run folder. Each one runs on its own (review v3, R05-A): an error
+    in one is a finding, and the others still run. Each one says whether its evidence is
+    complete; when a mandatory one is not, state.json says `evidence-incomplete`, and
+    `resume` can try again. Returns the PB-1 figures of a run."""
+    suffix = resume_suffix(state)
+    incomplete = []
+    results = {}
+
+    def attempt(name, control):
+        try:
+            complete = control()
+        except Exception as exc:
+            steps.add(name, "finding", findings=[("internal-error",
+                                                  f"{name}: {type(exc).__name__}")])
+            complete = False
+        if not complete:
+            incomplete.append(name)
+
+    def postflight():
+        marker = os.path.join(run_dir, "b1.marker")
+        if not os.path.lexists(marker):
+            steps.add("postflight", "skipped", notes=["no marker: nothing was started"])
+            return True
         watches = []
         for place in [ctx.home, ctx.tmp_watch] + state.get("watch", []):
             watches += ["--watch", place]
         post = ctx.guard_cmd("postflight", "--marker", marker, "--sdk", ctx.sdk,
                              "--nix", ctx.args.nix, *watches,
                              *(["--shm-dir", ctx.args.shm_dir] if ctx.args.shm_dir else []))
-        guard_step(ctx, steps, "postflight", post, run_dir,
-                   env=step_env(ctx, run_dir), cwd=ctx.private,
-                   output=f"postflight{suffix}.txt")
-    else:
-        steps.add("postflight", "skipped", notes=["no marker: nothing was started"])
-    state["phase"] = "postflight"
-    write_state(run_dir, state)
+        item = guard_step(ctx, steps, "postflight", post, run_dir,
+                          env=step_env(ctx, run_dir), cwd=ctx.private,
+                          output=f"postflight{suffix}.txt")
+        return item.get("exit_code") in (0, 1) and \
+            not any(f["code"] == "guard-error" for f in item["findings"])
 
-    mounts, raw, error = read_mounts(ctx)
-    if error:
-        steps.add("mounts-after", "finding", findings=[("mounts-unavailable", error)])
-    else:
+    def mounts_after():
+        mounts, raw, error = read_mounts(ctx)
+        if error:
+            steps.add("mounts-after", "finding", findings=[("mounts-unavailable", error)])
+            return False
         write_new(os.path.join(run_dir, f"mounts-after{suffix}.json"), raw)
         relevant, _, _, _ = mount_plan(ctx, mounts)
         facts, findings = compare_mounts(state.get("mounts_before", []), relevant)
         moved = events.changed() if events is not None else None
         facts["mount_events"] = bool(moved) if moved is not None else True
         if moved is None:
+            # Not retryable: the window is over. A finding, with the evidence complete.
             findings.append(("mount-events", "the mount events could not be watched for "
                                              "this period"))
         elif moved and not findings:
@@ -1947,68 +2111,96 @@ def after_checks(ctx, steps, run_dir, state, events=None):
                                              "mount undone since cannot be ruled out"))
         steps.add("mounts-after", "ok", facts=facts, findings=findings,
                   output=f"mounts-after{suffix}.json")
+        return True
 
-    entries, raw, error = coredumps_since(ctx, state["started"])
-    write_new(os.path.join(run_dir, f"coredumps{suffix}.txt"), raw)
-    core = state.get("core", {})
-    if error and error.startswith("command not found") and \
-            core.get("core_pattern_kind") == "file":
-        steps.add("core-dumps", "skipped", notes=["coredumpctl not found; core dumps go to "
-                                                  "a file, which RLIMIT_CORE 0 prevents"])
-    elif error:
-        steps.add("core-dumps", "finding", findings=[("coredumpctl-failed", error)])
-    else:
-        # The synthetic crash of the core probe (rehearse) is expected, and left out.
+    def core_dumps():
+        entries, raw, error = coredumps_since(ctx, state["started"])
+        write_new(os.path.join(run_dir, f"coredumps{suffix}.txt"), raw)
+        if error:
+            steps.add("core-dumps", "finding", findings=[("coredumpctl-failed", error)])
+            return False
+        # The control crash of the proof (rehearse) is expected, and left out: the same pid,
+        # uid and executable. Any other entry, also one for the crash at limit 1, counts.
         probe_pids = set(state.get("core_probe_pids", []))
-        notes = [f"synthetic crash of the core probe left out (pid {e.get('pid')})"
-                 for e in entries if e.get("pid") in probe_pids]
-        entries = [e for e in entries if e.get("pid") not in probe_pids]
+        exe = os.path.realpath(sys.executable)
+
+        def control(entry):
+            return entry.get("pid") in probe_pids and entry.get("uid") == os.getuid() and \
+                isinstance(entry.get("exe"), str) and os.path.realpath(entry["exe"]) == exe
+        notes = [f"control crash of the proof left out (pid {e.get('pid')})"
+                 for e in entries if control(e)]
+        entries = [e for e in entries if not control(e)]
         steps.add("core-dumps", "ok", facts={"core_dumps_since_start": len(entries)},
                   findings=[("core-dump-recorded", f"{len(entries)} entries since the start "
                                                    "(keep them local)")] if entries else [],
                   notes=notes)
+        return True
 
-    after_store, code, findings, facts, seconds = store_survey(ctx, run_dir,
-                                                               f"cp3-after{suffix}")
-    before_store = set(state.get("store_before", []))
-    new = sorted(after_store - before_store)
-    gone = sorted(before_store - after_store)
-    findings += [("cp3-new-match", f"new match in the store: {path}") for path in new]
-    facts.update({"new_matches": len(new), "gone_matches": len(gone)})
-    steps.add("cp3-after", "ok", exit_code=code, facts=facts, findings=findings,
-              notes=[f"match gone: {path}" for path in gone],
-              output=f"cp3-after{suffix}.txt", duration=seconds)
+    def cp3_after():
+        after_store, code, findings, facts, seconds = store_survey(ctx, run_dir,
+                                                                   f"cp3-after{suffix}")
+        before_store = set(state.get("store_before", []))
+        new = sorted(after_store - before_store)
+        gone = sorted(before_store - after_store)
+        complete = not any(c == "cp3-search-failed" for c, _ in findings)
+        findings += [("cp3-new-match", f"new match in the store: {path}") for path in new]
+        facts.update({"new_matches": len(new), "gone_matches": len(gone)})
+        steps.add("cp3-after", "ok", exit_code=code, facts=facts, findings=findings,
+                  notes=[f"match gone: {path}" for path in gone],
+                  output=f"cp3-after{suffix}.txt", duration=seconds)
+        return complete
 
-    after_ids = private_identities(ctx, run_dir)
-    findings = compare_identities(state.get("identities", {}), after_ids)
-    steps.add("private-tree-after", "ok", facts={"replaced": len(findings)},
-              findings=findings)
+    def private_tree_after():
+        findings = compare_identities(state.get("identities", {}),
+                                      private_identities(ctx, run_dir))
+        steps.add("private-tree-after", "ok", facts={"replaced": len(findings)},
+                  findings=findings)
+        return True
 
-    pb1 = None
-    if state.get("command") == "run" and state.get("image_before"):
-        before = state["image_before"]
-        j0_sha256 = state.get("j0_sha256")
+    def image_after():
+        before, j0_sha256 = state["image_before"], state.get("j0_sha256")
         started = time.monotonic()
         try:
             after = image_state(ctx.iso)
-            facts = {"image_unchanged": after == before}
-            findings = [] if after == before else [("image-changed", "the disc image "
-                                                    "changed during the step")]
-            if j0_sha256:
-                facts["image_matches_j0_report"] = after["sha256"] == j0_sha256
-                if after["sha256"] != j0_sha256:
-                    findings.append(("j0-image-mismatch", "after the step"))
-            steps.add("image-after", "ok", facts=facts, findings=findings,
-                      duration=time.monotonic() - started)
         except OSError as exc:
-            after = None
             steps.add("image-after", "finding",
                       findings=[("image-unreadable", f"after the step ({exc.strerror})")])
+            return False
+        results["image_after"] = after
+        facts = {"image_unchanged": after == before}
+        findings = [] if after == before else [("image-changed", "the disc image changed "
+                                                "during the step")]
+        if j0_sha256:
+            facts["image_matches_j0_report"] = after["sha256"] == j0_sha256
+            if after["sha256"] != j0_sha256:
+                findings.append(("j0-image-mismatch", "after the step"))
+        steps.add("image-after", "ok", facts=facts, findings=findings,
+                  duration=time.monotonic() - started)
+        return True
+
+    def figures():
+        results["pb1"] = pb1_figures(ctx, steps, before=state["image_before"],
+                                     after=results.get("image_after"),
+                                     block=dump_block(run_dir),
+                                     j0_sha256=state.get("j0_sha256"))
+        return True
+
+    attempt("postflight", postflight)
+    state["phase"] = "postflight"
+    write_state(run_dir, state)
+    attempt("mounts-after", mounts_after)
+    attempt("core-dumps", core_dumps)
+    attempt("cp3-after", cp3_after)
+    attempt("private-tree-after", private_tree_after)
+    if state.get("command") == "run" and state.get("image_before"):
+        attempt("image-after", image_after)
         if state.get("phase_reached_extraction"):
-            block = dump_block(run_dir)
-            pb1 = pb1_figures(ctx, steps, before=before, after=after, block=block,
-                              j0_sha256=j0_sha256)
-    return pb1
+            attempt("pb1-figures", figures)
+    state["evidence_incomplete"] = incomplete
+    if incomplete:
+        steps.add("evidence", "finding", findings=[("evidence-incomplete",
+                                                    f"not complete: {', '.join(incomplete)}")])
+    return results.get("pb1")
 
 
 def cmd_step(ctx, extract):
@@ -2032,7 +2224,7 @@ def cmd_step(ctx, extract):
     run_dir = new_run_dir(ctx, command)
     state = {"tool_version": TOOL_VERSION, "command": command, "started": started,
              "phase": "started", "core": steps.get("core-settings")["facts"],
-             "j0_sha256": j0_sha256}
+             "j0_sha256": j0_sha256, "evidence_incomplete": []}
     write_state(run_dir, state)
     pb1 = None
     try:
@@ -2128,8 +2320,7 @@ def cmd_step(ctx, extract):
         findings = []
         check_sdk_before(ctx, started_ns, findings)
         check_game_empty(ctx, findings, {})
-        if extract and not find_core_proof(ctx, core_identity(
-                ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)):
+        if extract and not find_core_proof(ctx, proof_identity(ctx)):
             findings.append(("core-changed", "the proof no longer holds for this boot, "
                                              "kernel and setting"))
         findings += compare_identities(state["identities"], private_identities(ctx, run_dir))
@@ -2150,9 +2341,10 @@ def cmd_step(ctx, extract):
     SIGNALS.defer = True
     try:
         pb1 = after_checks(ctx, steps, run_dir, state, events)
-    except Exception as exc:  # the report is still written
+    except Exception as exc:  # the report is still written, and resume stays possible
         steps.add("internal-error", "finding", findings=[("internal-error",
                                                           type(exc).__name__)])
+        state["evidence_incomplete"] = ["after-checks"]
     if SIGNALS.count:
         steps.add("interrupted", "finding", facts={"signals": SIGNALS.count},
                   findings=[("interrupted", f"{SIGNALS.count} signal(s) received; the "
@@ -2183,24 +2375,29 @@ def cmd_resume(ctx):
                                                                     "extraction is alive")])
         return finish(ctx, steps, "resume", started)
     state["resumed"] = True
+    state["resumes"] = state.get("resumes", 0) + 1
+    suffix = resume_suffix(state)
     if state.get("phase") == "started" and not os.path.lexists(
             os.path.join(run_dir, "b1.marker")):
         steps.add("resume", "finding", findings=[("interrupted", "stopped before the "
                                                                   "marker: nothing was "
                                                                   "started")])
-        return finish(ctx, steps, "resume", started, run_dir, state=state, suffix="-resume")
+        state["evidence_incomplete"] = []
+        return finish(ctx, steps, "resume", started, run_dir, state=state, suffix=suffix)
     steps.add("resume", "ok", notes=[f"phase reached: {state.get('phase')}"])
     if state.get("phase") in ("extracting",):
         steps.add("vfs-dump", "finding", findings=[("interrupted", "the extraction did not "
                                                                    "finish")])
+    state["evidence_incomplete"] = []
     try:
         pb1 = after_checks(ctx, steps, run_dir, state)
-    except Exception as exc:
+    except Exception as exc:  # never complete: another resume stays possible
         pb1 = None
         steps.add("internal-error", "finding", findings=[("internal-error",
                                                           type(exc).__name__)])
+        state["evidence_incomplete"] = ["after-checks"]
     return finish(ctx, steps, "resume", started, run_dir, pb1=pb1, state=state,
-                  suffix="-resume")
+                  suffix=suffix)
 
 
 def main(argv):
