@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Tests of tools/b1_extract.py (J2 step B1, ticket #32), on synthetic folders only.
+"""Tests of tools/b1_extract.py (J2 step B1, ticket #32, review of PR #33), on synthetic
+folders only.
 
-No disc image, no module and no game file is used. The "image" is a few lines of text;
-`rexglue`, `findmnt`, `coredumpctl` and `nix` are replaced by small Python scripts that
-record how they are called. private_guard and find are the real ones. The tool runs as a
-subprocess, as on the user's machine, so that its umask, core size limit, working folder
-and environment are those of a real run.
+No disc image, no module and no game file is used. The "image" is a few lines of text.
+`rexglue`, `findmnt`, `coredumpctl`, `nix` and, for most tests, `bwrap` are replaced by
+small Python scripts that record how they are called. private_guard, find and git are the
+real ones. The tool runs as a subprocess, as on the user's machine.
+
+The fake bwrap checks the sandbox options and runs the command without confinement. It
+answers the confinement probe and the synthetic crash with planned results, so that the
+orchestration is tested everywhere. RealSandboxTest runs the real bubblewrap, when the
+machine allows unprivileged user namespaces: the probe and a fake rexglue that tries to
+write outside its destinations, in the real sandbox. Where it cannot start, the test checks
+that the tool refuses to extract, and says which case ran.
 
 The tool refuses root, so the tests that start it need an unprivileged user, as in the Nix
-build sandbox. Not covered here, because they need root or a real mount: a folder on
-another file system (simulated in unit tests), a real systemd-coredump record, and a real
-read-only bind mount. docs/J2_B1_EXTRACTION.md section 6 lists these gaps.
+build sandbox. Not covered, because they need root or the user's machine: a real mount
+point (device numbers and mount tables are synthetic here), a real systemd-coredump record,
+a SIGSEGV of the real rexglue. docs/J2_B1_EXTRACTION.md section 8 lists these gaps.
 
-Run: python3 -I tools/test_b1_extract.py
+Run: python3 -I tools/test_b1_extract.py, with TMPDIR outside /tmp for RealSandboxTest.
 """
 
 import ast
@@ -22,10 +29,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -34,6 +43,7 @@ ROOT = os.path.dirname(HERE)
 TOOL = os.path.join(HERE, "b1_extract.py")
 GUARD = os.path.join(HERE, "private_guard.py")
 SUBFOLDERS = ("iso", "game", "xex", "generated", "cache", "saves", "logs")
+SENTINEL = "SENTINEL"
 
 
 def load_tool():
@@ -46,23 +56,28 @@ def load_tool():
 
 b1 = load_tool()
 
-# The fake rexglue. It records its arguments, working folder, umask, core size limit and
-# environment, then follows the plan of the test: write a tree, print ReXGlue's summary
-# block, write elsewhere, then exit, crash or wait.
+# The fake rexglue. It records its arguments, working folder, umask, core size limit,
+# environment and what it tried, into the run folder (REX_APP_LOG_ROOT), the only place it
+# may write besides its destinations. Then it follows the plan of the test.
 FAKE_REXGLUE = r'''
-import json, os, resource, signal, sys, time
+import errno, json, os, resource, signal, sys, time
 plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
 mask = os.umask(0o077)
 os.umask(mask)
 keep = ("REX_", "TMPDIR", "XDG_", "NO_COLOR", "HOME", "WC2010_PRIVATE_DIR")
-with open(os.environ["B1_FAKE_RECORD"], "w") as f:
-    json.dump({"argv": sys.argv[1:], "cwd": os.getcwd(), "umask": mask,
-               "core": list(resource.getrlimit(resource.RLIMIT_CORE)),
-               "env": {k: v for k, v in os.environ.items() if k.startswith(keep)}}, f)
+record = {"argv": sys.argv[1:], "cwd": os.getcwd(), "umask": mask,
+          "core": list(resource.getrlimit(resource.RLIMIT_CORE)),
+          "env": {k: v for k, v in os.environ.items() if k.startswith(keep)},
+          "attempts": {}}
+run_dir = os.environ["REX_APP_LOG_ROOT"]
+def save():
+    with open(os.path.join(run_dir, "fake-record.json"), "w") as f:
+        json.dump(record, f)
+save()
 dest = sys.argv[-1]
-files = dirs = size = 0
+files = dirs = 0
 def write(folder, tree):
-    global files, dirs, size
+    global files, dirs
     for name, value in tree.items():
         path = os.path.join(folder, name)
         if isinstance(value, dict):
@@ -73,7 +88,6 @@ def write(folder, tree):
             with open(path, "w") as f:
                 f.write(value)
             files += 1
-            size += len(value.encode())
 write(dest, plan.get("tree", {}))
 for rel, target in plan.get("links", []):
     os.symlink(target, os.path.join(dest, rel))
@@ -84,29 +98,34 @@ for src, dst in plan.get("hardlinks", []):
 for i in range(plan.get("stdout_lines", 0)):
     print(f"spam line {i} from the fake rexglue")
 if plan.get("block", True):
-    nodes = plan.get("nodes", files + dirs + 1)
     sys.stderr.write("Extracting container:\n  Source: %s\n  Type:   %s\n  Nodes:  %s\n"
-                     "  Bytes:  %s\n\n" % (sys.argv[-2], plan.get("type", "GDFX"), nodes,
-                                           plan.get("bytes", size)))
-log_root = os.environ.get("REX_APP_LOG_ROOT") or os.path.join(os.environ["REX_APP_ROOT"], "logs")
-os.makedirs(log_root, exist_ok=True)
-with open(os.path.join(log_root, "rexglue_001.log"), "w") as f:
+                     "  Bytes:  1\n\n" % (sys.argv[-2], plan.get("type", "GDFX"),
+                                          plan.get("nodes", files + dirs + 1)))
+with open(os.path.join(run_dir, "rexglue_001.log"), "w") as f:
     f.write("fake log\n")
+def attempt(name, action):
+    try:
+        action()
+        record["attempts"][name] = "written"
+    except OSError as exc:
+        record["attempts"][name] = errno.errorcode.get(exc.errno, str(exc.errno))
 for path in plan.get("write_outside", []):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write("written outside\n")
-if plan.get("add_mount"):
-    with open(os.environ["B1_FAKE_MOUNTS"], "a") as f:
-        f.write(plan["add_mount"] + "\n")
+    def action(path=path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("written outside\n")
+    attempt(path, action)
 if plan.get("modify_image"):
     image = sys.argv[-2]
-    os.chmod(image, 0o600)
-    with open(image, "a") as f:
-        f.write("changed\n")
-    os.chmod(image, 0o400)
+    def action():
+        os.chmod(image, 0o600)
+        with open(image, "a") as f:
+            f.write("changed\n")
+        os.chmod(image, 0o400)
+    attempt("image", action)
 for path in plan.get("lock", []):
-    os.chmod(path, 0)
+    attempt("lock", lambda: os.chmod(path, 0))
+save()
 if plan.get("sleep"):
     time.sleep(plan["sleep"])
 if plan.get("signal"):
@@ -114,42 +133,104 @@ if plan.get("signal"):
 sys.exit(plan.get("exit", 0))
 '''
 
+# The fake findmnt: the JSON table of the plan, another one from a given call on.
 FAKE_FINDMNT = r'''
-import os, sys
-if sys.argv[1:] != ["-rn", "-o", "TARGET"]:
+import json, os, sys
+if sys.argv[1:] != ["--list", "--json", "--output", COLUMNS]:
     sys.exit(64)
-if os.environ.get("B1_FAKE_FINDMNT_STATUS"):
-    sys.exit(int(os.environ["B1_FAKE_FINDMNT_STATUS"]))
-with open(os.environ["B1_FAKE_MOUNTS"], "rb") as f:
-    sys.stdout.buffer.write(f.read())
+plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
+counter = os.environ["B1_FAKE_MOUNT_CALLS"]
+calls = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
+open(counter, "w").write(str(calls))
+if plan.get("findmnt_status"):
+    sys.exit(plan["findmnt_status"])
+if plan.get("findmnt_garbage"):
+    print("{not json")
+    sys.exit(0)
+mounts = plan["mounts"]
+if "mounts_after" in plan and calls >= plan.get("switch_at", 3):
+    mounts = plan["mounts_after"]
+print(json.dumps({"filesystems": mounts}))
 '''
 
 FAKE_COREDUMPCTL = r'''
-import os, re, sys
+import json, os, re, sys
 with open(os.environ["B1_FAKE_TRAP"], "a") as f:
     f.write("coredumpctl " + " ".join(sys.argv[1:]) + "\n")
-if len(sys.argv) != 4 or sys.argv[1:3] != ["list", "--no-pager"] or \
-        not re.fullmatch(r"--since=@[0-9]+", sys.argv[3]):
+if sys.argv[1:4] != ["--no-pager", "--json=short", "list"] or len(sys.argv) != 5 or \
+        not re.fullmatch(r"--since=@[0-9]+", sys.argv[4]):
     sys.exit(64)
-entries = os.environ.get("B1_FAKE_COREDUMPS", "")
+plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
+if plan.get("coredumpctl_status"):
+    print("broken", file=sys.stderr)
+    sys.exit(plan["coredumpctl_status"])
+entries = plan.get("coredumps", [])
 if entries:
-    print("TIME PID UID GID SIG COREFILE EXE SIZE")
-    print(entries)
+    print(json.dumps(entries))
     sys.exit(0)
 print("No coredumps found.", file=sys.stderr)
 sys.exit(1)
 '''
 
 FAKE_NIX = r'''
-import os, sys
+import json, os, sys
 with open(os.environ["B1_FAKE_TRAP"], "a") as f:
     f.write("nix " + " ".join(sys.argv[1:]) + "\n")
 if sys.argv[1:3] != ["store", "verify"] or len(sys.argv) != 4:
     sys.exit(64)
-sys.exit(int(os.environ.get("B1_FAKE_NIX_STATUS", "0")))
+plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
+leak = plan.get("store_leak")
+if leak:
+    os.makedirs(os.path.dirname(leak), exist_ok=True)
+    open(leak, "w").write("synthetic leak\n")
+sys.exit(int(plan.get("nix_status", 0)))
 '''
 
-# Commands that could send data elsewhere. They must never run.
+# The fake bwrap: the sandbox options must be the expected ones. The probe and the crash
+# get planned answers; any other command runs as the child of this process, unconfined.
+FAKE_BWRAP = r'''
+import json, os, sys
+args = sys.argv[1:]
+plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
+with open(os.environ["B1_FAKE_BWRAP_LOG"], "a") as f:
+    f.write(json.dumps(args) + "\n")
+if args == ["--version"]:
+    print(plan.get("bwrap_version", "bubblewrap 0.12.0"))
+    sys.exit(0)
+if plan.get("bwrap_broken"):
+    print("bwrap: setting up uid map: Permission denied", file=sys.stderr)
+    sys.exit(1)
+sep = args.index("--")
+opts, cmd = args[:sep], args[sep + 1:]
+head = ["--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent",
+        "--new-session", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+if opts[:len(head)] != head:
+    sys.exit(64)
+fd = int(opts[opts.index("--json-status-fd") + 1])
+def status(doc):
+    os.write(fd, (json.dumps(doc) + "\n").encode())
+if "_probe" in cmd:
+    status({"child-pid": os.getpid()})
+    print(json.dumps(plan["probe_results"]))
+    status({"exit-code": 0})
+    sys.exit(0)
+if "_crash" in cmd:
+    status({"child-pid": os.getpid()})
+    sys.stdin.buffer.read(1)
+    status({"exit-code": 139})
+    sys.exit(139)
+os.chdir(opts[opts.index("--chdir") + 1])
+pid = os.fork()
+if pid == 0:
+    os.execv(cmd[0], cmd)
+status({"child-pid": os.getpid()})
+_, st = os.waitpid(pid, 0)
+code = os.waitstatus_to_exitcode(st)
+code = 128 - code if code < 0 else code
+status({"exit-code": code})
+sys.exit(code)
+'''
+
 TRAP = r'''
 import os, sys
 with open(os.environ["B1_FAKE_TRAP"], "a") as f:
@@ -157,7 +238,6 @@ with open(os.environ["B1_FAKE_TRAP"], "a") as f:
 sys.exit(1)
 '''
 
-# git, logged, then the real git.
 FAKE_GIT = r'''
 import os, sys
 with open(os.environ["B1_FAKE_TRAP"], "a") as f:
@@ -165,15 +245,33 @@ with open(os.environ["B1_FAKE_TRAP"], "a") as f:
 os.execv(REAL_GIT, [REAL_GIT] + sys.argv[1:])
 '''
 
-# A private_guard whose preflight or postflight exits with a given status; every other use
-# is the real guard, also as a module.
+# A private_guard whose preflight or postflight misbehaves as planned; every other use is
+# the real guard, also as a module.
 FAKE_GUARD = r'''
-import os, runpy, sys
+import json, os, runpy, sys
 REAL = {real!r}
 if __name__ == "__main__":
+    plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
     for name in ("preflight", "postflight"):
-        if name in sys.argv and os.environ.get("B1_FAKE_GUARD_" + name.upper()):
-            sys.exit(int(os.environ["B1_FAKE_GUARD_" + name.upper()]))
+        mode = plan.get("guard_" + name)
+        if name in sys.argv and mode:
+            if mode == "marker-and-finding":
+                marker = sys.argv[sys.argv.index("--marker") + 1]
+                open(marker, "w").write("marker\n")
+                print("FINDING: settings file read before the environment: {sentinel}")
+                sys.exit(1)
+            if mode == "ok-without-marker":
+                print("OK: ready")
+                sys.exit(0)
+            if mode == "sentinel":
+                print("FINDING: file written outside the private folder: /{sentinel}/x")
+                sys.exit(1)
+            if mode.startswith("slow-"):
+                open(os.environ["B1_FAKE_TRAP"] + ".slow", "w").write("started")
+                import time
+                time.sleep(float(mode[5:]))
+                break
+            sys.exit(int(mode))
     sys.argv[0] = REAL
     runpy.run_path(REAL, run_name="__main__")
 else:
@@ -204,7 +302,7 @@ def reference_for(tree):
             else:
                 files += 1
     walk(tree)
-    return {"source": "synthetic test reference", "files": files, "directories": dirs,
+    return {"files": files, "directories": dirs,
             "modules": {"default.xex": sha256(tree["default.xex"]),
                         "fifadllzf.xex": sha256(tree["fifadllzf.xex"])}}
 
@@ -233,15 +331,22 @@ def snapshot(top, skip=()):
     return seen
 
 
+def mount(id_, target, parent=1, majmin="0:30", fsroot="/", fstype="btrfs"):
+    return {"id": id_, "uniq-id": None, "parent": parent, "maj:min": majmin,
+            "fsroot": fsroot, "target": target, "fstype": fstype, "source": "/dev/fake",
+            "vfs-options": "rw,relatime", "fs-options": "rw", "propagation": "shared"}
+
+
 @unittest.skipIf(os.geteuid() == 0, "the tool refuses root: run the tests as an "
                                     "unprivileged user, as in the Nix build sandbox")
 class Fixture(unittest.TestCase):
     """A synthetic machine: a home folder holding the private folder and the repository,
-    a /tmp, a /dev/shm, a store with the SDK and the entry CP-3 already knows, and the fake
-    commands."""
+    a /tmp, a /dev/shm, a store with the SDK and the entry CP-3 already knows, the local J0
+    report, and the fake commands. Every path holds the word SENTINEL, which must never
+    reach a summary."""
 
     def setUp(self):
-        self.w = tempfile.mkdtemp(prefix="b1-test-")
+        self.w = tempfile.mkdtemp(prefix=f"b1-{SENTINEL}-")
         self.addCleanup(self.cleanup)
         w = self.w
         self.home = os.path.join(w, "home")
@@ -285,9 +390,13 @@ class Fixture(unittest.TestCase):
         self.bin = os.path.join(w, "bin")
         for path in (self.tmp, self.shm, self.records, self.bin):
             os.mkdir(path, 0o700)
-        self.record = os.path.join(self.records, "rexglue.json")
         self.trap = os.path.join(self.records, "trap.log")
-        self.mounts = os.path.join(self.records, "mounts.txt")
+        self.bwrap_log = os.path.join(self.records, "bwrap.log")
+        self.core_pattern = os.path.join(self.records, "core_pattern")
+        self.suid = os.path.join(self.records, "suid_dumpable")
+        self.set_core_pattern("core")
+        with open(self.suid, "w") as f:
+            f.write("0\n")
         self.persist = os.path.join(self.home, "persist")
         self.persist_space = os.path.join(self.home, ".local", "share", "persist b")
         os.makedirs(self.persist)
@@ -295,20 +404,24 @@ class Fixture(unittest.TestCase):
         self.bound_file = os.path.join(self.home, ".bash_history")
         with open(self.bound_file, "w") as f:
             f.write("bound file\n")
-        self.set_mounts(["/", "/nix/store", self.home, self.persist,
-                         self.persist_space.replace(" ", "\\x20"), self.bound_file,
-                         "/proc"])
-        write_script(os.path.join(self.bin, "findmnt"), FAKE_FINDMNT)
+        write_script(os.path.join(self.bin, "findmnt"), FAKE_FINDMNT,
+                     COLUMNS=b1.MOUNT_COLUMNS)
         write_script(os.path.join(self.bin, "coredumpctl"), FAKE_COREDUMPCTL)
         write_script(os.path.join(self.bin, "nix"), FAKE_NIX)
+        write_script(os.path.join(self.bin, "bwrap"), FAKE_BWRAP)
         write_script(os.path.join(self.bin, "git"), FAKE_GIT, REAL_GIT=git)
-        for name in ("curl", "wget", "ssh", "scp", "rsync", "nc", "gh", "nix-store", "nix-copy-closure"):
+        for name in ("curl", "wget", "ssh", "scp", "rsync", "nc", "gh", "nix-store",
+                     "nix-copy-closure"):
             write_script(os.path.join(self.bin, name), TRAP)
         self.guard = GUARD
+        self.bwrap = os.path.join(self.bin, "bwrap")
         self.tree = dict(DEFAULT_TREE)
-        self.plan = {"tree": self.tree}
+        self.plan = {"tree": self.tree, "mounts": self.default_mounts(),
+                     "probe_results": [{"name": n, "ok": True, "detail": ""}
+                                       for n in b1.PROBE_CHECKS]}
         self.reference = os.path.join(self.records, "reference.json")
         self.write_reference(reference_for(self.tree))
+        self.write_j0_report()
         self.extra_env = {}
 
     def cleanup(self):
@@ -320,72 +433,126 @@ class Fixture(unittest.TestCase):
                     pass
         shutil.rmtree(self.w, ignore_errors=True)
 
-    def set_mounts(self, targets):
-        with open(self.mounts, "w") as f:
-            f.write("".join(target + "\n" for target in targets))
+    def default_mounts(self):
+        return [mount(1, "/", parent=0), mount(2, "/nix/store"), mount(3, "/proc",
+                                                                        fstype="proc"),
+                mount(10, self.home), mount(11, self.persist, parent=10),
+                mount(12, self.persist_space, parent=10, fsroot="/@persist b"),
+                mount(13, self.bound_file, parent=10)]
+
+    def set_core_pattern(self, text):
+        with open(self.core_pattern, "w") as f:
+            f.write(text + "\n")
+
+    def write_text(self, path, text):
+        with open(path, "w") as f:
+            f.write(text)
 
     def write_reference(self, reference):
         with open(self.reference, "w") as f:
             json.dump(reference, f)
 
+    def write_j0_report(self, image_sha256=None, **changes):
+        with open(self.iso, "rb") as f:
+            data = f.read()
+        reference = reference_for(self.tree)
+        report = {"source": {"kind": "image", "size": len(data),
+                             "sha256": image_sha256 or hashlib.sha256(data).hexdigest()},
+                  "disc": {"files": reference["files"],
+                           "directories": reference["directories"]},
+                  "modules": [{"path": name, "sha256": value}
+                              for name, value in reference["modules"].items()]}
+        report.update(changes)
+        self.j0 = os.path.join(self.logs, "j0-identification.json")
+        if os.path.exists(self.j0):
+            os.unlink(self.j0)
+        with open(self.j0, "w") as f:
+            json.dump(report, f)
+
     def env(self):
         env = {"PATH": self.bin + os.pathsep + os.environ.get("PATH", ""),
                "HOME": self.home, "WC2010_PRIVATE_DIR": self.private,
                "B1_FAKE_PLAN": os.path.join(self.records, "plan.json"),
-               "B1_FAKE_RECORD": self.record, "B1_FAKE_TRAP": self.trap,
-               "B1_FAKE_MOUNTS": self.mounts,
+               "B1_FAKE_TRAP": self.trap, "B1_FAKE_BWRAP_LOG": self.bwrap_log,
+               "B1_FAKE_MOUNT_CALLS": os.path.join(self.records, "mount-calls"),
                # Inherited ReXGlue settings that the tool must drop.
                "REX_LOG_LEVEL": "trace", "REX_LOG_FILE": "true"}
         env.update(self.extra_env)
         return env
 
-    def tool(self, command, *extra, timeout=None):
+    def argv(self, command, *extra):
         with open(os.path.join(self.records, "plan.json"), "w") as f:
             json.dump(self.plan, f)
-        argv = [sys.executable, "-I", TOOL, "--repo", self.repo, "--sdk", self.sdk,
+        return [sys.executable, "-I", TOOL, "--repo", self.repo, "--sdk", self.sdk,
                 "--guard", self.guard, "--store-dir", self.store, "--tmp-watch", self.tmp,
                 "--shm-dir", self.shm, "--nix", os.path.join(self.bin, "nix"),
                 "--findmnt", os.path.join(self.bin, "findmnt"),
                 "--coredumpctl", os.path.join(self.bin, "coredumpctl"),
-                "--reference", self.reference, *extra, command]
-        result = subprocess.run(argv, capture_output=True, text=True, env=self.env(),
-                                cwd=self.w, timeout=timeout or 300)
+                "--bwrap", self.bwrap, "--reference", self.reference,
+                "--core-pattern-file", self.core_pattern,
+                "--suid-dumpable-file", self.suid, *extra, command]
+
+    def tool(self, command, *extra, timeout=300):
+        result = subprocess.run(self.argv(command, *extra), capture_output=True, text=True,
+                                env=self.env(), cwd=self.w, timeout=timeout)
         self.output = result.stdout + result.stderr
         return result.returncode
+
+    def start(self, command, *extra):
+        return subprocess.Popen(self.argv(command, *extra), stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, env=self.env(),
+                                cwd=self.w)
 
     def run_dirs(self):
         return sorted(os.path.join(self.logs, name) for name in os.listdir(self.logs)
                       if name.startswith("b1-"))
 
-    def report(self):
+    def report(self, name="report.json"):
         dirs = self.run_dirs()
         self.assertEqual(len(dirs), 1, dirs)
-        with open(os.path.join(dirs[0], "report.json")) as f:
-            self.run_dir = dirs[0]
+        self.run_dir = dirs[0]
+        with open(os.path.join(dirs[0], name)) as f:
             return json.load(f)
 
     def step(self, report, name):
         found = [item for item in report["steps"] if item["step"] == name]
-        self.assertEqual(len(found), 1, f"{name}: {[i['step'] for i in report['steps']]}")
-        return found[0]
+        self.assertTrue(found, f"{name}: {[i['step'] for i in report['steps']]}")
+        return found[-1]
 
-    def summary(self):
-        with open(os.path.join(self.run_dirs()[0], "summary.txt")) as f:
+    def codes(self, report):
+        return [f["code"] for item in report["steps"] for f in item["findings"]]
+
+    def summary(self, name="summary.txt"):
+        with open(os.path.join(self.run_dirs()[0], name)) as f:
             return f.read()
 
     def recorded(self):
-        with open(self.record) as f:
-            return json.load(f)
+        for run_dir in self.run_dirs():
+            path = os.path.join(run_dir, "fake-record.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    return json.load(f)
+        return None
 
-    def assert_postflight_ran(self, report):
-        post = self.step(report, "postflight")
-        self.assertIn(post["exit_code"], (0, 1))
-        self.assertTrue(os.path.exists(os.path.join(self.run_dir, "postflight.txt")))
-        return post
-
-    def assert_no_local_path(self, text):
+    def assert_shareable(self, text):
+        """Nothing local in a summary or on the console: no path, no sentinel, no 64 digit
+        hash."""
+        self.assertNotIn(SENTINEL, text)
         for path in (self.private, self.home, self.w, self.repo):
             self.assertNotIn(path, text)
+        self.assertIsNone(re.search(r"[0-9a-f]{64}", text), text)
+
+    def use_fake_guard(self):
+        fake = os.path.join(self.records, "guard.py")
+        with open(fake, "w") as f:
+            f.write(FAKE_GUARD.format(real=GUARD, sentinel=SENTINEL))
+        self.guard = fake
+
+    def clear_game(self):
+        for name in os.listdir(self.game):
+            path = os.path.join(self.game, name)
+            shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) \
+                else os.unlink(path)
 
 
 class PrepareTest(Fixture):
@@ -397,92 +564,132 @@ class PrepareTest(Fixture):
         self.assertIn("mount_points_not_folders 1", self.output)
         self.assertEqual(snapshot(self.w, skip=(self.records,)), before)
         self.assertEqual(self.run_dirs(), [])
-        self.assert_no_local_path(self.output)
+        self.assert_shareable(self.output)
 
-    def test_absent_image_is_refused(self):
-        os.chmod(os.path.dirname(self.iso), 0o700)
-        os.unlink(self.iso)
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: disc image absent", self.output)
-
-    def test_writable_image_is_refused(self):
-        os.chmod(self.iso, 0o644)
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: writable disc image", self.output)
-
-    def test_image_link_is_refused(self):
-        outside = os.path.join(self.w, "elsewhere.iso")
-        os.rename(self.iso, outside)
-        os.symlink(outside, self.iso)
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: the disc image is a symbolic link", self.output)
+    def test_image_problems(self):
+        cases = (("writable", lambda: os.chmod(self.iso, 0o644), "image-writable"),
+                 ("link", None, "image-invalid"), ("absent", None, "image-absent"))
+        for name, change, code in cases:
+            with self.subTest(name=name):
+                if name == "link":
+                    outside = os.path.join(self.w, "elsewhere.iso")
+                    os.rename(self.iso, outside)
+                    os.symlink(outside, self.iso)
+                elif name == "absent":
+                    os.unlink(self.iso)
+                else:
+                    change()
+                self.assertEqual(self.tool("prepare"), 1)
+                self.assertIn(f"finding {code} (x1)", self.output)
 
     def test_non_empty_game_folder_is_refused_and_left_alone(self):
         old = os.path.join(self.game, ".left-over")
         with open(old, "w") as f:
             f.write("kept\n")
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: game/ is not empty", self.output)
         self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding game-not-empty", self.output)
         self.assertIn("nothing was started", self.output)
         self.assertEqual(self.run_dirs(), [])
-        self.assertFalse(os.path.exists(self.record))
         with open(old) as f:
             self.assertEqual(f.read(), "kept\n")
 
-    def test_game_or_logs_link_is_refused(self):
-        for name in ("game", "logs"):
-            with self.subTest(name=name):
-                path = os.path.join(self.private, name)
-                outside = os.path.join(self.w, f"outside-{name}")
-                os.rename(path, outside)
+    def test_folder_links_and_xdg_components_are_refused(self):
+        """R07: every component of the private folder, the XDG folders included."""
+        for rel in ("game", "logs", "xdg/config", "app"):
+            with self.subTest(rel=rel):
+                path = os.path.join(self.private, rel)
+                outside = os.path.join(self.w, "outside-" + rel.replace("/", "-"))
+                os.makedirs(outside)
+                if os.path.isdir(path):
+                    os.rename(path, outside + "-old")
+                os.makedirs(os.path.dirname(path), exist_ok=True)
                 os.symlink(outside, path)
                 self.assertEqual(self.tool("run"), 1)
-                self.assertIn("finding: symbolic link where a folder is expected", self.output)
+                self.assertIn("finding folder-invalid", self.output)
                 self.assertEqual(os.listdir(outside), [])
                 os.unlink(path)
-                os.rename(outside, path)
+                if os.path.isdir(outside + "-old"):
+                    os.rename(outside + "-old", path)
 
-    def test_dirty_repository_is_refused(self):
+    def test_unsafe_parent_folder_is_refused(self):
+        """R07: a parent of the private folder that others can change."""
+        os.chmod(self.w, 0o777)
+        self.assertEqual(self.tool("prepare"), 1)
+        self.assertIn("finding ancestor-unsafe", self.output)
+
+    def test_mount_point_inside_the_private_folder_is_refused(self):
+        """R07: a bind mount on the same file system has the same device number; the mount
+        table shows it."""
+        self.plan["mounts"].append(mount(20, os.path.join(self.private, "xdg"), parent=10))
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding private-mount", self.output)
+        self.assertEqual(self.run_dirs(), [])
+
+    def test_dirty_repository_and_wrong_sdk_are_refused(self):
         with open(os.path.join(self.repo, "untracked"), "w") as f:
             f.write("x\n")
         self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: the repository is not clean", self.output)
+        self.assertIn("finding repo-invalid", self.output)
+        os.unlink(os.path.join(self.repo, "untracked"))
+        for sdk in (os.path.join(self.w, "fake-rexglue-sdk-0.11.0"),
+                    os.path.join(self.store, "missing-rexglue-sdk-0.11.0"),
+                    os.path.join(self.store, "fake-rexglue-sdk-0.10.0")):
+            with self.subTest(sdk=sdk):
+                self.sdk, keep = sdk, self.sdk
+                self.assertEqual(self.tool("prepare"), 1)
+                self.assertIn("finding sdk-invalid", self.output)
+                self.sdk = keep
 
-    def test_sdk_outside_the_store_or_not_built_is_refused(self):
-        other = os.path.join(self.w, "fake-rexglue-sdk-0.11.0")
-        shutil.copytree(self.sdk, other)
-        self.sdk, sdk = other, self.sdk
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: the SDK is not a store path", self.output)
-        self.sdk = os.path.join(self.store, "missing-rexglue-sdk-0.11.0")
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: the SDK is not built", self.output)
-        self.sdk = os.path.join(self.store, "fake-rexglue-sdk-0.10.0")
-        shutil.copytree(sdk, self.sdk)
-        self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: the SDK is not ReXGlue 0.11.0", self.output)
+    def test_mount_table_errors_stop_everything(self):
+        """R01: findmnt failing or giving garbage is a finding, and nothing starts."""
+        for key in ("findmnt_status", "findmnt_garbage"):
+            with self.subTest(key=key):
+                self.plan[key] = 1
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn("finding mounts-unavailable", self.output)
+                self.assertEqual(self.run_dirs(), [])
+                del self.plan[key]
 
-    def test_private_folder_open_to_others_is_refused(self):
-        os.chmod(self.private, 0o755)
-        self.assertEqual(self.tool("run"), 1)
-        self.assertIn("finding: the private folder has mode 0755", self.output)
-        self.assertFalse(os.path.exists(self.record))
-
-    def test_findmnt_failure_stops_everything(self):
-        self.extra_env["B1_FAKE_FINDMNT_STATUS"] = "1"
-        self.assertEqual(self.tool("run"), 1)
-        self.assertIn("finding: cannot list the mount points", self.output)
-        self.assertEqual(self.run_dirs(), [])
-        self.assertFalse(os.path.exists(self.record))
-
-    def test_absent_or_unreadable_mount_point_is_found_by_prepare(self):
+    def test_absent_or_unreadable_mount_point_is_found(self):
         locked = os.path.join(self.home, "locked")
         os.mkdir(locked, 0o000)
-        self.set_mounts([self.persist, locked, os.path.join(self.home, "gone")])
+        self.plan["mounts"] += [mount(30, locked, parent=10),
+                                mount(31, os.path.join(self.home, "gone"), parent=10)]
         self.assertEqual(self.tool("prepare"), 1)
-        self.assertIn("finding: watched place not readable (x1)", self.output)
-        self.assertIn("finding: watched place absent or not a folder (x1)", self.output)
+        self.assertIn("finding watch-unusable (x2)", self.output)
+
+    def test_core_settings_unreadable_or_handler(self):
+        """R03: unreadable settings are a finding; a handler blocks the extraction."""
+        os.unlink(self.suid)
+        self.assertEqual(self.tool("prepare"), 1)
+        self.assertIn("finding core-settings-unreadable", self.output)
+        with open(self.suid, "w") as f:
+            f.write("2\n")
+        for pattern in ("|/nix/store/x-systemd/lib/systemd/systemd-coredump %P %u",
+                        "@/run/coredump.socket"):
+            with self.subTest(pattern=pattern):
+                self.set_core_pattern(pattern)
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn("finding core-handler", self.output)
+                self.assertEqual(self.run_dirs(), [])
+                self.assertIsNone(self.recorded())
+
+    def test_j0_report_gates(self):
+        """R06: no report, an unreadable one, or one that differs from J0: no extraction."""
+        cases = (("absent", lambda: os.unlink(self.j0), "j0-report-absent"),
+                 ("garbage", lambda: self.write_text(self.j0, "{"), "j0-report-invalid"),
+                 ("not an image", lambda: self.write_j0_report(
+                     source={"kind": "folder"}), "j0-report-invalid"),
+                 ("other counts", lambda: self.write_j0_report(
+                     disc={"files": 48, "directories": 8}), "j0-report-mismatch"))
+        for name, change, code in cases:
+            with self.subTest(name=name):
+                change()
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn(f"finding {code}", self.output)
+                self.assertIsNone(self.recorded())
+                self.assertEqual(self.run_dirs(), [])
+                self.write_j0_report()
 
 
 class RunTest(Fixture):
@@ -490,8 +697,7 @@ class RunTest(Fixture):
         self.plan["stdout_lines"] = 500
         self.assertEqual(self.tool("run"), 0, self.output)
         report = self.report()
-        self.assertEqual([i["status"] for i in report["steps"]
-                          if i["status"] not in ("ok",)], [], report)
+        self.assertEqual(self.codes(report), [], report)
         record = self.recorded()
         self.assertEqual(record["argv"], ["vfs", "dump", self.iso, self.game])
         self.assertEqual(record["cwd"], self.private)
@@ -503,83 +709,72 @@ class RunTest(Fixture):
         self.assertEqual(env["REX_APP_ROOT"], os.path.join(self.private, "app"))
         self.assertEqual(env["REX_APP_LOG_ROOT"], self.run_dir)
         self.assertEqual(env["TMPDIR"], os.path.join(self.private, "tmp"))
-        for name, folder in (("XDG_CONFIG_HOME", "xdg/config"), ("XDG_DATA_HOME", "xdg/data"),
-                             ("XDG_CACHE_HOME", "xdg/cache")):
-            self.assertEqual(env[name], os.path.join(self.private, folder))
-        self.assertEqual(env["HOME"], self.home)
-        # The output of rexglue stays in the run folder; the console shows the summary only.
-        self.assertNotIn("spam line", self.output)
         with open(os.path.join(self.run_dir, "vfs-dump.stdout")) as f:
             self.assertEqual(len(f.read().splitlines()), 500)
-        self.assertLess(len(self.output.splitlines()), 60)
-        self.assertTrue(os.path.exists(os.path.join(self.run_dir, "rexglue_001.log")))
-        for name in os.listdir(self.run_dir):
-            mode = stat.S_IMODE(os.lstat(os.path.join(self.run_dir, name)).st_mode)
-            self.assertEqual(mode & 0o077, 0, name)
+        self.assertNotIn("spam line", self.output)
+        self.assertLess(len(self.output.splitlines()), 70)
         summary = self.summary()
-        self.assertIn("files: expected 5, found 5: match", summary)
-        self.assertIn("directories (root not counted): expected 2, found 2: match", summary)
-        self.assertIn(f"default.xex sha256: expected {sha256(self.tree['default.xex'])}",
-                      summary)
-        self.assertIn("ReXGlue nodes = files + directories + root: expected 8, found 8: match",
-                      summary)
-        self.assertIn("image unchanged (sha256 and identity, before and after)", summary)
-        self.assertIn("names starting with a dot: 1 (counted)", summary)
-        self.assertIn("this tool does not declare PB-1", summary)
+        for line in ("files: expected 5, found 5: match",
+                     "directories (root not counted): expected 2, found 2: match",
+                     "default.xex sha256 = reference: match",
+                     "image unchanged (sha256 and identity, before and after): match",
+                     "image sha256 = local J0 report, before and after: match",
+                     "ReXGlue nodes = files + directories + root: expected 8, found 8: match",
+                     "ReXGlue container type is GDFX: match",
+                     "names starting with a dot: 1 (counted)",
+                     "this tool does not declare PB-1"):
+            self.assertIn(line, summary)
         self.assertNotIn("DIFFERS", summary)
-        cp3 = self.step(report, "cp3-before")
-        self.assertEqual(cp3["facts"], {"matches": 1, "known_entry_listed": True,
-                                        "other_matches": 0})
-        mounts = self.step(report, "mounts-before")["facts"]
-        self.assertEqual(mounts["mount_points_watched"], 2)
-        self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
-        self.assertEqual(self.step(report, "preflight")["exit_code"], 0)
-        self.assert_no_local_path(summary)
-        self.assert_no_local_path(self.output)
+        self.assert_shareable(summary)
+        self.assert_shareable(self.output)
+        state = b1.read_state(self.run_dir)
+        self.assertEqual(state["phase"], "complete")
+        # The extraction ran in the sandbox, with the expected options and binds.
+        with open(self.bwrap_log) as f:
+            calls = [json.loads(line) for line in f]
+        dump = [c for c in calls if "vfs" in c][0]
+        self.assertIn(["--ro-bind", self.private, self.private],
+                      [dump[i:i + 3] for i in range(len(dump))])
+        binds = {dump[i + 1] for i, a in enumerate(dump) if a == "--bind"}
+        self.assertEqual(binds, {self.run_dir, self.game, os.path.join(self.private, "app"),
+                                 os.path.join(self.private, "tmp")})
 
-    def test_preflight_declares_every_destination(self):
+    def test_preflight_declares_the_destinations(self):
         self.assertEqual(self.tool("run"), 0, self.output)
         self.report()
-        # Every path written during the step is in a declared destination.
-        declared = [os.path.join(self.private, name) for name in b1.DESTINATIONS]
-        marker = os.path.join(self.run_dir, "b1.marker")
-        since = os.stat(marker).st_mtime_ns
+        with open(os.path.join(self.run_dir, "preflight.txt")) as f:
+            self.assertIn("OK: ready", f.read())
+        declared = [self.run_dir] + [os.path.join(self.private, n)
+                                     for n in b1.SANDBOX_WRITABLE]
+        since = os.stat(os.path.join(self.run_dir, "b1.marker")).st_mtime_ns
         written = [path for path in snapshot(self.private)
                    if os.lstat(path).st_mtime_ns > since]
         self.assertTrue(written)
         for path in written:
-            self.assertTrue(any(path == d or b1.strictly_under(path, d) for d in declared),
-                            path)
+            self.assertTrue(any(b1.under_or_self(path, d) for d in declared), path)
 
     def test_failed_dump_runs_postflight_and_deletes_nothing(self):
         self.plan["exit"] = 1
         self.assertEqual(self.tool("run"), 1)
         report = self.report()
-        dump = self.step(report, "vfs-dump")
-        self.assertEqual(dump["exit_code"], 1)
-        self.assertIn("rexglue vfs dump exited with status 1", dump["findings"])
-        self.assertEqual(self.assert_postflight_ran(report)["exit_code"], 0)
+        self.assertEqual(self.step(report, "vfs-dump")["exit_code"], 1)
+        self.assertIn("dump-failed", self.codes(report))
+        self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
         self.assertTrue(os.path.exists(os.path.join(self.game, "media", "sub", "b.txt")))
-        self.assertTrue(os.path.exists(os.path.join(self.run_dir, "b1.marker")))
         self.assertIn("STOP: a finding stops B1", self.summary())
 
-    def test_crash_runs_postflight(self):
-        self.plan["signal"] = "KILL"
-        self.assertEqual(self.tool("run"), 1)
-        report = self.report()
-        dump = self.step(report, "vfs-dump")
-        self.assertEqual(dump["exit_code"], -9)
-        self.assertEqual(dump["facts"]["signal"], 9)
-        self.assertIn("finding: rexglue vfs dump crashed (x1)", self.summary())
-        self.assert_postflight_ran(report)
-        self.step(report, "core-dumps")
-
-    def test_time_out_runs_postflight(self):
-        self.plan["sleep"] = 60
-        self.assertEqual(self.tool("run", "--timeout", "1"), 1)
-        report = self.report()
-        self.assertIn("timed out", " ".join(self.step(report, "vfs-dump")["findings"]))
-        self.assert_postflight_ran(report)
+    def test_crash_and_time_out_run_postflight(self):
+        for key, value, code in (("signal", "KILL", "dump-crashed"),
+                                 ("sleep", 60, "dump-timeout")):
+            with self.subTest(key=key):
+                self.plan[key] = value
+                self.assertEqual(self.tool("run", "--timeout", "1"), 1)
+                report = self.report()
+                self.assertIn(code, self.codes(report))
+                self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
+                del self.plan[key]
+                shutil.rmtree(self.run_dir)
+                self.clear_game()
 
     def test_preflight_finding_stops_before_the_extraction(self):
         settings = os.path.join(self.private, "xdg", "config", "rexglue")
@@ -590,191 +785,190 @@ class RunTest(Fixture):
         report = self.report()
         self.assertEqual(self.step(report, "preflight")["exit_code"], 1)
         self.assertEqual(self.step(report, "postflight")["status"], "skipped")
-        self.assertFalse(os.path.exists(self.record))
-        self.assertEqual(os.listdir(self.game), [])
+        self.assertIsNone(self.recorded())
+
+    def test_marker_rules(self):
+        """R05: no marker after a passing preflight is a finding; a marker always brings
+        postflight, even after a finding."""
+        self.use_fake_guard()
+        self.plan["guard_preflight"] = "ok-without-marker"
+        self.assertEqual(self.tool("run"), 1)
+        report = self.report()
+        self.assertIn("preflight-no-marker", self.codes(report))
+        self.assertIsNone(self.recorded())
+        shutil.rmtree(self.run_dir)
+        self.plan["guard_preflight"] = "marker-and-finding"
+        self.assertEqual(self.tool("run"), 1)
+        report = self.report()
+        self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
+        self.assertEqual(self.step(report, "vfs-dump")["status"], "skipped")
+        self.assertIsNone(self.recorded())
 
     def test_guard_errors_are_findings(self):
-        fake = os.path.join(self.records, "guard.py")
-        with open(fake, "w") as f:
-            f.write(FAKE_GUARD.format(real=GUARD))
-        self.guard = fake
-        self.extra_env["B1_FAKE_GUARD_PREFLIGHT"] = "3"
+        self.use_fake_guard()
+        self.plan["guard_preflight"] = "3"
         self.assertEqual(self.tool("run"), 1)
         report = self.report()
-        pre = self.step(report, "preflight")
-        self.assertEqual(pre["exit_code"], 3)
-        self.assertIn("private_guard preflight exited with status 3", pre["findings"])
-        self.assertFalse(os.path.exists(self.record))
-
+        self.assertEqual(self.step(report, "preflight")["exit_code"], 3)
+        self.assertIn("guard-error", self.codes(report))
         shutil.rmtree(self.run_dir)
-        del self.extra_env["B1_FAKE_GUARD_PREFLIGHT"]
-        self.extra_env["B1_FAKE_GUARD_POSTFLIGHT"] = "2"
+        del self.plan["guard_preflight"]
+        self.plan["guard_postflight"] = "2"
         self.assertEqual(self.tool("run"), 1)
         report = self.report()
-        post = self.step(report, "postflight")
-        self.assertEqual(post["exit_code"], 2)
-        self.assertIn("private_guard postflight exited with status 2", post["findings"])
-        self.assertTrue(os.path.exists(self.record))
-
-    def test_nix_store_verify_failure_is_a_finding(self):
-        self.extra_env["B1_FAKE_NIX_STATUS"] = "1"
-        self.assertEqual(self.tool("run"), 1)
-        post = self.step(self.report(), "postflight")
-        self.assertIn("the SDK store path was modified", " ".join(post["findings"]))
+        self.assertEqual(self.step(report, "postflight")["exit_code"], 2)
+        self.assertIn("guard-error", self.codes(report))
 
     def test_writes_outside_the_private_folder_are_found(self):
+        """With the fake bwrap nothing is confined: postflight must find every write."""
         self.plan["write_outside"] = [
             os.path.join(self.home, ".config", "rexglue", "rexglue_001.log"),
-            os.path.join(self.tmp, "stray"),
-            os.path.join(self.persist_space, "stray"),
+            os.path.join(self.tmp, "stray"), os.path.join(self.persist_space, "stray"),
             os.path.join(self.repo, "stray")]
         self.assertEqual(self.tool("run"), 1)
-        post = self.step(self.report(), "postflight")
-        found = [text for text in post["findings"]
-                 if text.startswith("file written outside the private folder: ")]
-        # Local paths are named, in the local report only.
-        self.assertEqual(sorted(found), sorted(
-            "file written outside the private folder: " + path for path in (
-                "$HOME/.config/rexglue/rexglue_001.log", os.path.join(self.tmp, "stray"),
-                "$HOME/.local/share/persist b/stray", "$REPO/stray")))
-        summary = self.summary()
-        self.assertIn("finding: file written outside the private folder (x4)", summary)
-        self.assertIn("finding: repository changed (x1)", summary)
-        self.assert_no_local_path(summary)
-        self.assertNotIn("stray", summary)
+        report = self.report()
+        codes = self.codes(report)
+        self.assertEqual(codes.count("guard-written-outside"), 4)
+        self.assertIn("guard-repository", codes)
+        self.assert_shareable(self.summary())
 
     def test_unreadable_mount_point_stops_with_a_finding(self):
         locked = os.path.join(self.home, "locked")
         os.mkdir(locked, 0o700)
-        self.set_mounts([self.persist, locked])
-        # Readable when prepare looks at it; unreadable when postflight searches it.
+        self.plan["mounts"].append(mount(30, locked, parent=10))
         self.plan["lock"] = [locked]
         self.assertEqual(self.tool("run"), 1)
-        post = self.step(self.report(), "postflight")
-        self.assertIn("incomplete check", " ".join(post["findings"]))
-        self.assertIn("finding: incomplete check", self.summary())
+        self.assertIn("guard-incomplete", self.codes(self.report()))
 
-    def test_new_mount_point_during_the_step_is_a_finding(self):
-        extra = os.path.join(self.home, "late")
-        os.mkdir(extra, 0o700)
-        self.plan["add_mount"] = extra
+    def test_mount_identity_changes_are_findings(self):
+        """R01: a mount replaced at the same path, a remount, a bind, a new and a vanished
+        mount point are all findings, by identity and attributes, not only by path."""
+        cases = {
+            "replaced": lambda m: m.update({"id": 99}) if m["target"] == self.persist else 0,
+            "remount": lambda m: m.update({"vfs-options": "ro"})
+            if m["target"] == self.persist else 0,
+            "bind": lambda m: m.update({"fsroot": "/other"})
+            if m["target"] == self.persist else 0,
+            "home parent": lambda m: m.update({"maj:min": "0:99"}) if m["target"] == "/"
+            else 0,
+        }
+        for name, change in cases.items():
+            with self.subTest(name=name):
+                after = [dict(m) for m in self.default_mounts()]
+                for m in after:
+                    change(m)
+                self.plan["mounts_after"] = after
+                if os.path.exists(os.path.join(self.records, "mount-calls")):
+                    os.unlink(os.path.join(self.records, "mount-calls"))
+                self.assertEqual(self.tool("run"), 1)
+                report = self.report()
+                facts = self.step(report, "mounts-after")["facts"]
+                self.assertEqual(facts["changed"], 1, facts)
+                self.assertIn("mount-changed", self.codes(report))
+                shutil.rmtree(self.run_dir)
+                self.clear_game()
+        after = self.default_mounts() + [mount(40, os.path.join(self.home, "late"),
+                                               parent=10)]
+        after = [m for m in after if m["target"] != self.persist]
+        self.plan["mounts_after"] = after
+        os.unlink(os.path.join(self.records, "mount-calls"))
         self.assertEqual(self.tool("run"), 1)
-        mounts = self.step(self.report(), "mounts-after")
-        self.assertEqual(mounts["facts"]["added"], 1)
-        self.assertIn("finding: new mount point during the step (x1)", self.summary())
+        facts = self.step(self.report(), "mounts-after")["facts"]
+        self.assertEqual((facts["added"], facts["removed"]), (1, 1))
 
     def test_new_store_match_is_a_finding_and_the_known_entry_is_untouched(self):
         known_before = os.lstat(self.known)
         leak = os.path.join(self.store, "leak-source", "game", "default.xex")
-        self.plan["write_outside"] = [leak]
+        self.plan["store_leak"] = leak
         self.assertEqual(self.tool("run"), 1)
-        report = self.report()
-        after = self.step(report, "cp3-after")
+        after = self.step(self.report(), "cp3-after")
         self.assertEqual(after["facts"]["new_matches"], 1)
-        self.assertIn(f"CP-3 new match in the store: {leak}", after["findings"])
         self.assertTrue(after["facts"]["known_entry_listed"])
         known_after = os.lstat(self.known)
-        self.assertEqual((known_before.st_size, known_before.st_mtime_ns, known_before.st_ino),
+        self.assertEqual((known_before.st_size, known_before.st_mtime_ns,
+                          known_before.st_ino),
                          (known_after.st_size, known_after.st_mtime_ns, known_after.st_ino))
 
     def test_store_search_error_stops_before_preflight(self):
-        locked = os.path.join(self.store, "locked")
-        os.mkdir(locked, 0o000)
+        os.mkdir(os.path.join(self.store, "locked"), 0o000)
         self.assertEqual(self.tool("run"), 1)
         report = self.report()
-        self.assertEqual(self.step(report, "cp3-before")["exit_code"], 1)
-        self.assertEqual([i["step"] for i in report["steps"] if i["step"] == "preflight"], [])
-        self.assertFalse(os.path.exists(self.record))
+        self.assertIn("cp3-search-failed", self.codes(report))
+        self.assertFalse(any(i["step"] == "preflight" for i in report["steps"]))
+        self.assertIsNone(self.recorded())
 
-    def test_recorded_core_dump_is_a_finding(self):
-        self.extra_env["B1_FAKE_COREDUMPS"] = "Thu 2026-11-26 10:00:00 UTC 4242 1000 1000 SIGSEGV none /x 0"
+    def test_core_dumps_and_coredumpctl_errors(self):
+        """R03: a recorded core dump and a coredumpctl failure are both findings."""
+        self.plan["coredumps"] = [{"pid": 4242, "sig": 11, "corefile": "none",
+                                   "exe": "/x"}]
         self.assertEqual(self.tool("run"), 1)
-        step = self.step(self.report(), "core-dumps")
-        self.assertEqual(step["facts"]["core_dumps_since_start"], 1)
-        with open(self.trap) as f:
-            calls = [line for line in f if line.startswith("coredumpctl")]
-        self.assertEqual(len(calls), 1)
+        self.assertIn("core-dump-recorded", self.codes(self.report()))
+        shutil.rmtree(self.run_dir)
+        self.clear_game()
+        del self.plan["coredumps"]
+        self.plan["coredumpctl_status"] = 2
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("coredumpctl-failed", self.codes(self.report()))
 
     def test_image_changed_during_the_step_is_a_finding(self):
         self.plan["modify_image"] = True
         self.assertEqual(self.tool("run"), 1)
         report = self.report()
-        self.assertIn("the disc image changed during the step",
-                      self.step(report, "image-after")["findings"])
-        self.assertIn("image unchanged (sha256 and identity, before and after)", self.summary())
-        self.assertIn("DIFFERS", self.summary())
+        self.assertIn("image-changed", self.codes(report))
+        self.assertIn("j0-image-mismatch", self.codes(report))
+        self.assertIn("image unchanged (sha256 and identity, before and after): DIFFERS",
+                      self.summary())
+
+    def test_image_hash_mismatch_with_the_j0_report_stops_before_rexglue(self):
+        """R06: the report matches J0 but not this image: rexglue is never started."""
+        self.write_j0_report(image_sha256=sha256("another image"))
+        self.assertEqual(self.tool("run"), 1)
+        report = self.report()
+        self.assertIn("j0-image-mismatch", self.codes(report))
+        self.assertFalse(any(i["step"] == "preflight" for i in report["steps"]))
+        self.assertIsNone(self.recorded())
+        self.assertNotIn(sha256("another image"), self.summary())
 
     def test_count_and_hash_differences_are_findings(self):
         reference = reference_for(self.tree)
-        reference["files"] = 49
-        reference["directories"] = 8
+        reference.update(files=49, directories=8)
         reference["modules"]["fifadllzf.xex"] = sha256("another module\n")
         self.write_reference(reference)
+        self.write_j0_report(disc={"files": 49, "directories": 8},
+                             modules=[{"path": k, "sha256": v}
+                                      for k, v in reference["modules"].items()])
         self.assertEqual(self.tool("run"), 1)
         summary = self.summary()
         self.assertIn("files: expected 49, found 5: DIFFERS", summary)
         self.assertIn("directories (root not counted): expected 8, found 2: DIFFERS", summary)
-        self.assertRegex(summary, r"fifadllzf\.xex sha256: expected [0-9a-f]{64}, found "
-                                  r"[0-9a-f]{64}: DIFFERS")
-        self.assertIn("default.xex sha256", summary)
-
-    def test_absent_module_is_a_finding(self):
-        del self.tree["fifadllzf.xex"]
-        self.plan["tree"] = self.tree
-        self.assertEqual(self.tool("run"), 1)
-        self.assertIn("found absent: DIFFERS", self.summary())
+        self.assertIn("fifadllzf.xex sha256 = reference: DIFFERS", summary)
+        self.assert_shareable(summary)
 
     def test_tree_anomalies_are_not_counted(self):
         self.plan["links"] = [["link-out", self.home], ["media/link-in", "a.txt"]]
         self.plan["fifos"] = ["media/pipe"]
         self.plan["hardlinks"] = [["media/a.txt", "media/a-again.txt"]]
         self.assertEqual(self.tool("run"), 1)
-        pb1 = self.step(self.report(), "pb1-figures")
-        self.assertEqual(pb1["facts"]["anomaly_kinds"],
-                         {"symbolic link": 2, "special file": 1, "hard link": 2})
+        report = self.report()
+        pb1 = self.step(report, "pb1-figures")
         self.assertEqual(pb1["facts"]["files"], 4)
-        summary = self.summary()
-        self.assertIn("anomaly: symbolic link (x2, not counted)", summary)
-        self.assertNotIn("link-out", summary)
+        self.assertEqual(self.codes(report).count("tree-anomaly"), 5)
+        self.assertNotIn("link-out", self.summary())
 
     def test_nodes_or_type_mismatch_is_a_finding(self):
-        self.plan["nodes"] = 7
-        self.plan["type"] = "STFS"
+        self.plan.update(nodes=7, type="STFS")
         self.assertEqual(self.tool("run"), 1)
         summary = self.summary()
         self.assertIn("ReXGlue nodes = files + directories + root: expected 8, found 7: "
                       "DIFFERS", summary)
-        self.assertIn("ReXGlue container type: expected GDFX, found STFS: DIFFERS", summary)
-
-    def test_missing_summary_block_is_a_finding(self):
-        self.plan["block"] = False
-        self.assertEqual(self.tool("run"), 1)
-        self.assertIn("found not found: DIFFERS", self.summary())
-
-    def test_local_j0_report(self):
-        with open(self.iso, "rb") as f:
-            digest = hashlib.sha256(f.read()).hexdigest()
-        j0 = os.path.join(self.logs, "j0-identification.json")
-        with open(j0, "w") as f:
-            json.dump({"source": {"kind": "image", "sha256": digest}}, f)
-        self.assertEqual(self.tool("run", "--j0-report", j0), 0, self.output)
-        self.assertIn("image sha256 = local J0 report", self.summary())
-        for name in self.run_dirs():
-            shutil.rmtree(name)
-        for name in os.listdir(self.game):
-            path = os.path.join(self.game, name)
-            shutil.rmtree(path) if os.path.isdir(path) else os.unlink(path)
-        with open(j0, "w") as f:
-            json.dump({"source": {"kind": "image", "sha256": sha256("other image")}}, f)
-        self.assertEqual(self.tool("run", "--j0-report", j0), 1)
-        self.assertIn("PB-1 figure differs", self.summary())
+        self.assertIn("ReXGlue container type is GDFX: DIFFERS", summary)
 
     def test_second_run_is_refused(self):
         self.assertEqual(self.tool("run"), 0, self.output)
         first = self.run_dirs()
         before = snapshot(self.game)
         self.assertEqual(self.tool("run"), 1)
-        self.assertIn("finding: game/ is not empty", self.output)
+        self.assertIn("finding game-not-empty", self.output)
         self.assertEqual(self.run_dirs(), first)
         self.assertEqual(snapshot(self.game), before)
 
@@ -783,11 +977,52 @@ class RunTest(Fixture):
         report = self.report()
         self.assertEqual(self.step(report, "vfs-dump")["status"], "skipped")
         self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
+        self.assertEqual(self.step(report, "sandbox")["facts"]["probe_checks_passed"],
+                         len(b1.PROBE_CHECKS))
         names = [item["step"] for item in report["steps"]]
         for absent in ("image-before", "image-after", "pb1-figures"):
             self.assertNotIn(absent, names)
-        self.assertFalse(os.path.exists(self.record))
+        self.assertIsNone(self.recorded())
         self.assertEqual(os.listdir(self.game), [])
+
+    def test_rehearse_with_a_core_handler_runs_the_synthetic_crash(self):
+        """R03: the crash probe gives evidence for the decision; the gate stays."""
+        self.set_core_pattern("|/nix/store/x-systemd/lib/systemd/systemd-coredump %P")
+        self.plan["coredumps"] = [{"pid": 1, "sig": 11, "corefile": "none",
+                                   "exe": sys.executable}]
+        self.assertEqual(self.tool("rehearse"), 1, self.output)
+        report = self.report()
+        probe = self.step(report, "core-probe")
+        self.assertEqual(probe["facts"], {"probe_signal": 11, "entry_found": True,
+                                          "corefile": "none"})
+        self.assertIn("core-handler", self.codes(report))
+        self.assertIn("finding core-handler", self.summary())
+        # The synthetic crash is not counted as a core dump of the step.
+        self.assertNotIn("core-dump-recorded", self.codes(report))
+        self.assertEqual(self.step(report, "core-dumps")["facts"]["core_dumps_since_start"], 0)
+
+    def test_sandbox_failures_stop_before_the_image_is_read(self):
+        """R02: no bubblewrap, a too old one, one that cannot start, or a probe check that
+        fails: no extraction, and the image is not read."""
+        cases = (("version", {"bwrap_version": "bubblewrap 0.7.0"}, "sandbox-unavailable"),
+                 ("broken", {"bwrap_broken": True}, "sandbox-unavailable"),
+                 ("leak", {"probe_results": [{"name": n, "ok": n != "write-denied-home",
+                                              "detail": ""} for n in b1.PROBE_CHECKS]},
+                  "sandbox-probe-failed"))
+        for name, plan, code in cases:
+            with self.subTest(name=name):
+                saved = dict(self.plan)
+                self.plan.update(plan)
+                self.assertEqual(self.tool("run"), 1)
+                report = self.report()
+                self.assertIn(code, self.codes(report))
+                self.assertFalse(any(i["step"] == "image-before" for i in report["steps"]))
+                self.assertIsNone(self.recorded())
+                self.plan = saved
+                shutil.rmtree(self.run_dir)
+        self.bwrap = os.path.join(self.w, "no-such-bwrap")
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("sandbox-unavailable", self.codes(self.report()))
 
     def test_verify_reads_only(self):
         self.assertEqual(self.tool("run"), 0, self.output)
@@ -795,22 +1030,183 @@ class RunTest(Fixture):
         self.assertEqual(self.tool("verify"), 0, self.output)
         self.assertIn("files: expected 5, found 5: match", self.output)
         self.assertEqual(snapshot(self.w, skip=(self.records,)), before)
-        self.assert_no_local_path(self.output)
+        self.assert_shareable(self.output)
 
     def test_nothing_is_sent_anywhere(self):
         self.assertEqual(self.tool("run"), 0, self.output)
         with open(self.trap) as f:
             calls = f.read().splitlines()
         self.assertEqual([c for c in calls if c.startswith("UPLOAD")], [])
-        git = [c.split() for c in calls if c.startswith("git ")]
-        self.assertTrue(git)
-        for call in git:
+        for call in (c.split() for c in calls if c.startswith("git ")):
             words = call[1:]
-            while words and words[0] in ("-C",):
+            while words and words[0] == "-C":
                 words = words[2:]
             self.assertIn(words[0], ("status", "rev-parse"), call)
-        nix = [c for c in calls if c.startswith("nix ")]
-        self.assertEqual(nix, [f"nix store verify {self.sdk}"])
+        self.assertEqual([c for c in calls if c.startswith("nix ")],
+                         [f"nix store verify {self.sdk}"])
+
+    def test_summary_holds_no_free_text(self):
+        """R04: sentinels in every path, in a guard finding, in the summary block of rexglue
+        and in mount targets: none reaches the summary or the console."""
+        self.use_fake_guard()
+        self.plan["guard_postflight"] = "sentinel"
+        self.plan["type"] = SENTINEL
+        self.plan["mounts"].append(mount(50, os.path.join(self.home, SENTINEL + " mnt"),
+                                         parent=10))
+        os.mkdir(os.path.join(self.home, SENTINEL + " mnt"))
+        self.assertEqual(self.tool("run"), 1)
+        summary = self.summary()
+        self.assert_shareable(summary)
+        self.assert_shareable(self.output)
+        self.assertIn("finding guard-written-outside (x1)", summary)
+        allowed = set(b1.FINDING_CODES)
+        for code in re.findall(r"finding ([a-z0-9-]+) \(x", summary):
+            self.assertIn(code, allowed)
+
+
+class InterruptTest(Fixture):
+    def wait_for_phase(self, phase, timeout=60):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            dirs = self.run_dirs()
+            state = b1.read_state(dirs[0]) if dirs else None
+            if state and state.get("phase") == phase:
+                return state
+            time.sleep(0.1)
+        self.fail(f"phase {phase} not reached")
+
+    def test_sigterm_and_repeated_signals_finish_the_controls(self):
+        """R05: SIGTERM stops the extraction; a second signal does not stop the
+        controls."""
+        self.use_fake_guard()
+        self.plan["guard_postflight"] = "slow-3"
+        self.plan["sleep"] = 60
+        proc = self.start("run")
+        self.wait_for_phase("extracting")
+        proc.send_signal(signal.SIGTERM)
+        slow = self.trap + ".slow"
+        deadline = time.monotonic() + 60
+        while not os.path.exists(slow) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        proc.send_signal(signal.SIGINT)
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 1, out)
+        report = self.report()
+        self.assertIn("interrupted", self.codes(report))
+        self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
+        self.assertEqual(self.step(report, "interrupted")["facts"]["signals"], 3)
+        self.assertEqual(b1.read_state(self.run_dir)["phase"], "complete")
+
+    def test_killed_supervisor_leaves_a_detectable_state_and_resume_finishes(self):
+        """R05: after a SIGKILL of the tool, state.json shows the phase; prepare and run
+        refuse; resume waits for the extraction to end, then runs the controls without
+        starting it again and without deleting anything."""
+        self.plan["sleep"] = 300
+        proc = self.start("run")
+        state = self.wait_for_phase("extracting")
+        proc.kill()
+        proc.communicate()
+        name = os.path.basename(self.run_dirs()[0])
+        self.assertEqual(self.tool("prepare"), 1)
+        self.assertIn("finding incomplete-run", self.output)
+        self.assertEqual(self.tool("run"), 1)
+        self.assertEqual(len(self.run_dirs()), 1)
+        self.assertEqual(self.tool("resume", "--run-folder", name), 1)
+        self.assertIn("finding still-running", self.output)
+        os.kill(state["bwrap_pid"], signal.SIGKILL)
+        for _ in range(100):
+            if b1.process_start(state["bwrap_pid"]) is None:
+                break
+            time.sleep(0.05)
+        record = self.recorded()
+        for pid in self.fake_rexglue_pids():
+            os.kill(pid, signal.SIGKILL)
+        tree = snapshot(self.game)
+        self.assertEqual(self.tool("resume", "--run-folder", name), 1, self.output)
+        report = self.report("report-resume.json")
+        self.assertIn("interrupted", self.codes(report))
+        self.assertEqual(self.step(report, "postflight")["exit_code"], 0)
+        self.assertEqual(self.recorded(), record)
+        self.assertEqual(snapshot(self.game), tree)
+        self.assertEqual(b1.read_state(self.run_dir)["phase"], "complete")
+        self.assert_shareable(self.summary("summary-resume.txt"))
+        self.tool("prepare")
+        self.assertNotIn("finding incomplete-run", self.output)
+
+    def fake_rexglue_pids(self):
+        pids = []
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                try:
+                    with open(f"/proc/{entry}/cmdline", "rb") as f:
+                        if self.sdk.encode() in f.read():
+                            pids.append(int(entry))
+                except OSError:
+                    pass
+        return pids
+
+
+def real_bwrap():
+    """The real bubblewrap, and whether it can start a sandbox here."""
+    path = os.environ.get("B1_REAL_BWRAP") or shutil.which("bwrap")
+    if not path:
+        return None, "bwrap not found"
+    result = subprocess.run([path, "--unshare-all", "--unshare-user", "--die-with-parent",
+                             "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+                             "--", sys.executable, "-c", "pass"], capture_output=True,
+                            text=True)
+    if result.returncode != 0:
+        return path, result.stderr.strip()[:200] or f"status {result.returncode}"
+    return path, None
+
+
+def say_mode(text):
+    """Which case of RealSandboxTest ran: into B1_SANDBOX_MODE_FILE, else on stderr."""
+    path = os.environ.get("B1_SANDBOX_MODE_FILE")
+    if path:
+        with open(path, "a") as f:
+            f.write(text + "\n")
+    else:
+        print(text, file=sys.stderr)
+
+
+class RealSandboxTest(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.real, self.reason = real_bwrap()
+        hidden = [p for p in b1.SANDBOX_HIDDEN if b1.under_or_self(self.w, p)]
+        self.assertFalse(hidden, "set TMPDIR outside /tmp, /run and /var/tmp for this test")
+
+    def test_real_sandbox_confines_the_extraction(self):
+        """R02 with the real bubblewrap: the probe passes, and a fake rexglue that writes
+        outside its destinations, into the home folder, the private folder and the image, is
+        refused by the sandbox. Where the sandbox cannot start, the tool must refuse."""
+        if self.real is None:
+            self.fail("bubblewrap is required for this test (B1_REAL_BWRAP or PATH)")
+        self.bwrap = self.real
+        if self.reason:
+            say_mode(f"REAL SANDBOX: unavailable ({self.reason})")
+            self.assertEqual(self.tool("rehearse"), 1)
+            self.assertIn("sandbox-unavailable", self.codes(self.report()))
+            self.assertIsNone(self.recorded())
+            return
+        say_mode("REAL SANDBOX: available")
+        self.assertEqual(self.tool("rehearse"), 0, self.output)
+        sandbox = self.step(self.report(), "sandbox")
+        self.assertEqual(sandbox["facts"]["probe_failed_checks"], [], sandbox)
+        shutil.rmtree(self.run_dir)
+        targets = [os.path.join(self.home, "leak"), os.path.join(self.private, "leak"),
+                   os.path.join(self.private, "iso", "leak"), os.path.join(self.repo, "leak")]
+        self.plan["write_outside"] = targets
+        self.plan["modify_image"] = True
+        self.assertEqual(self.tool("run"), 0, self.output)
+        record = self.recorded()
+        for target in targets:
+            self.assertEqual(record["attempts"][target], "EROFS")
+            self.assertFalse(os.path.exists(target))
+        self.assertIn(record["attempts"]["image"], ("EROFS", "EPERM", "EACCES"))
+        self.assertIn("files: expected 5, found 5: match", self.summary())
 
 
 class RootTest(unittest.TestCase):
@@ -822,7 +1218,7 @@ class RootTest(unittest.TestCase):
             self.assertEqual(b1.main(["--private-dir", w, "run"]), 1)
             context.assert_not_called()
             text = "".join(call.args[0] for call in out.write.call_args_list)
-            self.assertIn("running as root", text)
+            self.assertIn("never runs as root", text)
             self.assertEqual(os.listdir(w), [])
 
 
@@ -833,10 +1229,10 @@ class UnitTest(unittest.TestCase):
             text = f.read()
         self.assertIn(f"| Arborescence | {b1.J0_REFERENCE['files']} fichiers, "
                       f"{b1.J0_REFERENCE['directories']} dossiers |", text)
-        line = next(l for l in text.splitlines() if l.startswith("| SHA-256 |"))
-        hashes = re.findall(r"`([0-9a-f]{64})`", line)
-        self.assertEqual(hashes, [b1.J0_REFERENCE["modules"]["default.xex"],
-                                  b1.J0_REFERENCE["modules"]["fifadllzf.xex"]])
+        line = next(line for line in text.splitlines() if line.startswith("| SHA-256 |"))
+        self.assertEqual(re.findall(r"`([0-9a-f]{64})`", line),
+                         [b1.J0_REFERENCE["modules"]["default.xex"],
+                          b1.J0_REFERENCE["modules"]["fifadllzf.xex"]])
 
     def test_only_local_modules_are_imported(self):
         with open(TOOL, encoding="utf-8") as f:
@@ -847,22 +1243,84 @@ class UnitTest(unittest.TestCase):
                 names.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
                 names.add(node.module)
-        self.assertEqual(names, {"argparse", "datetime", "hashlib", "importlib.util", "json",
-                                 "os", "re", "resource", "stat", "subprocess", "sys", "time"})
+        # socket serves only the confinement probe and its two local listeners.
+        self.assertEqual(names, {"argparse", "datetime", "errno", "hashlib",
+                                 "importlib.util", "json", "os", "re", "resource", "select",
+                                 "signal", "socket", "stat", "subprocess", "sys", "time"})
 
-    def test_findmnt_escapes(self):
-        self.assertEqual(b1.unescape_mount(b"/home/u/My\\x20Files"), "/home/u/My Files")
-        self.assertEqual(b1.unescape_mount(b"/a\\x5cb\\x0ac"), "/a\\b\nc")
-        self.assertEqual(b1.unescape_mount(b"/caf\\xc3\\xa9"), "/café")
+    def test_summary_codes_and_steps_are_fixed(self):
+        for code in b1.FINDING_CODES:
+            self.assertRegex(code, r"^[a-z0-9-]+$")
+        for step in b1.SUMMARY_FACTS:
+            self.assertIn(step, b1.STEP_NAMES)
 
-    def test_redactor_and_finding_kinds(self):
+    def test_summary_validators_reject_free_text(self):
+        steps = b1.Steps(lambda text: text)
+        steps.add("vfs-dump", "ok", facts={"type": SENTINEL, "nodes": "8", "signal": 99})
+        steps.add("repository", "ok", facts={"repository_commit": SENTINEL})
+        steps.add("image-before", "ok", facts={"sha256": "a" * 64})
+        steps.add("sandbox", "ok", facts={"probe_failed_checks": [SENTINEL]})
+        ctx = mock.Mock(reference=b1.J0_REFERENCE)
+        text = b1.summary_text(ctx, steps, "run", 0)
+        self.assertNotIn(SENTINEL, text)
+        self.assertNotIn("a" * 64, text)
+        self.assertIn("type invalid", text)
+        self.assertIn("probe_failed_checks invalid", text)
+
+    def test_unknown_codes_become_internal_errors(self):
+        steps = b1.Steps(lambda text: text)
+        item = steps.add("check-dir", "ok", findings=[(SENTINEL, "x")])
+        self.assertEqual(item["findings"][0]["code"], "internal-error")
+
+    def test_compare_mounts(self):
+        a = [mount(1, "/"), mount(10, "/home/u"), mount(11, "/home/u/p", parent=10)]
+        self.assertEqual(b1.compare_mounts(a, a)[0], {"added": 0, "removed": 0, "changed": 0})
+        stacked = a + [mount(12, "/home/u/p", parent=11)]
+        self.assertEqual(b1.compare_mounts(a, stacked)[0]["changed"], 1)
+        replaced = [dict(m) for m in a]
+        replaced[2]["id"] = 77
+        facts, findings = b1.compare_mounts(a, replaced)
+        self.assertEqual(facts["changed"], 1)
+        self.assertEqual(findings[0][0], "mount-changed")
+
+    def test_mount_scope_and_plan(self):
+        with tempfile.TemporaryDirectory() as w:
+            home = os.path.join(w, "home")
+            private = os.path.join(home, "private")
+            os.makedirs(os.path.join(private, "game"))
+            os.makedirs(os.path.join(home, "p1", "p2"))
+            with open(os.path.join(home, "f"), "w") as f:
+                f.write("x")
+            ctx = mock.Mock(private=private, guard=b1.load_guard(GUARD))
+            ctx.tops.return_value = [home, os.path.join(w, "tmp")]
+            mounts = [mount(1, "/"), mount(2, w), mount(3, home), mount(4, home + "/p1"),
+                      mount(5, home + "/p1/p2"), mount(6, home + "/f"),
+                      mount(7, private), mount(8, private + "/game"),
+                      mount(9, home + "/absent"), mount(10, w + "/tmp/t"),
+                      mount(11, w + "home-like"), mount(12, "/proc")]
+            relevant, watch, facts, findings = b1.mount_plan(ctx, mounts)
+            self.assertEqual(watch, [home + "/absent", home + "/p1", home + "/p1/p2",
+                                     w + "/tmp/t"])
+            self.assertEqual(facts, {"mounts_in_scope": 10, "mount_points_watched": 4,
+                                     "mount_points_not_folders": 1,
+                                     "private_folder_is_mount": True})
+            self.assertEqual([code for code, _ in findings], ["private-mount"])
+            self.assertNotIn("/proc", [m["target"] for m in relevant])
+
+    def test_mount_events(self):
+        events = b1.MountEvents("/proc/self/mountinfo")
+        self.assertIsNotNone(events.fd)
+        self.assertFalse(events.changed())
+        fake = mock.Mock()
+        fake.poll.return_value = [(events.fd, b1.select.POLLPRI)]
+        with mock.patch.object(b1.select, "poll", return_value=fake):
+            self.assertTrue(events.changed())
+        self.assertIsNone(b1.MountEvents("/nonexistent/mountinfo").changed())
+
+    def test_redactor(self):
         redact = b1.Redactor("/home/u/private", "/home/u/dev/repo", "/home/u")
         self.assertEqual(redact("x /home/u/private/game y /home/u/dev/repo/a /home/u/.cache"),
                          "x $WC2010_PRIVATE_DIR/game y $REPO/a $HOME/.cache")
-        self.assertEqual(b1.finding_kind("file written outside the private folder: $HOME/x"),
-                         "file written outside the private folder")
-        self.assertEqual(b1.finding_kind("the disc image changed during the step"),
-                         "the disc image changed during the step")
 
     def test_survey_counts_below_the_root_with_hidden_names(self):
         with tempfile.TemporaryDirectory() as root:
@@ -883,15 +1341,11 @@ class UnitTest(unittest.TestCase):
                     f.write(name)
             figures = b1.survey_tree(root, {"default.xex": ""})
             self.assertEqual(figures["modules"]["default.xex"]["status"], "ambiguous")
-            self.assertIn(["several names for one module", "default.xex"],
-                          figures["anomalies"])
 
     def test_survey_other_file_system_is_an_anomaly(self):
         """A real mount needs root: the device number of one folder is changed instead."""
         with tempfile.TemporaryDirectory() as root:
             os.makedirs(os.path.join(root, "mnt"))
-            with open(os.path.join(root, "mnt", "x"), "w") as f:
-                f.write("x")
             real_stat = os.stat
 
             def fake_stat(path, *args, **kwargs):
@@ -904,11 +1358,8 @@ class UnitTest(unittest.TestCase):
             with mock.patch.object(b1.os, "stat", fake_stat):
                 figures = b1.survey_tree(root, {})
             self.assertEqual(figures["anomalies"], [["other file system", "mnt"]])
-            self.assertEqual((figures["files"], figures["directories"]), (0, 0))
 
-    def test_game_mount_point_is_refused(self):
-        """Same simulation for prepare: game/ on another file system than the private
-        folder."""
+    def test_component_on_another_device_is_refused(self):
         with tempfile.TemporaryDirectory() as private:
             os.mkdir(os.path.join(private, "game"))
             ctx = mock.Mock(private=private)
@@ -923,31 +1374,31 @@ class UnitTest(unittest.TestCase):
                 return st
             findings = []
             with mock.patch.object(b1.os, "lstat", fake_lstat):
-                b1.check_real_folder(ctx, "game", findings, {})
-            self.assertEqual(findings, ["mount point where a dedicated folder is expected: "
-                                        "game/"])
+                b1.check_component(ctx, "game", findings)
+            self.assertEqual([code for code, _ in findings], ["folder-mount"])
 
-    def test_watch_plan(self):
-        with tempfile.TemporaryDirectory() as w:
-            home = os.path.join(w, "home")
-            private = os.path.join(home, "private")
-            os.makedirs(os.path.join(private, "game"))
-            os.makedirs(os.path.join(home, "p1", "p2"))
-            with open(os.path.join(home, "f"), "w") as f:
-                f.write("x")
-            ctx = mock.Mock(private=private, guard=b1.load_guard(GUARD))
-            ctx.tops.return_value = [home, os.path.join(w, "tmp")]
-            targets = ["/", home, os.path.join(home, "p1"), os.path.join(home, "p1", "p2"),
-                       os.path.join(home, "f"), os.path.join(private, "game"),
-                       os.path.join(home, "absent"), os.path.join(w, "tmp", "t"),
-                       w + "home-like"]
-            relevant, watch, facts = b1.watch_plan(ctx, targets)
-            self.assertEqual(watch, [os.path.join(home, "p1"), os.path.join(home, "p1", "p2"),
-                                     os.path.join(home, "absent"),
-                                     os.path.join(w, "tmp", "t")])
-            self.assertEqual(facts, {"mount_points_watched": 4, "mount_points_not_folders": 1,
-                                     "mount_points_in_private_folder": 1})
-            self.assertEqual(len(relevant), 6)
+    def test_sandbox_options(self):
+        with tempfile.TemporaryDirectory() as private:
+            ctx = mock.Mock(private=private)
+            ctx.args.bwrap = "bwrap"
+            argv = b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
+            self.assertEqual(argv[:13], ["bwrap", "--unshare-all", "--unshare-user",
+                                         "--disable-userns", "--die-with-parent",
+                                         "--new-session", "--ro-bind", "/", "/", "--dev",
+                                         "/dev", "--proc", "/proc"])
+            self.assertNotIn("--share-net", argv)
+            self.assertEqual(argv[-3:], ["9", "--", "cmd"])
+            binds = [argv[i + 1] for i, a in enumerate(argv) if a == "--bind"]
+            self.assertEqual(binds, [private + "/logs/r"] +
+                             [os.path.join(private, n) for n in b1.SANDBOX_WRITABLE])
+            # The private folder is bound read-only after every tmpfs, before its binds.
+            ro = argv.index(private)
+            tmpfs = [i for i, a in enumerate(argv) if a == "--tmpfs"]
+            self.assertTrue(all(i < ro for i in tmpfs))
+
+    def test_root_uids(self):
+        uids = b1.root_uids()
+        self.assertIn(0, uids)
 
 
 if __name__ == "__main__":

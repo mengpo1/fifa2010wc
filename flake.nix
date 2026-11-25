@@ -91,9 +91,11 @@
       # J2, step B1 (ticket #32): the controlled extraction of the disc tree with
       # `rexglue vfs dump`, run by hand on the user's machine after PB-0
       # (docs/J2_B1_EXTRACTION.md). The SDK is a dependency, so building this command builds
-      # the SDK first, before any control starts. The disc image and the private folder are
-      # run time arguments and never enter the store. `nix` and `coredumpctl` come from the
-      # user's system, so that they match its daemon and its journal.
+      # the SDK first, before any control starts. The extraction runs in a bubblewrap sandbox,
+      # without privileges: no network, and writes only in its destinations. The disc image
+      # and the private folder are run time arguments and never enter the store. `nix` and
+      # `coredumpctl` come from the user's system, so that they match its daemon and its
+      # journal.
       b1-extract = pkgs.writeShellApplication {
         name = "fifa2010wc-b1-extract";
         runtimeInputs = [
@@ -101,6 +103,7 @@
           pkgs.git
           pkgs.findutils
           pkgs.util-linux
+          pkgs.bubblewrap
         ];
         text = ''
           exec python3 -I ${./tools/b1_extract.py} \
