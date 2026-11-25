@@ -10,6 +10,7 @@
   private-project,
   address-compare,
   b1-extract,
+  b1-closure,
 }:
 
 let
@@ -594,6 +595,7 @@ in
         set -euo pipefail
         mkdir -p "$out"
         B1_REAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap B1_SANDBOX_MODE_FILE="$out/sandbox-mode.txt" \
+          B1_PYTHON_CLOSURE=${pkgs.closureInfo { rootPaths = [ python ]; }} \
           ${python}/bin/python3 -I ${self}/tools/test_b1_extract.py > "$out/selftest.txt" 2>&1 \
           || { cat "$out/selftest.txt"; exit 1; }
         tail -n 3 "$out/selftest.txt"
@@ -622,6 +624,9 @@ in
           test_an_error_in_one_control_lets_the_others_run_and_resume_finishes \
           test_an_unreadable_image_after_the_step_is_incomplete_evidence \
           test_socket_or_fifo_in_the_private_folder_is_refused test_sandbox_options \
+          test_a_valid_closure_is_checked_and_reported test_absent_closure_refuses_everything \
+          test_invalid_closure_is_refused_before_anything_starts \
+          test_missing_dependency_is_refused_before_anything_starts test_sandbox_blockers \
           test_image_hash_mismatch_with_the_j0_report_stops_before_rexglue test_sandbox_failures_stop_before_the_image_is_read \
           test_summary_holds_no_free_text test_summary_validators_reject_free_text \
           test_sigterm_and_repeated_signals_finish_the_controls test_killed_supervisor_leaves_a_detectable_state_and_resume_finishes \
@@ -644,8 +649,10 @@ in
         echo synthetic > "$R/README"
         git -C "$R" add README
         git -C "$R" -c user.name=test -c user.email=test@example.invalid commit -q -m init
-        printf '#!%s\n[ "$1 $2" = "store verify" ] && [ "$3" = %s ] && [ $# -eq 3 ]\n' \
-          "${pkgs.bash}/bin/bash" "${rexglue-sdk}" > "$S/nix"
+        # The stub nix: the guard's `store verify` of the SDK, and the tool's check that the
+        # paths of the store closure are valid, each of them listed in the closure.
+        printf '#!%s\nif [ "$1 $2 $3 $4" = "store verify --no-contents --no-trust" ]; then\n  shift 4; [ $# -gt 0 ] || exit 64\n  for p in "$@"; do grep -qxF -- "$p" %s/store-paths || exit 65; done; exit 0\nfi\n[ "$1 $2" = "store verify" ] && [ "$3" = %s ] && [ $# -eq 3 ]\n' \
+          "${pkgs.bash}/bin/bash" "${b1-closure}" "${rexglue-sdk}" > "$S/nix"
         printf '#!%s\n[ "$1 $2 $3" = "--no-pager --json=short list" ] || exit 64\necho "No coredumps found." >&2\nexit 1\n' \
           "${pkgs.bash}/bin/bash" > "$S/coredumpctl"
         chmod 755 "$S/nix" "$S/coredumpctl"
@@ -677,7 +684,8 @@ in
           "$P/logs/j0-identification.json"
         chmod a-w "$P/iso/fifa2010wc.iso"
         # A proof as rehearse writes it, bound to this boot, kernel and settings, and to the
-        # tool, bubblewrap and Python of the packaged command (same pkgs, same files).
+        # tool, bubblewrap, Python and store closure of the packaged command (same pkgs,
+        # same files).
         ${python}/bin/python3 -I -c '
         import importlib.util, os, sys, time, types
         sys.dont_write_bytecode = True
@@ -687,7 +695,8 @@ in
         folder = os.path.join(sys.argv[2], "logs", "b1-rehearse-20000101T000000Z")
         os.mkdir(folder, 0o700)
         ctx = types.SimpleNamespace(args=types.SimpleNamespace(
-            core_pattern_file=sys.argv[3], suid_dumpable_file=sys.argv[4], bwrap=sys.argv[5]))
+            core_pattern_file=sys.argv[3], suid_dumpable_file=sys.argv[4], bwrap=sys.argv[5],
+            store_closure=sys.argv[6]))
         identity = b1.proof_identity(ctx)
         b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
                                 "phase": "complete", "controls_clean": True,
@@ -695,7 +704,7 @@ in
                                 "core_proof": dict(identity, result="validated",
                                                    proved_at=time.time())})
         ' ${self}/tools/b1_extract.py "$P" "$S/core_pattern" "$S/suid_dumpable" \
-          ${pkgs.bubblewrap}/bin/bwrap
+          ${pkgs.bubblewrap}/bin/bwrap ${b1-closure}
         b1() {
           (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
             --nix "$S/nix" --coredumpctl "$S/coredumpctl" --reference "$W/reference.json" \
@@ -724,7 +733,8 @@ in
         cat "$out/2-run.txt"
         run=$(echo "$P"/logs/b1-run-*)
         for line in "vfs-dump             ok       exit 0   type GDFX, nodes 9" \
-                    "probe_checks_passed 24" \
+                    "probe_checks_passed 26" \
+                    "closure_closed True, closure_roots_covered True, closure_registered True" \
                     "proof_found True" \
                     "files: expected 5, found 5: match" \
                     "directories (root not counted): expected 3, found 3: match" \

@@ -96,6 +96,18 @@
       # and the private folder are run time arguments and never enter the store. `nix` and
       # `coredumpctl` come from the user's system, so that they match its daemon and its
       # journal.
+      b1-tool = ./tools/b1_extract.py;
+      # The only part of the store the sandbox of B1 shows (owner's arbitration on PR #33,
+      # D-019): the closure of what runs inside it, Python, the SDK and the tool, as Nix
+      # computes it at build time from the references of these paths. No list is kept by
+      # hand. `store-paths` lists the paths, `registration` holds their references.
+      b1-closure = pkgs.closureInfo {
+        rootPaths = [
+          pkgs.python3
+          rexglue-sdk
+          b1-tool
+        ];
+      };
       b1-extract = pkgs.writeShellApplication {
         name = "fifa2010wc-b1-extract";
         runtimeInputs = [
@@ -106,8 +118,9 @@
           pkgs.bubblewrap
         ];
         text = ''
-          exec python3 -I ${./tools/b1_extract.py} \
-            --guard ${./tools/private_guard.py} --sdk ${rexglue-sdk} "$@"
+          exec python3 -I ${b1-tool} \
+            --guard ${./tools/private_guard.py} --sdk ${rexglue-sdk} \
+            --store-closure ${b1-closure} "$@"
         '';
       };
     in
@@ -170,6 +183,7 @@
           private-project
           address-compare
           b1-extract
+          b1-closure
           ;
       };
 

@@ -53,7 +53,7 @@ import subprocess
 import sys
 import time
 
-TOOL_VERSION = 4
+TOOL_VERSION = 5
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GUARD = os.path.join(HERE, "private_guard.py")
 ISO_NAME = "fifa2010wc.iso"
@@ -83,11 +83,19 @@ PRIVATE_COMPONENTS = ("iso", "game", "logs", "tmp", "app", "xdg", "xdg/config",
 # and declared to preflight.
 SANDBOX_WRITABLE = ("game", "app", "tmp")
 # The sandbox is built from a positive list (review v3, R02): an empty read-only root that
-# holds only the Nix store (read-only; a valid store path holds no socket or FIFO, which
-# NAR cannot represent), /dev and /proc of the sandbox, an empty /tmp, the tool itself,
-# the private folder (read-only) and the writable destinations. Nothing else of the
-# machine is visible: no home folder, /run, /var, /etc, nor the /tmp of the machine.
+# holds only the paths of the store closure (read-only, D-019; a valid store path holds no
+# socket or FIFO, which NAR cannot represent), /dev and /proc of the sandbox, an empty
+# /tmp, the tool itself, the private folder (read-only) and the writable destinations.
+# Nothing else of the machine is visible: no other store path, no home folder, /run, /var,
+# /etc, nor the /tmp of the machine.
 SANDBOX_STORE = "/nix/store"
+# Owner's arbitration on PR #33 (D-019): of the store, the sandbox shows only the closure of
+# the packaged command, computed by Nix when it is built (closureInfo of Python, the SDK and
+# this tool): `store-paths` lists it, `registration` holds the references of each path.
+# Without a valid and complete closure, nothing starts; the store is never bound whole.
+STORE_NAME_RE = re.compile(r"[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+")
+CLOSURE_FILES = ("store-paths", "registration")
+CLOSURE_MAX_BYTES = 16 * 1024 * 1024
 BWRAP_MIN_VERSION = (0, 8, 0)
 # Core dump limits (D-018, option B of docs/J2_B1_EXTRACTION.md section 6): the sandboxed
 # extraction and the confinement probe run with exactly 1, which makes the kernel drop a
@@ -99,7 +107,7 @@ SUPERVISOR_CORE_LIMIT = (0, 1)
 CONTROL_CORE_LIMIT = (0, 0)
 PROOF_MIN_WAIT = 5
 # Version of the protocol of the proof of option B (review v3, R03-B), and its lifetime.
-PROOF_PROTOCOL = 2
+PROOF_PROTOCOL = 3
 PROOF_MAX_AGE = 24 * 3600
 BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
 # The store entry already found by CP-3 before PB-0: never opened, never deleted.
@@ -150,6 +158,11 @@ FINDING_CODES = {
     "mounts-unavailable": "the mount table could not be read",
     "private-mount": "a mount point lies inside the private folder",
     "private-ipc": "a socket or a FIFO lies inside the private folder",
+    "store-closure-absent": "no store closure of the packaged command was given or found",
+    "store-closure-invalid": "the store closure is not a read-only file of the store, is "
+                             "malformed, names a path that is missing or not valid",
+    "store-closure-incomplete": "the store closure lacks a reference of one of its paths, "
+                                "Python, the SDK or the tool",
     "watch-unusable": "a watched place is absent or not readable",
     "mount-changed": "a mount in scope appeared, disappeared or changed",
     "mount-events": "the mount table changed during the step",
@@ -202,6 +215,7 @@ GUARD_PREFIXES = (
 PROBE_CHECKS = (
     "write-denied-home", "write-denied-private-root", "write-denied-iso",
     "write-denied-store", "write-denied-repo", "write-allowed-run-folder",
+    "store-closure-only", "store-outside-hidden",
     "writable-game", "writable-app", "writable-tmp", "image-read-only",
     "tmp-private-empty", "run-hidden", "nix-daemon-socket-hidden", "home-hidden",
     "root-allowlist-only", "net-loopback-only",
@@ -215,7 +229,7 @@ STEP_NAMES = (
     "core-probe", "mounts-before", "image-before", "cp3-before", "preflight",
     "before-extraction", "vfs-dump", "postflight", "mounts-after", "core-dumps",
     "cp3-after", "image-after", "private-tree-after", "pb1-figures", "interrupted",
-    "internal-error", "resume", "evidence", "private-ipc",
+    "internal-error", "resume", "evidence", "private-ipc", "store-closure",
 )
 
 
@@ -286,6 +300,8 @@ SUMMARY_FACTS = {
                     "anomalies": _int},
     "interrupted": {"signals": _int},
     "private-ipc": {"sockets": _int, "fifos": _int},
+    "store-closure": {"closure_paths": _int, "closure_closed": _bool,
+                      "closure_roots_covered": _bool, "closure_registered": _bool},
 }
 STATUSES = ("ok", "finding", "skipped")
 
@@ -467,6 +483,8 @@ class Context:
         self.guard = load_guard(args.guard)
         self.sdk = os.path.normpath(args.sdk) if args.sdk else None
         self.store = os.path.normpath(args.store_dir)
+        # Set by check_store_closure() only when the closure is valid and complete.
+        self.closure = None
         self.tmp_watch = os.path.normpath(args.tmp_watch)
         self.redact = Redactor(self.private, self.repo, self.home)
         self.iso = os.path.join(self.private, "iso", ISO_NAME)
@@ -638,6 +656,144 @@ def private_ipc(ctx):
             elif stat.S_ISFIFO(mode):
                 fifos.append(path)
     return sockets, fifos, unreadable
+
+
+def store_roots(ctx):
+    """The store folders: /nix/store, and the test store when another (--store-dir)."""
+    return list(dict.fromkeys([SANDBOX_STORE, ctx.store]))
+
+
+def store_path_of(path, roots):
+    """The store path holding `path` (/nix/store/<hash>-<name>), or None."""
+    for root in roots:
+        if under_or_self(path, root) and path != root:
+            name = os.path.relpath(path, root).split(os.sep)[0]
+            if STORE_NAME_RE.fullmatch(name):
+                return os.path.join(root, name)
+    return None
+
+
+def read_closure_file(path, owners):
+    """One file of the closure: a regular file, not a link, with no write permission for
+    anyone, owned by root (or the owner of the store), at most CLOSURE_MAX_BYTES."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o222 or st.st_uid not in owners \
+                or st.st_size > CLOSURE_MAX_BYTES:
+            raise ValueError("not a read-only file of the store")
+        data = b""
+        while len(data) <= CLOSURE_MAX_BYTES:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            data += chunk
+        if len(data) > CLOSURE_MAX_BYTES:
+            raise ValueError("too large")
+        return data
+    finally:
+        os.close(fd)
+
+
+def parse_registration(text):
+    """The `registration` file of closureInfo (nixpkgs build-support/closure-info.nix): for
+    each path, its line, the NAR hash, the NAR size, the deriver (empty), the number of
+    references, then each reference. Returns {path: set of references}."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    graph, i = {}, 0
+    while i < len(lines):
+        if i + 5 > len(lines):
+            raise ValueError("truncated registration")
+        path, nar_hash, nar_size, _deriver, count = lines[i:i + 5]
+        if not re.fullmatch(r"sha256:[0-9a-z]{52}", nar_hash) or \
+                not nar_size.isdigit() or not count.isdigit() or path in graph:
+            raise ValueError("malformed registration")
+        refs = lines[i + 5:i + 5 + int(count)]
+        if len(refs) != int(count):
+            raise ValueError("truncated registration")
+        graph[path] = set(refs)
+        i += 5 + int(count)
+    return graph
+
+
+def check_store_closure(ctx, steps):
+    """The store closure of the packaged command (D-019), computed by Nix at build time.
+    - Provenance: a folder of the store, named as a store path, not a link; its two files
+      read-only, owned by root (or by the owner of the store), not links.
+    - Validity: every line a store path that exists, the registration naming the same
+      paths, and `nix store verify --no-contents --no-trust` accepting them all: the Nix
+      database knows them.
+    - Completeness: the references of every path are in the closure, with Python, the SDK
+      and the tool.
+    Only then is ctx.closure set; the sandbox binds these paths and nothing else of the
+    store."""
+    facts, findings = {}, []
+    roots = store_roots(ctx)
+    folder = ctx.args.store_closure
+    if not folder:
+        steps.add("store-closure", "finding", findings=[
+            ("store-closure-absent", "no --store-closure (use the packaged command)")])
+        return
+    folder = os.path.normpath(folder)
+    try:
+        st = os.lstat(folder)
+        owners = root_uids() | {os.stat(os.path.dirname(folder)).st_uid}
+    except OSError as exc:
+        steps.add("store-closure", "finding", findings=[
+            ("store-closure-absent", f"the store closure cannot be read ({exc.strerror})")])
+        return
+    name = os.path.basename(folder)
+    if os.path.dirname(folder) not in roots or not STORE_NAME_RE.fullmatch(name) or \
+            not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o222 or st.st_uid not in owners:
+        findings.append(("store-closure-invalid", "the store closure is not a read-only "
+                                                  "folder of the store"))
+    try:
+        listed, registration = (read_closure_file(os.path.join(folder, n), owners)
+                                for n in CLOSURE_FILES)
+        paths = listed.decode("utf-8").split("\n")
+        if paths and paths[-1] == "":
+            paths.pop()
+        graph = parse_registration(registration.decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        findings.append(("store-closure-invalid", f"unreadable store closure "
+                                                  f"({type(exc).__name__}: {exc})"))
+        steps.add("store-closure", "ok", facts=facts, findings=findings)
+        return
+    facts["closure_paths"] = len(paths)
+    bad = [p for p in paths if os.path.normpath(p) != p or os.path.dirname(p) not in roots
+           or not STORE_NAME_RE.fullmatch(os.path.basename(p)) or not os.path.lexists(p)]
+    if not paths or bad or len(set(paths)) != len(paths) or set(paths) != set(graph):
+        findings.append(("store-closure-invalid", f"{len(bad)} path(s) of the closure are "
+                                                  "malformed or missing, or the registration "
+                                                  "names other paths"))
+    members = set(paths)
+    missing = sorted({ref for refs in graph.values() for ref in refs} - members)
+    facts["closure_closed"] = not missing
+    findings += [("store-closure-incomplete", f"a reference is not in the closure: {ref}")
+                 for ref in missing]
+    needed = {"Python": store_path_of(os.path.realpath(sys.executable), roots),
+              "the SDK": os.path.normpath(ctx.sdk) if ctx.sdk else None}
+    tool = os.path.realpath(__file__)
+    if store_path_of(tool, roots):
+        needed["the tool"] = store_path_of(tool, roots)
+    uncovered = [what for what, path in needed.items() if path not in members]
+    facts["closure_roots_covered"] = not uncovered
+    findings += [("store-closure-incomplete", f"{what} is not in the closure")
+                 for what in uncovered]
+    registered = False
+    if not findings:
+        code, _, err, error = run_capture([ctx.args.nix, "store", "verify", "--no-contents",
+                                           "--no-trust", *paths], timeout=600)
+        registered = error is None and code == 0
+        if not registered:
+            findings.append(("store-closure-invalid", "nix store verify did not accept the "
+                                                      f"closure ({error or f'status {code}'})"))
+    facts["closure_registered"] = registered
+    if not findings:
+        ctx.closure = sorted(paths)
+    steps.add("store-closure", "ok", facts=facts, findings=findings)
 
 
 def check_image(ctx, findings, notes, facts):
@@ -930,7 +1086,8 @@ def core_settings(ctx, findings):
         if identity is None:
             # Nothing a proof could be bound to (R03-B): it is missing, as for run.
             findings.append(("core-proof-missing", "no proof can be bound: the boot id, the "
-                                                   "tool file or bubblewrap cannot be read"))
+                                                   "tool file, bubblewrap or the store "
+                                                   "closure cannot be read"))
         elif proof is None:
             findings.append(("core-proof-missing", "no rehearsal of this boot proves that a "
                                                    "crash at limit 1 reaches no handler"))
@@ -1041,27 +1198,29 @@ def bwrap_version(ctx):
     return tuple(int(x) for x in match.groups()) if match else None
 
 
-def sandbox_stores(ctx):
-    """The store folders bound read-only: /nix/store, and the test store when another."""
-    return [path for path in dict.fromkeys([SANDBOX_STORE, ctx.store]) if os.path.isdir(path)]
+def closure_covers(ctx, path):
+    """Whether `path` lies in a path of the validated store closure."""
+    return any(under_or_self(path, member) for member in ctx.closure or [])
 
 
 def sandbox_blockers(ctx):
-    """What the sandbox runs must be in its positive list: Python and the SDK in the
-    store; the tool is bound on its own."""
-    stores = sandbox_stores(ctx)
+    """What the sandbox runs must be in the validated store closure (D-019): Python and
+    the SDK. The tool is bound on its own when it is not in the store (tests)."""
+    if ctx.closure is None:
+        return [("store-closure-absent", "no validated store closure: the sandbox cannot be "
+                                         "built (the store is never bound whole)")]
     needed = [os.path.realpath(sys.executable)]
     if ctx.sdk:
         needed.append(os.path.realpath(ctx.sdk))
-    return [("sandbox-unavailable", f"needed by the sandbox, but outside the store: {path} "
-                                    "(use the packaged command)")
-            for path in needed if not any(under_or_self(path, store) for store in stores)]
+    return [("sandbox-unavailable", f"needed by the sandbox, but outside the store closure: "
+                                    f"{path} (use the packaged command)")
+            for path in needed if not closure_covers(ctx, path)]
 
 
 def sandbox_root_names(ctx, run_dir):
     """The names the root of the sandbox may show."""
-    names = {"nix", "dev", "proc", "tmp"}
-    for path in sandbox_stores(ctx) + [os.path.realpath(__file__), ctx.private, run_dir]:
+    names = {"dev", "proc", "tmp"}
+    for path in (ctx.closure or []) + [os.path.realpath(__file__), ctx.private, run_dir]:
         names.add(path.strip("/").split("/")[0])
     return sorted(names)
 
@@ -1069,17 +1228,19 @@ def sandbox_root_names(ctx, run_dir):
 def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     """bubblewrap around one command, from a positive list: every namespace unshared (no
     network: only a loopback of its own), no further user namespace, killed with this
-    process; an empty root holding only the store (read-only), /dev and /proc of the
-    sandbox, an empty /tmp, the tool, the private folder (read-only) and the run folder,
-    game/, app/ and tmp/ (writable); then the root is remounted read-only."""
+    process; an empty root holding only the paths of the store closure (read-only, D-019),
+    /dev and /proc of the sandbox, an empty /tmp, the tool, the private folder (read-only)
+    and the run folder, game/, app/ and tmp/ (writable); then the root is remounted
+    read-only. Without a validated closure there is no sandbox, and no fallback."""
+    if not ctx.closure:
+        raise RuntimeError("no validated store closure")
     argv = [ctx.args.bwrap, "--unshare-all", "--unshare-user", "--disable-userns",
             "--die-with-parent", "--new-session", "--tmpfs", "/"]
-    stores = sandbox_stores(ctx)
-    for store in stores:
-        argv += ["--ro-bind", store, store]
+    for path in ctx.closure:
+        argv += ["--ro-bind", path, path]
     argv += ["--dev", "/dev", "--proc", "/proc", "--dir", "/tmp"]
     tool = os.path.realpath(__file__)
-    if not any(under_or_self(tool, store) for store in stores):
+    if not closure_covers(ctx, tool):
         argv += ["--ro-bind", tool, tool]
     argv += ["--ro-bind", ctx.private, ctx.private, "--bind", run_dir, run_dir]
     for name in SANDBOX_WRITABLE:
@@ -1088,6 +1249,32 @@ def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     argv += ["--remount-ro", "/"]
     argv += ["--chdir", chdir or ctx.private, "--json-status-fd", str(status_fd), "--"]
     return argv + list(command)
+
+
+def outside_store_entries(ctx, limit=2):
+    """A few entries of the store that are not in the closure, for the probe to check that
+    the sandbox does not show them: bubblewrap's own store path, and the first entries of
+    each store folder that are not in the closure. Only names are read."""
+    members = set(ctx.closure or [])
+    found = []
+    bwrap = shutil.which(ctx.args.bwrap)
+    own = store_path_of(os.path.realpath(bwrap), store_roots(ctx)) if bwrap else None
+    if own and own not in members:
+        found.append(own)
+    for root in store_roots(ctx):
+        count = 0
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    if count >= limit:
+                        break
+                    if entry.path not in members and entry.path not in found and \
+                            STORE_NAME_RE.fullmatch(entry.name):
+                        found.append(entry.path)
+                        count += 1
+        except OSError:
+            continue
+    return found
 
 
 class Sandbox:
@@ -1176,12 +1363,16 @@ class Sandbox:
 
 
 def probe_spec(ctx, run_dir, tcp_port, abstract):
+    closure = {}
+    for path in ctx.closure or []:
+        closure.setdefault(os.path.dirname(path), []).append(os.path.basename(path))
     return {"home": ctx.home, "private": ctx.private, "iso_dir": os.path.dirname(ctx.iso),
             "store": ctx.store, "repo": ctx.repo, "run_dir": run_dir,
             "game": ctx.game, "app": os.path.join(ctx.private, "app"),
             "tmp": os.path.join(ctx.private, "tmp"), "image": ctx.iso,
             "tcp_port": tcp_port, "abstract": abstract,
-            "root_names": sandbox_root_names(ctx, run_dir)}
+            "root_names": sandbox_root_names(ctx, run_dir),
+            "closure": closure, "outside": outside_store_entries(ctx)}
 
 
 def run_probe(ctx, steps, run_dir, env):
@@ -1280,6 +1471,16 @@ def probe_main(argv):
     write_denied("write-denied-iso", spec["iso_dir"])
     write_denied("write-denied-store", spec["store"])
     write_denied("write-denied-repo", spec["repo"])
+    # D-019: each store folder shows only the paths of the closure, and entries of the
+    # store outside it do not exist in the sandbox.
+    try:
+        extra = sum(len(set(os.listdir(root)) - set(names))
+                    for root, names in spec["closure"].items())
+        check("store-closure-only", bool(spec["closure"]) and extra == 0, str(extra))
+    except OSError as exc:
+        check("store-closure-only", False, errno.errorcode.get(exc.errno, ""))
+    seen = [path for path in spec["outside"] if os.path.lexists(path)]
+    check("store-outside-hidden", not seen, f"{len(seen)} of {len(spec['outside'])}")
     try:
         fd = os.open(os.path.join(spec["run_dir"], "probe-write-check.txt"),
                      os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -1422,17 +1623,21 @@ def crash_entries(ctx, since, pid, window, lines):
 def proof_identity(ctx):
     """What a proof of option B holds for (review v3, R03-B): this boot, kernel,
     core_pattern and suid_dumpable, the protocol and version of this tool, the tool file,
-    bubblewrap and Python. Returns None if one of them cannot be read."""
+    bubblewrap, Python and the store closure of the sandbox (D-019). Returns None if one of
+    them cannot be read."""
     identity = core_identity(ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)
     bwrap = shutil.which(ctx.args.bwrap)
-    if identity is None or not bwrap:
+    closure = getattr(ctx.args, "store_closure", None)
+    if identity is None or not bwrap or not closure:
         return None
     try:
         identity.update(protocol=PROOF_PROTOCOL, tool_version=TOOL_VERSION,
                         tool_sha256=file_sha256(os.path.realpath(__file__)),
                         bwrap=os.path.realpath(bwrap),
                         bwrap_sha256=file_sha256(os.path.realpath(bwrap)),
-                        python=os.path.realpath(sys.executable))
+                        python=os.path.realpath(sys.executable),
+                        store_closure_sha256=file_sha256(os.path.join(closure,
+                                                                      "store-paths")))
     except OSError:
         return None
     return identity
@@ -2006,6 +2211,8 @@ def prepare_checks(ctx, steps):
     check_sdk(ctx, findings, facts)
     steps.add("sdk", "ok", facts=facts, findings=findings)
 
+    check_store_closure(ctx, steps)
+
     findings, facts = [], {}
     check_repo(ctx, findings, facts)
     steps.add("repository", "ok", facts=facts, findings=findings)
@@ -2423,6 +2630,7 @@ def main(argv):
     for name, default in (("--git", "git"), ("--nix", "nix"), ("--find", "find"),
                           ("--findmnt", "findmnt"), ("--coredumpctl", "coredumpctl"),
                           ("--bwrap", "bwrap"), ("--store-dir", "/nix/store"),
+                          ("--store-closure", None),
                           ("--tmp-watch", "/tmp"), ("--shm-dir", None),
                           ("--reference", None),
                           ("--mountinfo", "/proc/self/mountinfo"),

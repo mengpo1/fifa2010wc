@@ -135,6 +135,10 @@ for path in plan.get("connect_sockets", []):
         with socket.socket(socket.AF_UNIX) as s:
             s.connect(path)
     attempt("socket " + path, action)
+for path in plan.get("read_paths", []):
+    def action(path=path):
+        os.stat(path)
+    attempt("read " + path, action)
 save()
 if plan.get("sleep"):
     time.sleep(plan["sleep"])
@@ -193,9 +197,11 @@ FAKE_NIX = r'''
 import json, os, sys
 with open(os.environ["B1_FAKE_TRAP"], "a") as f:
     f.write("nix " + " ".join(sys.argv[1:]) + "\n")
+plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
+if sys.argv[1:5] == ["store", "verify", "--no-contents", "--no-trust"] and len(sys.argv) > 5:
+    sys.exit(int(plan.get("closure_nix_status", 0)))
 if sys.argv[1:3] != ["store", "verify"] or len(sys.argv) != 4:
     sys.exit(64)
-plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
 leak = plan.get("store_leak")
 if leak:
     os.makedirs(os.path.dirname(leak), exist_ok=True)
@@ -455,7 +461,7 @@ class Fixture(unittest.TestCase):
                        **quiet)
 
         self.store = os.path.join(w, "store")
-        self.sdk = os.path.join(self.store, "fake-rexglue-sdk-0.11.0")
+        self.sdk = os.path.join(self.store, "0" * 31 + "1-rexglue-sdk-0.11.0")
         os.makedirs(os.path.join(self.sdk, "bin"))
         write_script(os.path.join(self.sdk, "bin", "rexglue"), FAKE_REXGLUE)
         self.known = os.path.join(self.store, b1.KNOWN_STORE_ENTRY)
@@ -500,6 +506,8 @@ class Fixture(unittest.TestCase):
         self.reference = os.path.join(self.records, "reference.json")
         self.write_reference(reference_for(self.tree))
         self.write_j0_report()
+        self.closure = os.path.join(self.store, "0" * 31 + "2-closure-info")
+        self.write_closure()
         self.write_proof()
         self.extra_env = {}
 
@@ -511,6 +519,47 @@ class Fixture(unittest.TestCase):
                 except OSError:
                     pass
         shutil.rmtree(self.w, ignore_errors=True)
+
+    def python_closure(self):
+        """The closure of the Python running the tests: from B1_PYTHON_CLOSURE (a closureInfo
+        folder, set by the Nix check), else Python's own store path alone, enough for the
+        fake sandbox."""
+        folder = os.environ.get("B1_PYTHON_CLOSURE")
+        if folder:
+            with open(os.path.join(folder, "registration")) as f:
+                return b1.parse_registration(f.read())
+        python = b1.store_path_of(os.path.realpath(sys.executable), [b1.SANDBOX_STORE])
+        self.assertIsNotNone(python, "run the tests with a Python of /nix/store")
+        return {python: set()}
+
+    def write_closure(self, graph=None, listed=None, mode=0o444):
+        """The store closure as closureInfo writes it: store-paths and registration, in a
+        read-only folder of the store. `graph` maps each path to its references; `listed`
+        replaces the list of paths."""
+        if graph is None:
+            graph = self.python_closure()
+            python = b1.store_path_of(os.path.realpath(sys.executable), [b1.SANDBOX_STORE])
+            graph[self.sdk] = {python}
+            # In the Nix check, the tool under test lies in the store (the source of the
+            # repository): it must then be in the closure, as in the packaged command.
+            tool = b1.store_path_of(os.path.realpath(TOOL), [b1.SANDBOX_STORE])
+            if tool:
+                graph.setdefault(tool, set())
+        if os.path.isdir(self.closure):
+            os.chmod(self.closure, 0o700)
+            shutil.rmtree(self.closure)
+        os.mkdir(self.closure)
+        lines = []
+        for path in sorted(graph):
+            refs = sorted(graph[path])
+            lines += [path, "sha256:" + "0" * 52, "1024", "", str(len(refs))] + refs
+        with open(os.path.join(self.closure, "registration"), "w") as f:
+            f.write("\n".join(lines) + "\n")
+        with open(os.path.join(self.closure, "store-paths"), "w") as f:
+            f.write("".join(p + "\n" for p in (sorted(graph) if listed is None else listed)))
+        for name in b1.CLOSURE_FILES:
+            os.chmod(os.path.join(self.closure, name), mode)
+        os.chmod(self.closure, 0o555)
 
     def default_mounts(self):
         return [mount(1, "/", parent=0), mount(2, "/nix/store"), mount(3, "/proc",
@@ -527,7 +576,7 @@ class Fixture(unittest.TestCase):
         os.makedirs(folder, exist_ok=True)
         ctx = types.SimpleNamespace(args=types.SimpleNamespace(
             core_pattern_file=self.core_pattern, suid_dumpable_file=self.suid,
-            bwrap=self.bwrap))
+            bwrap=self.bwrap, store_closure=self.closure))
         identity = b1.proof_identity(ctx)
         identity.update(changes)
         state = {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
@@ -592,6 +641,7 @@ class Fixture(unittest.TestCase):
                 "--findmnt", os.path.join(self.bin, "findmnt"),
                 "--coredumpctl", os.path.join(self.bin, "coredumpctl"),
                 "--bwrap", self.bwrap, "--reference", self.reference,
+                *(["--store-closure", self.closure] if self.closure else []),
                 "--core-pattern-file", self.core_pattern,
                 "--suid-dumpable-file", self.suid, *extra, command]
 
@@ -807,6 +857,7 @@ class PrepareTest(Fixture):
                  ("tool file", {"tool_sha256": "1" * 64}, None),
                  ("bwrap", {"bwrap_sha256": "2" * 64}, None),
                  ("python", {"python": "/nix/store/other-python/bin/python3"}, None),
+                 ("store closure", {"store_closure_sha256": "3" * 64}, None),
                  ("findings", {}, {"controls_clean": False}),
                  ("interrupted", {}, {"controls_clean": False}),
                  ("killed", {}, {"phase": "postflight"}),
@@ -1302,8 +1353,11 @@ class RunTest(Fixture):
             while words and words[0] == "-C":
                 words = words[2:]
             self.assertIn(words[0], ("status", "rev-parse"), call)
+        with open(os.path.join(self.closure, "store-paths")) as f:
+            paths = f.read().split()
         self.assertEqual([c for c in calls if c.startswith("nix ")],
-                         [f"nix store verify {self.sdk}"])
+                         ["nix store verify --no-contents --no-trust " + " ".join(paths),
+                          f"nix store verify {self.sdk}"])
 
     def test_summary_holds_no_free_text(self):
         """R04: sentinels in every path, in a guard finding, in the summary block of rexglue
@@ -1369,6 +1423,118 @@ class EvidenceTest(Fixture):
         for suffix in ("-resume", "-resume-2"):
             self.assertTrue(os.path.exists(os.path.join(self.run_dir,
                                                         f"report{suffix}.json")))
+
+
+class StoreClosureTest(Fixture):
+    """D-019, the owner's arbitration on PR #33: the sandbox shows only the store closure of
+    the packaged command, computed by Nix at build time. Absent, invalid or incomplete:
+    nothing starts, and the store is never bound whole instead."""
+
+    def assert_refused(self, code, command="run"):
+        self.assertEqual(self.tool(command), 1)
+        self.assertIn(f"finding {code}", self.output)
+        self.assertIsNone(self.recorded())
+        self.assertEqual(self.run_dirs(), [])
+        if os.path.exists(self.bwrap_log):
+            with open(self.bwrap_log) as f:
+                starts = [line for line in f if "--" in json.loads(line)]
+            self.assertEqual(starts, [], "a sandbox was started")
+
+    def test_a_valid_closure_is_checked_and_reported(self):
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+        with open(os.path.join(self.closure, "store-paths")) as f:
+            count = len(f.read().split())
+        self.assertIn(f"store-closure        ok                closure_paths {count}, "
+                      "closure_closed True, closure_roots_covered True, "
+                      "closure_registered True", self.output)
+
+    def test_absent_closure_refuses_everything(self):
+        self.closure = None
+        self.assert_refused("store-closure-absent")
+        self.assert_refused("store-closure-absent", "rehearse")
+        self.closure = os.path.join(self.store, "0" * 31 + "9-closure-info")
+        self.assert_refused("store-closure-absent")
+
+    def full_graph(self):
+        graph = self.python_closure()
+        python = b1.store_path_of(os.path.realpath(sys.executable), [b1.SANDBOX_STORE])
+        graph[self.sdk] = {python}
+        tool = b1.store_path_of(os.path.realpath(TOOL), [b1.SANDBOX_STORE])
+        if tool:
+            graph.setdefault(tool, set())
+        return graph
+
+    def test_invalid_closure_is_refused_before_anything_starts(self):
+        graph = self.full_graph()
+        python = b1.store_path_of(os.path.realpath(sys.executable), [b1.SANDBOX_STORE])
+        gone = os.path.join(self.store, "0" * 31 + "5-gone")
+        listed = sorted(graph)
+
+        def malformed():
+            self.write_closure()
+            path = os.path.join(self.closure, "registration")
+            os.chmod(self.closure, 0o700)
+            os.chmod(path, 0o644)
+            with open(path, "w") as f:
+                f.write(python + "\nmd5:abc\n1\n\n0\n")
+            os.chmod(path, 0o444)
+            os.chmod(self.closure, 0o555)
+
+        def linked():
+            self.write_closure()
+            os.chmod(self.closure, 0o700)
+            path = os.path.join(self.closure, "store-paths")
+            os.rename(path, path + ".real")
+            os.symlink(path + ".real", path)
+            os.chmod(self.closure, 0o555)
+
+        def outside():
+            self.closure = os.path.join(self.records, "0" * 31 + "3-closure-info")
+            self.write_closure()
+
+        cases = (("not a store path", lambda: self.write_closure(
+                     listed=listed + ["/tmp/not-a-store-path"])),
+                 ("missing path", lambda: self.write_closure(dict(graph, **{gone: set()}))),
+                 ("other paths in the registration", lambda: self.write_closure(
+                     listed=listed + [self.known])),
+                 ("writable files", lambda: self.write_closure(mode=0o644)),
+                 ("malformed registration", malformed),
+                 ("a link", linked),
+                 ("outside the store", outside),
+                 ("not valid for nix", lambda: self.plan.update(closure_nix_status=1)))
+        keep = self.closure
+        for name, make in cases:
+            with self.subTest(name=name):
+                make()
+                self.assert_refused("store-closure-invalid")
+                self.plan.pop("closure_nix_status", None)
+                self.closure = keep
+                self.write_closure()
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+
+    def test_missing_dependency_is_refused_before_anything_starts(self):
+        """A dependency missing from the closure: a reference of a path, the SDK or
+        Python. Found from the registration, before bubblewrap or rexglue start."""
+        python = b1.store_path_of(os.path.realpath(sys.executable), [b1.SANDBOX_STORE])
+        missing = "/nix/store/" + "0" * 31 + "6-missing-library"
+        graph = self.full_graph()
+        graph[python] = graph[python] | {missing}
+        no_sdk = self.full_graph()
+        del no_sdk[self.sdk]
+        no_python = {path: set() for path in self.full_graph()
+                     if path != python and not b1.under_or_self(python, path)}
+        cases = (("a reference", graph), ("the SDK", no_sdk), ("Python", no_python))
+        tool = b1.store_path_of(os.path.realpath(TOOL), [b1.SANDBOX_STORE])
+        if tool:
+            no_tool = self.full_graph()
+            del no_tool[tool]
+            cases += (("the tool, in the store", no_tool),)
+        for name, case in cases:
+            with self.subTest(name=name):
+                self.write_closure(case)
+                self.assert_refused("store-closure-incomplete")
+                self.assert_refused("store-closure-incomplete", "rehearse")
+        self.write_closure()
 
 
 class InterruptTest(Fixture):
@@ -1492,11 +1658,16 @@ class RealSandboxTest(Fixture):
                          "set TMPDIR outside /tmp for this test")
         self.assertTrue(os.path.realpath(sys.executable).startswith(b1.SANDBOX_STORE + "/"),
                         "run this test with a Python of /nix/store")
+        # D-019: the sandbox shows only the store closure, so Python needs its own.
+        self.assertTrue(os.environ.get("B1_PYTHON_CLOSURE"),
+                        "set B1_PYTHON_CLOSURE to a closureInfo folder of this Python")
 
     def test_real_sandbox_confines_the_extraction(self):
-        """R02 with the real bubblewrap: the probe passes, and a fake rexglue that writes
-        outside its destinations, into the home folder, the private folder and the image, is
-        refused by the sandbox. Where the sandbox cannot start, the tool must refuse."""
+        """R02 and D-019 with the real bubblewrap: the probe passes, and a fake rexglue that
+        writes outside its destinations, into the home folder, the private folder and the
+        image, is refused by the sandbox; sockets of the machine and store entries outside
+        the closure do not exist for it. Where the sandbox cannot start, the tool must
+        refuse."""
         if self.real is None:
             self.fail("bubblewrap is required for this test (B1_REAL_BWRAP or PATH)")
         self.bwrap = self.real
@@ -1536,10 +1707,26 @@ class RealSandboxTest(Fixture):
             servers.append(server)
             self.addCleanup(server.close)
         self.plan["connect_sockets"] = sockets
+        # Store entries outside the closure (D-019): a synthetic one in the test store, the
+        # entry already found by CP-3, and bubblewrap's own store path, which runs outside.
+        foreign = os.path.join(self.store, "0" * 31 + "4-outside-entry")
+        os.mkdir(foreign)
+        with open(os.path.join(foreign, "synthetic.txt"), "w") as f:
+            f.write("synthetic store entry outside the closure\n")
+        hidden = [os.path.join(foreign, "synthetic.txt"), self.known]
+        bwrap_entry = b1.store_path_of(os.path.realpath(self.real), [b1.SANDBOX_STORE])
+        if bwrap_entry:
+            hidden.append(bwrap_entry)
+        inside = os.path.join(self.sdk, "bin", "rexglue")
+        self.plan["read_paths"] = hidden + [inside]
         self.assertEqual(self.tool("run"), 0, self.output)
         record = self.recorded()
         for path in sockets:
             self.assertEqual(record["attempts"]["socket " + path], "ENOENT")
+        for path in hidden:
+            self.assertEqual(record["attempts"]["read " + path], "ENOENT", path)
+        self.assertEqual(record["attempts"]["read " + inside], "written")  # i.e. it exists
+        self.assertTrue(os.path.exists(os.path.join(foreign, "synthetic.txt")))
         for target in targets:
             self.assertEqual(record["attempts"][target], "EROFS")
             self.assertFalse(os.path.exists(target))
@@ -1719,20 +1906,25 @@ class UnitTest(unittest.TestCase):
             self.assertEqual([code for code, _ in findings], ["folder-mount"])
 
     def test_sandbox_options(self):
-        """Review v3 R02: a positive list. An empty root, the store and the private folder
-        read-only, the destinations writable, then the root read-only."""
+        """Review v3 R02 and D-019: a positive list. An empty root, each path of the store
+        closure and the private folder read-only, never the store itself, the destinations
+        writable, then the root read-only. No closure, no sandbox."""
         with tempfile.TemporaryDirectory() as private:
-            ctx = mock.Mock(private=private, home=os.path.dirname(private), store=private)
+            closure = ["/nix/store/" + "a" * 32 + "-python3", "/nix/store/" + "b" * 32 + "-sdk"]
+            ctx = mock.Mock(private=private, home=os.path.dirname(private), store=private,
+                            closure=closure)
             ctx.args.bwrap = "bwrap"
             argv = b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
             self.assertEqual(argv[:8], ["bwrap", "--unshare-all", "--unshare-user",
                                         "--disable-userns", "--die-with-parent",
                                         "--new-session", "--tmpfs", "/"])
             self.assertNotIn("--share-net", argv)
-            self.assertNotIn("/", [argv[i + 1] for i, a in enumerate(argv)
-                                   if a in ("--bind", "--ro-bind")])
-            self.assertIn(["--ro-bind", "/nix/store", "/nix/store"],
-                          [argv[i:i + 3] for i in range(len(argv))])
+            ro = [argv[i + 1] for i, a in enumerate(argv) if a == "--ro-bind"]
+            self.assertEqual(ro[:2], closure)
+            for path in ("/", "/nix", "/nix/store", private + "/store"):
+                self.assertNotIn(path, [argv[i + 1] for i, a in enumerate(argv)
+                                        if a in ("--bind", "--ro-bind")])
+            self.assertIn(private, ro)
             binds = [argv[i + 1] for i, a in enumerate(argv) if a == "--bind"]
             self.assertEqual(binds, [private + "/logs/r"] +
                              [os.path.join(private, n) for n in b1.SANDBOX_WRITABLE])
@@ -1740,14 +1932,22 @@ class UnitTest(unittest.TestCase):
             self.assertGreater(argv.index("--remount-ro"),
                                max(i for i, a in enumerate(argv) if a == "--bind"))
             self.assertEqual(argv[-3:], ["9", "--", "cmd"])
+            for empty in (None, []):
+                ctx.closure = empty
+                with self.assertRaises(RuntimeError):
+                    b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
 
     def test_sandbox_blockers(self):
-        """Python and the SDK must be in the store, the only programs of the positive list."""
-        ctx = mock.Mock(store="/nix/store", sdk="/nix/store/x-rexglue-sdk-0.11.0")
-        in_store = os.path.realpath(sys.executable).startswith("/nix/store/")
-        self.assertEqual(b1.sandbox_blockers(ctx) == [], in_store)
-        ctx.sdk = "/opt/rexglue-sdk-0.11.0"
-        self.assertIn("sandbox-unavailable", [code for code, _ in b1.sandbox_blockers(ctx)])
+        """D-019: Python and the SDK must be in the validated store closure; without one,
+        nothing can be sandboxed."""
+        python = b1.store_path_of(os.path.realpath(sys.executable), [b1.SANDBOX_STORE])
+        sdk = "/nix/store/" + "c" * 32 + "-rexglue-sdk-0.11.0"
+        ctx = mock.Mock(store="/nix/store", sdk=sdk, closure=None)
+        self.assertEqual([c for c, _ in b1.sandbox_blockers(ctx)], ["store-closure-absent"])
+        ctx.closure = [python, sdk]
+        self.assertEqual(b1.sandbox_blockers(ctx), [])
+        ctx.closure = [python]
+        self.assertEqual([c for c, _ in b1.sandbox_blockers(ctx)], ["sandbox-unavailable"])
 
     def test_core_limits(self):
         self.assertEqual(b1.EXTRACTION_CORE_LIMIT, (1, 1))

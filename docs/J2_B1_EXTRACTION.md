@@ -1,13 +1,15 @@
 # Étape B1 — extraction contrôlée de l'arborescence du disque
 
 > Étape B1 de `docs/J2_PLAN.md` §4.1, [ticket #32](https://github.com/mengpo1/fifa2010wc/issues/32).
-> Version 4 :
+> Version 5 :
 > - corrections de la revue de l'orchestrateur sur la PR #33 (constats B1-R01 à B1-R07) ;
 > - arbitrages du porteur, D-018 : option B pour les plantages, rapport J0 local
 >   obligatoire ;
 > - revue de la version 3 : identification des plantages de la preuve (R03-A), preuve
 >   liée au protocole et aux composants (R03-B), contrôles après coup isolés (R05-A),
->   confinement par liste positive, **à arbitrer** (R02, §3.4).
+>   confinement par liste positive (R02) ;
+> - arbitrage du porteur, D-019 : du magasin Nix, le bac à sable ne montre que la
+>   fermeture de la commande empaquetée (§3.4).
 > PB-0 est franchi depuis le 2026-11-24 (D-017). **Ce document et son outil ne valent ni
 > exécution de B1, ni PB-1.**
 > - Ils ont été préparés sans aucune donnée du jeu : ni ISO, ni XEX, ni journal du jeu.
@@ -166,7 +168,9 @@ processus d'extraction est confiné, sans privilèges et sans modifier le systè
 
 Depuis la version 4, le bac à sable part d'une **racine vide** et n'y place que la liste
 positive des chemins dont l'extraction a besoin (R02). Rien d'autre de la machine n'y est
-visible : ni le dossier personnel, ni `/etc`, `/run`, `/var` ou `/home`.
+visible : ni le dossier personnel, ni `/etc`, `/run`, `/var` ou `/home`. Depuis la
+version 5 (D-019), du magasin Nix, il ne montre que **la fermeture de la commande
+empaquetée** (§3.4).
 
 ### 3.1 Le bac à sable
 
@@ -180,26 +184,29 @@ défaut. Sinon, `run` refuse (`sandbox-unavailable`).
 | `--disable-userns` | Aucun nouvel espace de noms utilisateur à l'intérieur |
 | `--die-with-parent`, `--new-session` | Le bac à sable meurt avec l'outil ; pas d'accès au terminal |
 | `--tmpfs /` | **Une racine vide**, en mémoire |
-| `--ro-bind /nix/store` | Le magasin, en lecture seule : Python, le SDK et leurs bibliothèques |
+| `--ro-bind` de chaque chemin de la fermeture | Du magasin, seulement la fermeture de Python, du SDK et de l'outil, en lecture seule (§3.4). **Jamais le magasin entier** |
 | `--dev /dev`, `--proc /proc`, `--dir /tmp` | Un `/dev` minimal (`null`, `zero`, `random`, `urandom`, `tty`…), le `/proc` du bac à sable, un `/tmp` vide |
 | `--ro-bind` de l'outil | Le fichier de l'outil seulement, s'il n'est pas dans le magasin |
 | `--ro-bind` du dossier privé | Le dossier privé en lecture seule, dont l'image |
 | `--bind` | **Seuls inscriptibles** : le dossier d'exécution, `game/`, `app/` et `tmp/` |
 | `--remount-ro /` | La racine elle-même redevient en lecture seule : aucun fichier ne peut y être créé |
 
-Les programmes lancés dans le bac à sable doivent donc être **dans le magasin** : Python et
-le SDK. La commande empaquetée (§11) remplit cette condition. Sinon : `sandbox-unavailable`.
+Les programmes lancés dans le bac à sable doivent donc être **dans la fermeture** : Python
+et le SDK. La commande empaquetée (§11) remplit cette condition. Sinon :
+`sandbox-unavailable`. Sans fermeture validée, il n'y a pas de bac à sable du tout.
 
 ### 3.2 La sonde de confinement
 
 Avant le repère, un programme synthétique est lancé dans **le même bac à sable**, avec les
 mêmes options et la même limite de *core dump*. Il ne contient aucune donnée du jeu. Ses
-24 contrôles :
+26 contrôles :
 
 | Contrôles | Attendu |
 |---|---|
 | `write-denied-home`, `-private-root`, `-iso`, `-store`, `-repo` | Création d'un fichier refusée |
 | `write-allowed-run-folder`, `writable-game`, `writable-app`, `writable-tmp` | Écriture permise |
+| `store-closure-only` | Chaque dossier du magasin ne montre que les chemins de la fermeture (D-019) |
+| `store-outside-hidden` | Des entrées du magasin hors de la fermeture n'existent pas : celle de bubblewrap, et les premières de chaque dossier du magasin |
 | `image-read-only` | L'image est lisible et non inscriptible |
 | `tmp-private-empty`, `run-hidden`, `nix-daemon-socket-hidden` | Dossiers cachés vides, socket du démon Nix absente |
 | `home-hidden` | Le dossier personnel ne montre que le chemin du dossier privé |
@@ -215,21 +222,26 @@ mêmes options et la même limite de *core dump*. Il ne contient aucune donnée 
 Un seul contrôle en échec est un constat `sandbox-probe-failed`, et rien n'est extrait.
 `rehearse` fait la même sonde : c'est l'essai du confinement sur la machine du porteur.
 
-[V] Dans le contrôle Nix `b1-extract-selftest`, la sonde passe ses 24 contrôles, et le vrai
-`rexglue vfs dump` extrait l'image synthétique dans ce bac à sable. Le test
+[V] Dans le contrôle Nix `b1-extract-selftest`, la sonde passe ses 26 contrôles, et le vrai
+`rexglue vfs dump` extrait l'image synthétique dans ce bac à sable, avec la seule fermeture
+de la commande empaquetée. Le test
 `test_real_sandbox_confines_the_extraction` lance un faux `rexglue` qui :
 - tente d'écrire dans le dossier personnel, le dossier privé, `iso/`, le dépôt et l'image :
   **chaque écriture est refusée par `EROFS`**, et rien n'apparaît sur la machine ;
 - tente de joindre deux sockets Unix que le test écoute, l'une dans le dossier personnel,
   l'autre hors de tout chemin de la liste : **`ENOENT` pour les deux**, elles n'existent
-  pas dans le bac à sable.
+  pas dans le bac à sable ;
+- tente de lire une entrée synthétique du magasin hors de la fermeture, l'entrée déjà
+  relevée par CP-3 et le chemin de bubblewrap dans le magasin : **`ENOENT` pour les
+  trois**. Un fichier du SDK, qui est dans la fermeture, est lisible.
 
 ### 3.3 Ce que le confinement ne couvre pas
 
 Aucun de ces points n'est présenté comme couvert :
-- **lecture** : le processus lit le magasin, le dossier privé et l'outil. Il ne peut écrire
-  qu'au dossier d'exécution, dans `game/`, `app/` et `tmp/`, et il n'a pas de réseau ;
-- **sockets et tubes nommés** : seuls ceux du magasin et du dossier privé seraient
+- **lecture** : le processus lit la fermeture du magasin (§3.4), le dossier privé et
+  l'outil. Il ne peut écrire qu'au dossier d'exécution, dans `game/`, `app/` et `tmp/`, et
+  il n'a pas de réseau ;
+- **sockets et tubes nommés** : seuls ceux de la fermeture et du dossier privé seraient
   joignables. Le dossier privé n'en doit contenir aucun : `prepare` le vérifie (constat
   `private-ipc`). Un chemin valide du magasin n'en contient pas : le format NAR n'admet
   que des fichiers, des liens et des dossiers. Seule une construction en cours, sous un
@@ -243,28 +255,62 @@ Aucun de ces points n'est présenté comme couvert :
   `nix`) ne sont pas confinés. Ils ne lisent aucune donnée du jeu ;
 - **un plantage** : voir le §6.
 
-### 3.4 Portée de la liste positive, à arbitrer (R02)
+### 3.4 Le magasin : la seule fermeture de la commande (D-019)
 
-La revue demande une liste positive, ou une justification de portée et de risque, avant
-arbitrage. La version 4 applique la liste du §3.1. Un point reste au choix du porteur :
-**le magasin entier est lisible**, et non la seule clôture de Python et du SDK.
+**Décision du porteur (D-019)** : le processus confiné n'accède qu'aux dépendances
+nécessaires, en lecture seule, et non à tout `/nix/store`. Il n'y a **aucun repli** sur le
+magasin entier.
 
-- **Pourquoi le magasin entier** :
-  - le SDK, Python et leurs bibliothèques y sont, avec leurs chemins absolus ;
-  - le magasin est déjà lisible par tout processus de la machine, et ne doit contenir
-    aucune donnée du jeu (CP-3) ;
-  - le bac à sable ne peut rien y écrire, et n'a pas de réseau pour en envoyer quoi que ce
-    soit ;
-  - cela ne demande aucune requête au démon Nix depuis l'outil.
-- **Risque qui reste** : le processus d'extraction peut lire tout le magasin, dont le
-  fichier déjà relevé par CP-3, et en recopier une partie dans `game/`, `app/`, `tmp/` ou
-  le dossier d'exécution. Ces dossiers sont privés, et le comptage de PB-1 verrait un
-  fichier en trop dans `game/`.
-- **Option plus étroite, non implémentée** : ne lier que la clôture de Python et du SDK
-  (`nix-store --query --requisites`), chemin par chemin. Elle supprime ce risque, au prix
-  d'une requête au démon Nix et de quelques dizaines de liaisons. Elle n'est faite que sur
-  décision du porteur.
-- **Aucune modification globale de NixOS** dans les deux cas.
+**Ce qui est lié.** La fermeture est calculée par Nix **à la construction** de la commande
+empaquetée (`closureInfo` de nixpkgs, `flake.nix`) :
+- ses racines sont ce qui tourne dans le bac à sable : **Python**, **le SDK** et **le fichier
+  de l'outil** ;
+- elle contient toutes leurs références, de proche en proche, telles que Nix les relève.
+  Aucune liste n'est tenue à la main ;
+- `store-paths` liste les chemins ; `registration` donne les références de chacun ;
+- la commande empaquetée la passe à l'outil (`--store-closure`).
+
+**Contrôles**, à l'étape `store-closure` de `prepare`, donc avant tout lancement :
+- **provenance** :
+  - un dossier du magasin, au nom d'un chemin du magasin, et non un lien ;
+  - ce dossier et ses deux fichiers sont en lecture seule pour tous et appartiennent à
+    root ;
+  - les fichiers sont ouverts sans suivre de lien ;
+- **validité** :
+  - chaque ligne est un chemin du magasin qui existe ;
+  - `registration` nomme exactement les mêmes chemins ;
+  - `nix store verify --no-contents --no-trust` les accepte : la base de Nix les connaît ;
+- **complétude** : les références de chaque chemin, Python, le SDK et l'outil sont dans la
+  fermeture.
+
+**Constats** : `store-closure-absent`, `store-closure-invalid`, `store-closure-incomplete`.
+Chacun bloque `prepare`, `rehearse` et `run` : ni bubblewrap ni `rexglue` ne démarrent.
+
+**Dans le bac à sable** : chaque chemin de la fermeture est lié en lecture seule, et rien
+d'autre du magasin. La sonde le vérifie (`store-closure-only`, `store-outside-hidden`,
+§3.2). La preuve de l'option B est liée à la fermeture (§6.3).
+
+**Portée exacte** [V], pour la commande de ce dépôt :
+- **273 chemins**, environ 2,8 Go ;
+- le SDK référence sa chaîne de construction et des bibliothèques qu'il ne charge pas pour
+  `vfs dump` : clang, LLVM, GCC, CMake, PipeWire, FFmpeg, GTK, entre autres. Elles sont
+  lisibles dans le bac à sable ;
+- le magasin de la machine compte bien plus d'entrées ; aucune autre n'est visible, dont
+  celle déjà relevée par CP-3.
+
+**Limites qui restent** :
+- **la fermeture est celle des références Nix**, pas celle des seuls fichiers que
+  `rexglue` ouvre. Plus étroit demanderait une liste tenue à la main, ce que l'arbitrage
+  exclut ;
+- **le contenu n'est pas recalculé** par l'outil (`--no-contents`) : la validité est celle
+  de la base de Nix. Le contenu du SDK, lui, est vérifié par `private_guard`
+  (`nix store verify`, CP-4) ;
+- **la provenance repose sur le magasin local** : un fichier de root, en lecture seule,
+  nommé par la commande empaquetée. L'outil ne vérifie aucune signature de la fermeture ;
+- le processus d'extraction peut lire toute la fermeture, et en recopier une partie dans
+  ses destinations privées. La fermeture ne contient que du code public : les dérivations
+  n'ont aucune donnée du jeu (D-007) ;
+- **aucune modification globale de NixOS**.
 
 ## 4. Montages et dossier privé
 
@@ -403,9 +449,11 @@ La preuve n'est acquise que si :
 répétition, avec :
 - **ce démarrage** (`boot_id`), **ce noyau** (version et compilation), **ce
   `core_pattern`** (son SHA-256) et **ce `suid_dumpable`** ;
-- **la version du protocole** de la preuve (2) et **la version de l'outil** (4) ;
+- **la version du protocole** de la preuve (3) et **la version de l'outil** (5) ;
 - **le SHA-256 du fichier de l'outil** ;
-- **le chemin et le SHA-256 de bubblewrap**, et **le chemin de Python**.
+- **le chemin et le SHA-256 de bubblewrap**, et **le chemin de Python** ;
+- **la fermeture du magasin** que le bac à sable montre (le SHA-256 de `store-paths`,
+  D-019).
 
 `run` refuse (`core-proof-missing`) une preuve :
 - dont un seul de ces éléments diffère ;
@@ -415,8 +463,8 @@ répétition, avec :
 - d'une autre version de l'outil.
 
 `run` la revérifie juste avant l'extraction (`core-changed`). Un redémarrage, un autre
-noyau, un autre réglage, une mise à jour de l'outil ou de bubblewrap demandent une nouvelle
-répétition.
+noyau, un autre réglage, une mise à jour de l'outil, de bubblewrap ou de la fermeture
+demandent une nouvelle répétition.
 
 **Ce qui reste** :
 - le plantage témoin laisse une entrée dans le journal du système, avec les métadonnées
@@ -546,6 +594,8 @@ propre du dépôt, hors du dossier privé.
    B="$(nix build --no-link --print-out-paths .#b1-extract)/bin/fifa2010wc-b1-extract"
    ```
 
+   Cette commande porte la fermeture du magasin (§3.4) : ne pas lancer l'outil autrement.
+
 3. **Diagnostic**, qui n'écrit rien :
 
    ```bash
@@ -577,7 +627,7 @@ propre du dépôt, hors du dossier privé.
 
 ## 12. Essais sans données du jeu, et ce qu'ils ne couvrent pas
 
-**Tests unitaires** (`tools/test_b1_extract.py`, 65 tests), lancés par le contrôle Nix
+**Tests unitaires** (`tools/test_b1_extract.py`, 69 tests), lancés par le contrôle Nix
 `b1-extract-selftest` sous l'utilisateur sans privilèges du bac à sable, **sans aucun saut**.
 - **Simulés** : `rexglue`, `findmnt`, `coredumpctl`, `nix` et, pour l'orchestration,
   `bwrap`. Le faux `bwrap` vérifie les options du bac à sable et répond à la sonde. Pour
@@ -591,9 +641,10 @@ propre du dépôt, hors du dossier privé.
 | R02 | Vrai bac à sable : sonde complète, écritures hors périmètre refusées par `EROFS`, sockets du dossier personnel et d'ailleurs injoignables ; liste positive des options ; socket ou tube nommé dans le dossier privé refusé ; faux bac à sable : bubblewrap absent, trop ancien, qui ne démarre pas, contrôle en échec ; jamais d'extraction ni de lecture de l'image |
 | R03, D-018 | Réglages illisibles ; socket et fichier refusés ; preuve acquise puis acceptée par `run` ; témoin sans entrée, limite `1` ignorée, `coredumpctl` en échec : pas de preuve ; *core dump* consigné ; limite `(1, 1)` reçue par l'extraction |
 | R03-A | Aucun pid, deux pids, entrée étrangère seule : pas de preuve ; entrée étrangère à côté de la vraie : jamais prise pour elle, et constat de la répétition ; entrée du témoin en retard : trouvée ; entrée en retard à la limite `1` : vue, pas de preuve ; entrée à la limite `1` après la fenêtre : constat du contrôle d'après, preuve inutilisable |
-| R03-B | Pas de preuve, ou preuve d'un autre démarrage, noyau, réglage, `suid_dumpable`, protocole, version ou fichier de l'outil, bubblewrap ou Python ; preuve de plus de 24 h ; répétition avec constat, reprise, aux preuves incomplètes ou d'un ancien outil ; réglage changé pendant la sonde ou après : `run` refuse et `rexglue` ne démarre pas |
+| R03-B | Pas de preuve, ou preuve d'un autre démarrage, noyau, réglage, `suid_dumpable`, protocole, version ou fichier de l'outil, bubblewrap, Python ou fermeture du magasin ; preuve de plus de 24 h ; répétition avec constat, reprise, aux preuves incomplètes ou d'un ancien outil ; réglage changé pendant la sonde ou après : `run` refuse et `rexglue` ne démarre pas |
 | R04 | Sentinelles dans les chemins, un constat de la garde, le bloc de `rexglue` et les montages ; validateurs ; codes inconnus |
 | R05 | Repère absent après un `OK` ; repère présent avec un constat ; `SIGTERM` puis deux signaux pendant les contrôles ; `SIGKILL` de l'outil, état inachevé, refus, `still-running`, reprise sans relance ni suppression |
+| D-019 | Fermeture valide et rapportée ; absente : `prepare`, `rehearse` et `run` refusent ; chemin hors du magasin, chemin manquant, `registration` différente, fichiers inscriptibles, `registration` malformée, lien, dossier hors du magasin, refus de `nix` : `store-closure-invalid` ; référence manquante, SDK ou Python absents : `store-closure-incomplete`. Chaque fois, ni bubblewrap ni `rexglue` ne démarrent. Options sans le magasin entier, et pas de bac à sable sans fermeture. Vrai bac à sable : sonde à 26, entrée synthétique hors fermeture, entrée de CP-3 et chemin de bubblewrap absents |
 | R05-A | Erreur d'écriture dans CP-3 après, image illisible après : les contrôles suivants s'exécutent, `evidence-incomplete`, passage inachevé pour toute commande ; reprise qui échoue encore, puis qui termine (`complete`), chacune dans ses propres fichiers |
 | R06, D-018 | Rapport absent, illisible, d'un dossier, d'autres comptes ; empreinte de l'image différente : `rexglue` jamais lancé |
 | R07 | Liens à la place de `game`, `logs`, `xdg/config` et `app` ; parent modifiable par d'autres ; montage dans le dossier privé ; autre appareil |
@@ -602,9 +653,12 @@ propre du dépôt, hors du dossier privé.
 et le **vrai** `rexglue vfs dump`, sur une image XDVDFS synthétique et un rapport J0
 synthétique.
 - La preuve de l'option B y est écrite par les fonctions de l'outil, sur un réglage
-  synthétique en mode tube, liée au bubblewrap et au Python de la commande empaquetée :
-  seul `rehearse`, chez le porteur, fait la vraie.
-- **Quand le bac à sable peut démarrer** : sonde à 24 sur 24 ; `Nodes` 9 pour 5 fichiers
+  synthétique en mode tube, liée au bubblewrap, au Python et à la fermeture de la commande
+  empaquetée : seul `rehearse`, chez le porteur, fait la vraie.
+- La fermeture de la commande empaquetée y est contrôlée (`closure_closed True,
+  closure_roots_covered True, closure_registered True`), et la vraie extraction tourne avec
+  elle seule.
+- **Quand le bac à sable peut démarrer** : sonde à 26 sur 26 ; `Nodes` 9 pour 5 fichiers
   et 3 dossiers ; écritures seulement dans `game/` et le dossier d'exécution ; second
   passage refusé ; échec de `rexglue` sur un fichier qui n'est pas un conteneur, avec
   `postflight`.
@@ -623,7 +677,9 @@ synthétique.
   les *core dumps* vont dans un fichier : `SIGSEGV` aux limites `0` et `1`, aucun fichier
   *core*. Seul `rehearse` fait la preuve avec le vrai programme du tube, chez le porteur ;
 - **`nix store verify` et `coredumpctl` réels** : le bac à sable de construction n'a ni
-  démon Nix ni journal ;
+  démon Nix ni journal. Un faux `nix` y vérifie que chaque chemin passé est dans la
+  fermeture. [V] Dans ce conteneur, le vrai `nix store verify --no-contents --no-trust`
+  accepte les 273 chemins de la fermeture, et refuse un chemin inconnu ;
 - **les 31 montages et `/run`** de la machine du porteur : seul `rehearse` les essaie ;
 - **le comportement de `rexglue` sur l'image réelle**.
 

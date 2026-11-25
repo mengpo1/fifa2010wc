@@ -27,6 +27,7 @@
 | D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi à cette date, franchi ensuite (D-017) |
 | D-017 | Entrée en phase B de J2 : PB-0 franchi, B1 seulement | **Acceptée** (2026-11-24) ; PB-1 non franchi |
 | D-018 | Arbitrages de B1 : plantages de l'extraction (option B) et rapport J0 local obligatoire | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
+| D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
 
 ---
 
@@ -505,3 +506,37 @@
     réelle** ;
   - **PB-1 n'est pas franchi**, et B2 reste interdit ;
   - D-017 reste en vigueur : B1 seulement, sur la machine du porteur.
+
+## D-019 — Arbitrage de B1 : accès du bac à sable au magasin Nix
+
+- **Statut** : **Acceptée** (2026-11-25). Source : la décision du porteur du projet,
+  consignée dans la PR #33,
+  [commentaire 7172181035](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7172181035).
+  Elle répond à la question posée après la revue de la version 3
+  ([7164470853](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7164470853), R02 ;
+  `docs/J2_B1_EXTRACTION.md` §3.4).
+- **Décision : option B.** Le processus confiné n'accède qu'aux seules dépendances
+  nécessaires, en lecture seule, et non à tout `/nix/store` :
+  - la **fermeture transitive des dépendances Nix** de la commande empaquetée et du SDK
+    nécessaires à l'extraction et aux sondes, **calculée lors de la construction**, sans
+    liste de bibliothèques maintenue à la main ;
+  - **provenance et validité des chemins vérifiées** ; le démarrage est refusé si la liste
+    est absente, invalide ou incomplète ;
+  - **aucun montage global du magasin en guise de repli** ;
+  - aucune donnée propriétaire dans les dérivations ou les artefacts Nix.
+- **Mise en œuvre** (`docs/J2_B1_EXTRACTION.md` §3.4) :
+  - `closureInfo` de nixpkgs, sur Python, le SDK et le fichier de l'outil, passée par la
+    commande empaquetée (`--store-closure`) ;
+  - chaque chemin de la fermeture est lié en lecture seule, et rien d'autre du magasin ;
+  - la preuve de l'option B (D-018) est liée à cette fermeture.
+- **Critères demandés** : vraie extraction synthétique et sonde dans le confinement
+  restreint ; test négatif d'accès à une entrée synthétique du magasin extérieure à la
+  fermeture ; test de dépendance manquante et de refus avant extraction ; maintien des
+  contrôles existants.
+- **Ce qui ne change pas** :
+  - D-018 reste en vigueur, dont le rapport J0 local obligatoire ;
+  - cet arbitrage ne vaut **ni autorisation de fusion, ni autorisation d'extraction
+    réelle** ;
+  - **PB-1 n'est pas franchi**, et B2 reste interdit ;
+  - aucun `sudo`, aucune modification globale de NixOS ;
+  - une nouvelle revue indépendante est demandée avant toute approbation.

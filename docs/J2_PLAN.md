@@ -348,8 +348,10 @@ décision explicite) :
   `J2_B1_EXTRACTION.md` §6.3, dans le même démarrage.
 - **Revue de la version 3 (2026-11-25)** : plantages de la preuve identifiés par leur pid,
   preuve liée au protocole, à l'outil et à bubblewrap, contrôles après coup isolés, et
-  bac à sable par liste positive. La portée du magasin reste à arbitrer
-  (`J2_B1_EXTRACTION.md` §3.4).
+  bac à sable par liste positive.
+- **Arbitrage du porteur (D-019)** : du magasin Nix, le bac à sable ne montre que la
+  fermeture de la commande empaquetée, calculée à la construction ; sans fermeture valide
+  et complète, rien ne démarre (`J2_B1_EXTRACTION.md` §3.4).
 - **Critère de sortie** (PB-1) :
   - 49 fichiers et 8 dossiers, comme dans le rapport J0 ;
   - les SHA-256 de `default.xex` et `fifadllzf.xex` extraits sont ceux du rapport J0 ;
