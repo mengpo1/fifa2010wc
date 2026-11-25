@@ -10,9 +10,11 @@ decides from the summary.
 
 Commands:
   prepare   No extraction: writes nothing and does not read the disc image.
-  rehearse  The controls of `run`, the confinement probe and, when core dumps go to a
-            handler, a synthetic crash: no extraction, and the image is not read.
-  run       B1. Every gate must pass first, and the extraction runs in the sandbox.
+  rehearse  The controls of `run`, the confinement probe and, with a core_pattern pipe,
+            the local proof of option B (D-018): a control crash at RLIMIT_CORE 0 reaches
+            the handler, the same crash at 1 does not. No extraction; the image is not read.
+  run       B1. Every gate must pass first, the proof of option B included, and the
+            extraction runs in the sandbox with RLIMIT_CORE 1.
   verify    The PB-1 figures of the extracted tree, read only. Writes nothing.
   resume    The controls after the extraction, for a run whose supervisor stopped before
             the end (power loss, SIGKILL). It never starts the extraction again.
@@ -50,7 +52,7 @@ import subprocess
 import sys
 import time
 
-TOOL_VERSION = 2
+TOOL_VERSION = 3
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GUARD = os.path.join(HERE, "private_guard.py")
 ISO_NAME = "fifa2010wc.iso"
@@ -83,7 +85,18 @@ SANDBOX_WRITABLE = ("game", "app", "tmp")
 # sockets of system services (D-Bus, journal, the Nix daemon) and shared temporary files.
 SANDBOX_HIDDEN = ("/tmp", "/run", "/var/tmp", "/nix/var/nix/daemon-socket")
 SANDBOX_TMPFS_BYTES = 16 << 20
+HOME_TMPFS_BYTES = 1 << 20
 BWRAP_MIN_VERSION = (0, 8, 0)
+# Core dump limits (D-018, option B of docs/J2_B1_EXTRACTION.md section 6): the sandboxed
+# extraction and the confinement probe run with exactly 1, which makes the kernel drop a
+# crash before it starts the program of a core_pattern pipe; the supervisor keeps a soft
+# limit of 0, which private_guard checks, and a hard limit of 1 so that it can give 1 to the
+# sandbox; the control crash of the proof runs with 0.
+EXTRACTION_CORE_LIMIT = (1, 1)
+SUPERVISOR_CORE_LIMIT = (0, 1)
+CONTROL_CORE_LIMIT = (0, 0)
+PROOF_MIN_WAIT = 5
+BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
 # The store entry already found by CP-3 before PB-0: never opened, never deleted.
 KNOWN_STORE_ENTRY = "nl2dwawyxdkljdkiay1nd4fiwp98qckw-claude"
 DUMP_TIMEOUT = 7200
@@ -135,13 +148,17 @@ FINDING_CODES = {
     "mount-changed": "a mount in scope appeared, disappeared or changed",
     "mount-events": "the mount table changed during the step",
     "core-settings-unreadable": "the core dump settings could not be read",
-    "core-handler": "crashes are handed to a program or socket: owner decision needed",
+    "core-mode-refused": "core dumps go to a socket or a file: not a mode validated by D-018",
+    "core-proof-missing": "no local proof, for this boot, kernel and setting, that a crash at "
+                          "limit 1 reaches no handler (run rehearse)",
+    "core-changed": "the core dump setting or the kernel changed since the proof",
     "core-dump-recorded": "a core dump was recorded since the start",
     "coredumpctl-failed": "coredumpctl failed or gave an unreadable answer",
-    "core-probe-failed": "the synthetic crash did not behave as expected",
+    "core-probe-failed": "the synthetic crashes did not prove that limit 1 reaches no "
+                         "handler",
     "sandbox-unavailable": "bubblewrap is missing, too old or cannot start",
     "sandbox-probe-failed": "the confinement probe found a check that failed",
-    "j0-report-absent": "no local J0 report: rule awaiting the owner's decision",
+    "j0-report-absent": "no local J0 report: B1 requires it (D-018)",
     "j0-report-invalid": "the local J0 report is unreadable or not an image report",
     "j0-report-mismatch": "the local J0 report differs from the J0 references",
     "j0-image-mismatch": "the image hash differs from the local J0 report",
@@ -160,8 +177,8 @@ FINDING_CODES = {
     "tree-anomaly": "an entry of the extracted tree is a link, special or elsewhere",
 }
 # Findings that forbid only the extraction: rehearse records them and goes on.
-EXTRACTION_GATES = {"core-handler", "j0-report-absent", "j0-report-invalid",
-                    "j0-report-mismatch"}
+EXTRACTION_GATES = {"core-mode-refused", "core-proof-missing", "j0-report-absent",
+                    "j0-report-invalid", "j0-report-mismatch"}
 # private_guard finding lines, mapped to codes by their first words.
 GUARD_PREFIXES = (
     ("file written outside the private folder", "guard-written-outside"),
@@ -179,9 +196,10 @@ PROBE_CHECKS = (
     "write-denied-home", "write-denied-private-root", "write-denied-iso",
     "write-denied-store", "write-denied-repo", "write-allowed-run-folder",
     "writable-game", "writable-app", "writable-tmp", "image-read-only",
-    "tmp-private-empty", "run-hidden", "nix-daemon-socket-hidden", "net-loopback-only",
+    "tmp-private-empty", "run-hidden", "nix-daemon-socket-hidden", "home-hidden",
+    "net-loopback-only",
     "net-tcp-host-unreachable", "net-tcp-remote-unreachable", "net-udp-unreachable",
-    "net-abstract-unix-isolated", "userns-disabled", "core-limit-zero", "no-capabilities",
+    "net-abstract-unix-isolated", "userns-disabled", "core-limit-one", "no-capabilities",
     "pid-isolated",
 )
 STEP_NAMES = (
@@ -235,12 +253,13 @@ SUMMARY_FACTS = {
     "watched-places": {"places_checked": _int},
     "core-settings": {"core_pattern_kind": _enum("file", "pipe", "socket"),
                       "core_handler": _enum("systemd-coredump", "other", "none"),
-                      "suid_dumpable": _enum("0", "1", "2")},
+                      "suid_dumpable": _enum("0", "1", "2"), "proof_found": _bool},
     "j0-report": {"report_present": _bool, "report_matches_j0": _bool},
     "sandbox": {"bwrap_version_ok": _bool, "probe_checks": _int,
                 "probe_checks_passed": _int, "probe_failed_checks": _names(PROBE_CHECKS)},
-    "core-probe": {"entry_found": _bool, "corefile": COREFILE,
-                   "probe_signal": SIGNAL_NUMBER},
+    "core-probe": {"control_signal": SIGNAL_NUMBER, "control_entry_found": _bool,
+                   "control_corefile": COREFILE, "limit_one_signal": SIGNAL_NUMBER,
+                   "limit_one_entry_found": _bool, "proof_acquired": _bool},
     "mounts-before": {"mounts_in_scope": _int, "mount_points_watched": _int},
     "image-before": {"image_matches_j0_report": _bool},
     "cp3-before": {"matches": _int, "known_entry_listed": _bool, "other_matches": _int},
@@ -808,8 +827,47 @@ def check_watch_places(ctx, watch, findings):
 
 # --- core dumps (R03) ---------------------------------------------------------------------
 
+def core_identity(pattern_file, suid_file, boot_file=BOOT_ID_FILE):
+    """What a proof of option B holds for: this boot, this kernel, this core_pattern and
+    this suid_dumpable. Returns None if one of them cannot be read."""
+    try:
+        with open(pattern_file, "rb") as f:
+            pattern = f.read()
+        with open(suid_file, encoding="utf-8") as f:
+            suid = f.read().strip()
+        with open(boot_file, encoding="utf-8") as f:
+            boot = f.read().strip()
+    except OSError:
+        return None
+    uname = os.uname()
+    return {"boot_id": boot, "kernel_release": uname.release, "kernel_version": uname.version,
+            "core_pattern_sha256": hashlib.sha256(pattern.strip()).hexdigest(),
+            "suid_dumpable": suid}
+
+
+def find_core_proof(ctx, identity):
+    """The newest complete rehearsal whose proof holds for `identity`, or None."""
+    if not identity:
+        return None
+    try:
+        names = sorted(os.listdir(ctx.logs), reverse=True)
+    except OSError:
+        return None
+    for name in names:
+        if RUN_DIR_RE.fullmatch(name) and name.startswith("b1-rehearse-"):
+            state = read_state(os.path.join(ctx.logs, name))
+            if state and state.get("phase") == "complete" and \
+                    state.get("controls_clean") is True and \
+                    state.get("core_proof") == dict(identity, result="validated"):
+                return name
+    return None
+
+
 def core_settings(ctx, findings):
-    """How the kernel handles a core dump: a file, a program (|) or a socket (@)."""
+    """How the kernel handles a core dump. Only a program (|) is accepted (D-018): the
+    kernel drops the crash of a process with RLIMIT_CORE 1 before it starts the program
+    (fs/coredump.c). A socket (@) ignores the limit, and a file is not a validated mode:
+    both are refused. A pipe needs a local proof, made by rehearse."""
     facts = {}
     try:
         with open(ctx.args.core_pattern_file, encoding="utf-8", errors="replace") as f:
@@ -826,16 +884,23 @@ def core_settings(ctx, findings):
         handler = os.path.basename(words[0]) if words else ""
         facts["core_handler"] = "systemd-coredump" if handler == "systemd-coredump" \
             else "other"
+        identity = core_identity(ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)
+        proof = find_core_proof(ctx, identity)
+        facts["proof_found"] = proof is not None
+        if identity is None:
+            findings.append(("core-settings-unreadable", "cannot read the boot id"))
+        elif proof is None:
+            findings.append(("core-proof-missing", "no rehearsal of this boot proves that a "
+                                                   "crash at limit 1 reaches no handler"))
     elif pattern.startswith("@"):
         facts["core_pattern_kind"] = "socket"
         facts["core_handler"] = "other"
+        findings.append(("core-mode-refused", "a core dump socket ignores RLIMIT_CORE"))
     else:
         facts["core_pattern_kind"] = "file"
         facts["core_handler"] = "none"
-    if facts["core_pattern_kind"] != "file":
-        findings.append(("core-handler", "a crash of the extraction would be handed to a "
-                                         "handler: B1 waits for the owner's decision "
-                                         "(docs/J2_B1_EXTRACTION.md section 5)"))
+        findings.append(("core-mode-refused", "core dumps to a file: not a mode validated by "
+                                              "D-018"))
     return facts
 
 
@@ -934,11 +999,22 @@ def bwrap_version(ctx):
     return tuple(int(x) for x in match.groups()) if match else None
 
 
-def sandbox_argv(ctx, run_dir, command, status_fd):
+def sandbox_blockers(ctx):
+    """The sandbox hides the home folder: what it needs must lie elsewhere."""
+    needed = [os.path.realpath(sys.executable), os.path.realpath(__file__)]
+    if ctx.sdk:
+        needed.append(os.path.realpath(ctx.sdk))
+    return [("sandbox-unavailable", f"needed by the sandbox, but inside the home folder, "
+                                    f"which it hides: {path} (use the packaged command)")
+            for path in needed if under_or_self(path, ctx.home)]
+
+
+def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     """bubblewrap around one command: every namespace unshared (no network: only a
     loopback of its own), no further user namespace, killed with this process, the whole
     file system read-only, an empty tmpfs over the folders of system sockets and shared
-    temporary files, the private folder read-only, and only the run folder, game/, app/
+    temporary files, an empty read-only tmpfs over the home folder (its sockets and files
+    are out of reach), the private folder read-only, and only the run folder, game/, app/
     and tmp/ writable."""
     argv = [ctx.args.bwrap, "--unshare-all", "--unshare-user", "--disable-userns",
             "--die-with-parent", "--new-session",
@@ -946,28 +1022,32 @@ def sandbox_argv(ctx, run_dir, command, status_fd):
     for path in SANDBOX_HIDDEN:
         if os.path.isdir(path) and not os.path.islink(path):
             argv += ["--size", str(SANDBOX_TMPFS_BYTES), "--tmpfs", path]
+    argv += ["--size", str(HOME_TMPFS_BYTES), "--tmpfs", ctx.home]
     argv += ["--ro-bind", ctx.private, ctx.private, "--bind", run_dir, run_dir]
     for name in SANDBOX_WRITABLE:
         path = os.path.join(ctx.private, name)
         argv += ["--bind", path, path]
-    argv += ["--chdir", ctx.private, "--json-status-fd", str(status_fd), "--"]
+    argv += ["--remount-ro", ctx.home]
+    argv += ["--chdir", chdir or ctx.private, "--json-status-fd", str(status_fd), "--"]
     return argv + list(command)
 
 
 class Sandbox:
     """One sandboxed command, with its bubblewrap status (child pid, exit code)."""
 
-    def __init__(self, ctx, run_dir, command, env, stdout, stderr, stdin=None):
+    def __init__(self, ctx, run_dir, command, env, stdout, stderr, stdin=None,
+                 core_limit=EXTRACTION_CORE_LIMIT, chdir=None):
         self.read_fd, write_fd = os.pipe()
         os.set_blocking(self.read_fd, False)
         self.status = b""
         self.closed = False
-        argv = sandbox_argv(ctx, run_dir, command, write_fd)
+        argv = sandbox_argv(ctx, run_dir, command, write_fd, chdir=chdir)
         try:
-            self.proc = subprocess.Popen(argv, stdin=stdin if stdin is not None else
-                                         subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                         env=env, cwd=ctx.private, pass_fds=(write_fd,),
-                                         start_new_session=True)
+            self.proc = subprocess.Popen(
+                argv, stdin=stdin if stdin is not None else subprocess.DEVNULL,
+                stdout=stdout, stderr=stderr, env=env, cwd=ctx.private, pass_fds=(write_fd,),
+                start_new_session=True,
+                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, core_limit))
         except OSError:
             os.close(self.read_fd)
             raise
@@ -1054,9 +1134,11 @@ def run_probe(ctx, steps, run_dir, env):
     findings, facts = [], {}
     version = bwrap_version(ctx)
     facts["bwrap_version_ok"] = bool(version and version >= BWRAP_MIN_VERSION)
+    findings += sandbox_blockers(ctx)
     if not facts["bwrap_version_ok"]:
         findings.append(("sandbox-unavailable", "bubblewrap is missing or older than "
                                                 "0.8.0"))
+    if findings:
         return steps.add("sandbox", "ok", facts=facts, findings=findings)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     abstract = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1158,6 +1240,13 @@ def probe_main(argv):
     check("run-hidden", "/run" not in hidden or os.listdir("/run") == [])
     check("nix-daemon-socket-hidden",
           not os.path.lexists("/nix/var/nix/daemon-socket/socket"))
+    rel = os.path.relpath(spec["private"], spec["home"])
+    allowed = set() if rel.startswith("..") else {rel.split(os.sep)[0]}
+    try:
+        visible = set(os.listdir(spec["home"]))
+        check("home-hidden", visible <= allowed, str(len(visible)))
+    except OSError as exc:
+        check("home-hidden", False, errno.errorcode.get(exc.errno, ""))
     names = [name for _, name in socket.if_nameindex()]
     check("net-loopback-only", names == ["lo"], ",".join(names))
 
@@ -1180,7 +1269,7 @@ def probe_main(argv):
     fails("net-udp-unreachable", udp, unreachable)
     fails("net-abstract-unix-isolated", connect(socket.AF_UNIX, "\0" + spec["abstract"]))
     fails("userns-disabled", lambda: os.unshare(os.CLONE_NEWUSER))
-    check("core-limit-zero", resource.getrlimit(resource.RLIMIT_CORE) == (0, 0))
+    check("core-limit-one", resource.getrlimit(resource.RLIMIT_CORE) == (1, 1))
     try:
         with open("/proc/self/status", encoding="utf-8") as f:
             cap = [line.split()[1] for line in f if line.startswith("CapEff:")][0]
@@ -1202,24 +1291,20 @@ def crash_main(argv):
     return len(sentinel)
 
 
-def run_core_probe(ctx, steps, run_dir, env):
-    """For the arbitration of R03, with synthetic data only: a crash in the same sandbox,
-    with the same limits, then what coredumpctl recorded for it."""
-    findings, facts = [], {}
-    since = time.time() - 1
+def synthetic_crash(ctx, run_dir, name, core_limit):
+    """One synthetic crash in the sandbox, from / and with an empty environment, so that
+    the journal entry of a handler names no private path. Returns (signal, pids)."""
     command = [sys.executable, "-I", os.path.abspath(__file__), "_crash"]
     read_end, write_end = os.pipe()
-    started = time.monotonic()
-    with open(os.path.join(run_dir, "core-probe.stdout"), "xb") as out, \
-            open(os.path.join(run_dir, "core-probe.stderr"), "xb") as err:
+    with open(os.path.join(run_dir, f"{name}.stdout"), "xb") as out, \
+            open(os.path.join(run_dir, f"{name}.stderr"), "xb") as err:
         try:
-            box = Sandbox(ctx, run_dir, command, env, out, err, stdin=read_end)
-        except OSError as exc:
+            box = Sandbox(ctx, run_dir, command, {}, out, err, stdin=read_end,
+                          core_limit=core_limit, chdir="/")
+        except OSError:
             os.close(read_end)
             os.close(write_end)
-            findings.append(("core-probe-failed", f"bubblewrap did not start "
-                                                  f"({exc.strerror})"))
-            return steps.add("core-probe", "ok", facts=facts, findings=findings)
+            return None, []
         os.close(read_end)
         pids = []
         for _ in range(100):
@@ -1227,39 +1312,88 @@ def run_core_probe(ctx, steps, run_dir, env):
             if pids:
                 break
             time.sleep(0.05)
-        os.write(write_end, b"x")
+        try:
+            os.write(write_end, b"x")
+        except OSError:
+            pass  # the program ended before reading: the status below says how
         os.close(write_end)
         try:
             code = box.proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             code = box.stop()
         box.close()
-    facts["probe_signal"] = code - 128 if isinstance(code, int) and code > 128 else None
-    if facts["probe_signal"] != signal.SIGSEGV:
-        findings.append(("core-probe-failed", f"the synthetic crash ended with status {code}"))
-    entry = None
-    lines = []
-    for _ in range(15):
-        entries, raw, error = coredumps_since(ctx, since)
-        lines.append(raw.decode("utf-8", "replace"))
+    return (code - 128 if isinstance(code, int) and code > 128 else None), pids
+
+
+def crash_entries(ctx, since, pids, lines):
+    entries, raw, error = coredumps_since(ctx, since)
+    lines.append(raw.decode("utf-8", "replace"))
+    if error:
+        return None, error
+    return [e for e in entries if e.get("pid") in pids or
+            (not pids and e.get("exe") == sys.executable)], None
+
+
+def run_core_probe(ctx, steps, run_dir, state):
+    """The local proof of option B (D-018), with synthetic programs only, in the sandbox of
+    the extraction. A control crash with RLIMIT_CORE 0 must reach the handler: coredumpctl
+    lists it, which shows that the handler and coredumpctl work. The same crash with
+    RLIMIT_CORE 1 must reach nothing: no entry, after waiting at least PROOF_MIN_WAIT
+    seconds and three times the delay of the control. The proof holds for this boot, this
+    kernel, this core_pattern and this suid_dumpable only."""
+    findings, facts, lines = [], {}, []
+    identity = core_identity(ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)
+    started = time.monotonic()
+    since = int(time.time()) - 1
+    signal_0, pids_0 = synthetic_crash(ctx, run_dir, "core-control", CONTROL_CORE_LIMIT)
+    crashed = time.monotonic()
+    facts["control_signal"] = signal_0
+    control = None
+    for _ in range(30):
+        matching, error = crash_entries(ctx, since, pids_0, lines)
         if error:
             findings.append(("coredumpctl-failed", error))
             break
-        matching = [e for e in entries if e.get("pid") in pids
-                    or (not pids and e.get("exe") == sys.executable)]
         if matching:
-            entry = matching[0]
+            control = matching[0]
             break
-        time.sleep(1)
+        time.sleep(0.5)
+    latency = time.monotonic() - crashed
+    facts["control_entry_found"] = control is not None
+    facts["control_corefile"] = control.get("corefile", "unknown") if control else "unknown"
+    probe_pids = set(pids_0) | ({control["pid"]} if control and
+                                isinstance(control.get("pid"), int) else set())
+    since_1 = int(time.time()) + 1
+    while time.time() < since_1:
+        time.sleep(0.05)
+    signal_1, pids_1 = synthetic_crash(ctx, run_dir, "core-limit-one", EXTRACTION_CORE_LIMIT)
+    facts["limit_one_signal"] = signal_1
+    deadline = time.monotonic() + max(PROOF_MIN_WAIT, 3 * latency)
+    reached = None
+    while time.monotonic() < deadline and reached is None and not findings:
+        matching, error = crash_entries(ctx, since_1, pids_1, lines)
+        if error:
+            findings.append(("coredumpctl-failed", error))
+        elif matching:
+            reached = matching[0]
+        else:
+            time.sleep(0.5)
+    facts["limit_one_entry_found"] = reached is not None
+    if reached and isinstance(reached.get("pid"), int):
+        probe_pids.add(reached["pid"])
     write_new(os.path.join(run_dir, "core-probe-coredumpctl.txt"), "\n".join(lines))
-    facts["entry_found"] = entry is not None
-    facts["corefile"] = entry.get("corefile", "unknown") if entry else "unknown"
-    item = steps.add("core-probe", "ok", exit_code=code, facts=facts, findings=findings,
+    acquired = (identity is not None and signal_0 == signal.SIGSEGV and control is not None
+                and signal_1 == signal.SIGSEGV and reached is None and not findings)
+    facts["proof_acquired"] = acquired
+    if acquired:
+        state["core_proof"] = dict(identity, result="validated")
+    else:
+        findings.append(("core-probe-failed", "control crash with an entry, then a crash at "
+                                              "limit 1 without one, were not both observed"))
+    state["core_probe_pids"] = sorted(probe_pids)
+    return steps.add("core-probe", "ok", facts=facts, findings=findings,
                      output="core-probe-coredumpctl.txt",
                      duration=time.monotonic() - started)
-    item["probe_pids"] = sorted(set(pids) | ({entry["pid"]} if entry and
-                                              isinstance(entry.get("pid"), int) else set()))
-    return item
 
 
 # --- the step -----------------------------------------------------------------------------
@@ -1679,6 +1813,8 @@ def finish(ctx, steps, command, started, run_dir=None, pb1=None, state=None, suf
         write_new(os.path.join(run_dir, f"summary{suffix}.txt"), summary)
         if state is not None:
             state["phase"] = "complete"
+            # A rehearsal proves option B only if nothing but the extraction gates came up.
+            state["controls_clean"] = all(code in EXTRACTION_GATES for code in steps.codes())
             write_state(run_dir, state)
     sys.stdout.write(summary)
     if run_dir and RUN_DIR_RE.fullmatch(os.path.basename(run_dir)):
@@ -1892,7 +2028,7 @@ def cmd_step(ctx, extract):
 
     # Settings of the step, inherited by every command it starts.
     os.umask(0o077)
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_CORE, SUPERVISOR_CORE_LIMIT)
     run_dir = new_run_dir(ctx, command)
     state = {"tool_version": TOOL_VERSION, "command": command, "started": started,
              "phase": "started", "core": steps.get("core-settings")["facts"],
@@ -1927,9 +2063,9 @@ def cmd_step(ctx, extract):
             output="mounts-before.json")
 
         run_probe(ctx, steps, run_dir, env)
-        if not extract and state["core"].get("core_pattern_kind") in ("pipe", "socket"):
-            probe = run_core_probe(ctx, steps, run_dir, env)
-            state["core_probe_pids"] = probe.get("probe_pids", [])
+        if not extract and state["core"].get("core_pattern_kind") == "pipe" and \
+                not steps.blocking(extract):
+            run_core_probe(ctx, steps, run_dir, state)
         if steps.blocking(extract):
             return finish(ctx, steps, command, started, run_dir, state=state)
 
@@ -1972,6 +2108,10 @@ def cmd_step(ctx, extract):
     except Interrupted:
         steps.add("interrupted", "finding", findings=[("interrupted", "before the marker")])
         return finish(ctx, steps, command, started, run_dir, state=state)
+    except Exception as exc:  # nothing was started: the report is still written
+        steps.add("internal-error", "finding", findings=[("internal-error",
+                                                          type(exc).__name__)])
+        return finish(ctx, steps, command, started, run_dir, state=state)
 
     # From here on, the marker decides: if it exists, postflight runs, whatever happens.
     if not os.path.lexists(marker):
@@ -1988,6 +2128,10 @@ def cmd_step(ctx, extract):
         findings = []
         check_sdk_before(ctx, started_ns, findings)
         check_game_empty(ctx, findings, {})
+        if extract and not find_core_proof(ctx, core_identity(
+                ctx.args.core_pattern_file, ctx.args.suid_dumpable_file)):
+            findings.append(("core-changed", "the proof no longer holds for this boot, "
+                                             "kernel and setting"))
         findings += compare_identities(state["identities"], private_identities(ctx, run_dir))
         steps.add("before-extraction", "ok", findings=findings)
         if not extract:
@@ -2032,7 +2176,7 @@ def cmd_resume(ctx):
     SIGNALS.install()
     SIGNALS.defer = True
     os.umask(0o077)
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_CORE, SUPERVISOR_CORE_LIMIT)
     pid, start = state.get("bwrap_pid"), state.get("bwrap_start")
     if pid and start and process_start(pid) == start:
         steps.add("resume", "finding", findings=[("still-running", "the sandbox of the "

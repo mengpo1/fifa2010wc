@@ -1,15 +1,18 @@
 # Étape B1 — extraction contrôlée de l'arborescence du disque
 
 > Étape B1 de `docs/J2_PLAN.md` §4.1, [ticket #32](https://github.com/mengpo1/fifa2010wc/issues/32).
-> Version 2, après la revue de l'orchestrateur sur la PR #33 (constats B1-R01 à B1-R07).
+> Version 3 :
+> - corrections de la revue de l'orchestrateur sur la PR #33 (constats B1-R01 à B1-R07) ;
+> - arbitrages du porteur, D-018 : option B pour les plantages, rapport J0 local
+>   obligatoire.
 > PB-0 est franchi depuis le 2026-11-24 (D-017). **Ce document et son outil ne valent ni
 > exécution de B1, ni PB-1.**
 > - Ils ont été préparés sans aucune donnée du jeu : ni ISO, ni XEX, ni journal du jeu.
 > - Les essais n'utilisent que des images et des fichiers synthétiques.
 > - B1 s'exécute à la main, **sur la machine de l'utilisateur seulement**, une fois cette
 >   procédure fusionnée.
-> - **`run` reste bloqué** tant que le porteur n'a pas décidé du traitement des plantages
->   (§6) et, faute de rapport J0 local, de la règle du §7.
+> - **`run` reste bloqué** tant que `rehearse` n'a pas apporté, sur la machine du porteur
+>   et dans le même démarrage, la preuve locale du §6.
 > - PB-1 est décidé par l'orchestrateur, sur les résultats locaux.
 >
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
@@ -23,7 +26,7 @@ dans un ordre fixe :
 | Commande | Écrit | Lit l'image | Ce qu'elle fait |
 |---|---|---|---|
 | `prepare` | Rien | Non : seulement ses droits et sa taille | Diagnostic : tous les contrôles qui n'écrivent rien (§2, étape 2) |
-| `rehearse` | Un dossier d'exécution sous `logs/` | Non | Tous les contrôles de `run`, la sonde de confinement et, si les plantages vont à un programme, un plantage synthétique (§6). Pas d'extraction |
+| `rehearse` | Un dossier d'exécution sous `logs/` | Non | Tous les contrôles de `run`, la sonde de confinement et, en mode tube, la preuve locale de l'option B : deux plantages synthétiques (§6). Pas d'extraction |
 | `run` | `game/` et un dossier d'exécution | Oui, pour son empreinte, et par `rexglue` dans le bac à sable | B1 |
 | `verify` | Rien | Non | Les chiffres de PB-1 de `game/`, à relire plus tard |
 | `resume` | Des fichiers `-resume` dans le dossier d'exécution | Oui, pour l'empreinte d'après | Les contrôles d'après l'extraction, pour un passage interrompu sans eux (§10). Ne relance jamais l'extraction |
@@ -102,11 +105,12 @@ modules (`docs/J2_A1_SDK_INVENTORY.md` §3.3).
    - le dossier privé, composant par composant (§4.2) ;
    - le SDK construit, le dépôt propre ;
    - la table des montages et les emplacements surveillés (§4.1) ;
-   - le réglage des *core dumps* (§6) ;
+   - le réglage des *core dumps* et la preuve locale de l'option B (§6) ;
    - le rapport J0 local (§7).
 3. **Réglages de l'étape**, hérités par chaque commande lancée ensuite :
    - masque `077` ;
-   - `RLIMIT_CORE` à `0`, en limite souple **et** stricte ;
+   - `RLIMIT_CORE` de l'outil : `0` en limite souple, ce que `private_guard` contrôle, et
+     `1` en limite stricte, pour pouvoir donner `1` au bac à sable (§6) ;
    - `TMPDIR`, les dossiers XDG et `REX_APP_ROOT` dans le dossier privé, et
      `REX_APP_LOG_ROOT` dans le dossier d'exécution ;
    - **toute variable `REX_*` héritée du shell est retirée**.
@@ -127,8 +131,9 @@ modules (`docs/J2_A1_SDK_INVENTORY.md` §3.3).
    - présent, **`postflight` s'exécute dans tous les cas**, même si `preflight` a trouvé
      quelque chose. L'extraction, elle, n'a lieu que sans aucun constat.
 8. **L'extraction**, dans le bac à sable :
-   - le SDK était construit avant le début des contrôles, `game/` est encore vide, et
-     aucun dossier du dossier privé n'a été remplacé ;
+   - le SDK était construit avant le début des contrôles, `game/` est encore vide, aucun
+     dossier du dossier privé n'a été remplacé, et la preuve du §6 vaut toujours ;
+   - `RLIMIT_CORE` à **`1`**, souple et stricte, pour ce seul processus (§6) ;
    - sortie standard et erreurs dans le dossier d'exécution seulement ;
    - un code non nul, un signal, un délai dépassé (2 heures par défaut, `--timeout`) ou
      une interruption est un constat.
@@ -169,13 +174,15 @@ défaut. Sinon, `run` refuse (`sandbox-unavailable`).
 | `--ro-bind / /` | **Tout le système de fichiers en lecture seule**, dont le dossier personnel, le magasin et le dépôt |
 | `--dev /dev`, `--proc /proc` | Un `/dev` minimal et le `/proc` du bac à sable |
 | `--tmpfs` de 16 Mio | Sur `/tmp`, `/run`, `/var/tmp` et `/nix/var/nix/daemon-socket`, quand ils existent : ils cachent les sockets des services (D-Bus, journal, démon Nix, session) et les fichiers temporaires partagés |
+| `--tmpfs` de 1 Mio sur le dossier personnel, puis `--remount-ro` | **Le dossier personnel est vide et en lecture seule** : ses fichiers et ses sockets sont hors d'atteinte. Seul le chemin du dossier privé y est recréé |
 | `--ro-bind` du dossier privé | Le dossier privé en lecture seule, même sous `/tmp` |
 | `--bind` | **Seuls inscriptibles** : le dossier d'exécution, `game/`, `app/` et `tmp/` |
 
 ### 3.2 La sonde de confinement
 
 Avant le repère, un programme synthétique est lancé dans **le même bac à sable**, avec les
-mêmes options. Il ne contient aucune donnée du jeu. Ses 22 contrôles :
+mêmes options et la même limite de *core dump*. Il ne contient aucune donnée du jeu. Ses
+23 contrôles :
 
 | Contrôles | Attendu |
 |---|---|
@@ -183,18 +190,19 @@ mêmes options. Il ne contient aucune donnée du jeu. Ses 22 contrôles :
 | `write-allowed-run-folder`, `writable-game`, `writable-app`, `writable-tmp` | Écriture permise |
 | `image-read-only` | L'image est lisible et non inscriptible |
 | `tmp-private-empty`, `run-hidden`, `nix-daemon-socket-hidden` | Dossiers cachés vides, socket du démon Nix absente |
+| `home-hidden` | Le dossier personnel ne montre que le chemin du dossier privé |
 | `net-loopback-only` | Seule l'interface `lo` |
 | `net-tcp-host-unreachable` | Une socket TCP que l'outil écoute sur la boucle locale de la machine est injoignable |
 | `net-tcp-remote-unreachable`, `net-udp-unreachable` | Une adresse de test (`192.0.2.1`) est injoignable, sans délai d'attente : il n'y a pas de route |
 | `net-abstract-unix-isolated` | Une socket abstraite que l'outil écoute est injoignable |
 | `userns-disabled` | Un nouvel espace de noms utilisateur est refusé |
-| `core-limit-zero` | `RLIMIT_CORE` vaut `(0, 0)` à l'intérieur |
+| `core-limit-one` | `RLIMIT_CORE` vaut `(1, 1)` à l'intérieur (§6) |
 | `no-capabilities`, `pid-isolated` | Aucune capacité ; seuls les processus du bac à sable |
 
 Un seul contrôle en échec est un constat `sandbox-probe-failed`, et rien n'est extrait.
 `rehearse` fait la même sonde : c'est l'essai du confinement sur la machine du porteur.
 
-[V] Dans le contrôle Nix `b1-extract-selftest`, la sonde passe ses 22 contrôles, et le vrai
+[V] Dans le contrôle Nix `b1-extract-selftest`, la sonde passe ses 23 contrôles, et le vrai
 `rexglue vfs dump` extrait l'image synthétique dans ce bac à sable. Le test
 `test_real_sandbox_confines_the_extraction` lance un faux `rexglue` qui tente d'écrire dans
 le dossier personnel, le dossier privé, `iso/`, le dépôt et l'image : **chaque écriture est
@@ -205,9 +213,14 @@ refusée par `EROFS`**, et rien n'apparaît sur la machine.
 À arbitrer ; aucun de ces points n'est présenté comme couvert :
 - **lecture** : le processus lit tout ce que l'utilisateur peut lire. Il ne peut ni l'écrire
   ailleurs que dans ses destinations, ni l'envoyer sur le réseau ;
-- **sockets de fichier visibles** : une socket Unix posée ailleurs que sous les dossiers
-  cachés reste joignable, par exemple sous le dossier personnel. Il vaut mieux fermer les
-  programmes qui en ouvrent pendant l'étape ;
+- **sockets Unix de fichier** : celles du dossier personnel, de `/run` (D-Bus, journal,
+  session, sockets de l'utilisateur sous `$XDG_RUNTIME_DIR`), de `/tmp` (X11) et du démon Nix
+  sont cachées. Une socket posée ailleurs reste joignable, par exemple sous `/var/lib` ou
+  sous un point de montage hors du dossier personnel. Les sockets abstraites sont isolées
+  par l'espace de noms réseau ;
+- **l'outil doit être hors du dossier personnel** : le bac à sable le cache. La commande
+  empaquetée, dans `/nix/store`, convient ; un lancement depuis une copie du dépôt sous le
+  dossier personnel est refusé (`sandbox-unavailable`) ;
 - **tmpfs** : ce qui y est écrit reste en mémoire, et peut aller dans l'espace d'échange,
   comme toute mémoire de processus. Il disparaît à la fin du bac à sable ;
 - **les outils de contrôle** (`private_guard`, `find`, `findmnt`, `git`, `coredumpctl`,
@@ -283,53 +296,68 @@ find /nix/store -maxdepth 3 -type f \( -iname '*.xex' -o \( -iname '*.iso' -size
 - Une correspondance disparue n'est qu'une note.
 - Ces recherches **ne sont pas exhaustives** : extension, taille, profondeur.
 
-## 6. *Core dumps* (B1-R03)
+## 6. *Core dumps* (B1-R03, D-018 option B)
 
 ### 6.1 Ce qui est vérifié dans le code
 
 - [V] **Noyau** (`fs/coredump.c`, v6.12 et v6.18) :
   - avec un fichier comme destination, aucun *core* n'est écrit quand la limite est sous
-    la taille minimale, donc à `0` ;
-  - avec un programme (`|`), la limite est ignorée, et le programme reçoit le plantage ;
-  - avec une limite exactement à `1`, le *core dump* par programme est abandonné avant de
-    lancer le programme. Ce n'est pas le cas avec une socket (`@`, depuis 6.16).
-- [V] **systemd-coredump 260.5** (nixpkgs, `src/coredump/coredump-submit.c`,
-  `save_external_coredump()`) : avec une limite sous la taille d'une page, il ne lit ni ne
-  stocke le contenu (« Resource limits disable core dumping »). Mais il écrit toujours dans
-  le journal du système un résumé : ligne de commande, descripteurs ouverts, carte mémoire,
-  dossier de travail, environnement (`coredump-context.c`). Ce sont des chemins et des
-  métadonnées, qui sortent du dossier privé.
+    la taille minimale, donc à `0` ou à `1` ;
+  - avec un programme (`|`), la limite est ignorée, et le programme reçoit le plantage,
+    **sauf** si la limite vaut exactement `1` : le *core dump* est alors abandonné avant de
+    lancer le programme (« RLIMIT_CORE is set to 1, aborting core ») ;
+  - avec une socket (`@`, depuis 6.16), la limite n'est pas consultée.
+- [V] **systemd-coredump 260.5** (nixpkgs, `src/coredump/coredump-submit.c`) : avec une
+  limite sous la taille d'une page, il ne lit ni ne stocke le contenu, mais il journalise
+  les métadonnées. Avec la limite `1`, il n'est pas lancé du tout.
 - [V] **Sur la machine du porteur** (D-017) : les plantages vont par tube à
-  systemd-coredump. L'essai synthétique de PB-0 a donné `COREFILE none`.
+  systemd-coredump.
 
-**La garantie demandée n'est donc pas établie** avec `RLIMIT_CORE=0` : le programme du tube
-reçoit le plantage et en journalise les métadonnées.
+### 6.2 La décision : option B (D-018)
 
-### 6.2 Ce que fait l'outil
+- **Seul le mode tube est accepté.** Un mode socket ou fichier est refusé
+  (`core-mode-refused`), même si le mode fichier ne garde rien sous la limite.
+- **La limite `1`, souple et stricte, vaut pour le seul processus confiné** :
+  l'extraction et la sonde de confinement. L'outil garde une limite souple de `0`, et
+  `private_guard` contrôle toujours `0` pour lui et pour ses contrôles : il n'est pas
+  modifié, et aucun de ses contrôles n'est affaibli. Seule la limite stricte de l'outil
+  passe à `1`, pour qu'il puisse donner `1` au bac à sable. Dans les modes fichier et tube,
+  `1` ne garde pas plus de *core* que `0`.
+- **`run` reste bloqué sans preuve locale** (`core-proof-missing`).
 
-- **Il bloque `run`** quand les plantages vont à un programme ou à une socket : constat
-  `core-handler`. Le blocage reste jusqu'à la décision du porteur.
-- Il lit `core_pattern` et `suid_dumpable`. Une lecture impossible est un constat.
-- **La mesure vérifiable, avec des données synthétiques** : `rehearse` lance, dans le même
-  bac à sable et avec les mêmes limites, un programme synthétique qui plante par `SIGSEGV`.
-  Il relève ensuite ce que `coredumpctl --json=short list` a consigné pour ce processus :
-  une entrée ou non, et son `COREFILE`. Ce résultat appuie la décision.
-- Après chaque étape, toute entrée de `coredumpctl` depuis le début est un constat. Un échec
-  de `coredumpctl`, ou une réponse illisible, l'est aussi.
-- **Aucune modification du système**, et **aucune limite à `1`** sans décision.
+### 6.3 La preuve locale, faite par `rehearse`
 
-### 6.3 Options pour la décision du porteur
+Avec des programmes synthétiques seulement, dans le bac à sable de l'extraction, depuis `/`
+et avec un environnement vide, pour que le journal ne nomme aucun chemin privé :
+1. **plantage témoin**, à la limite `0` : `coredumpctl --json=short list` doit le lister.
+   Cela montre que le programme du tube et `coredumpctl` fonctionnent ;
+2. **plantage à la limite `1`**, une seconde plus tard : **aucune** entrée ne doit
+   apparaître, après au moins 5 s et trois fois le délai du témoin.
 
-Aucune n'est appliquée.
+La preuve n'est acquise que si :
+- les deux programmes meurent par `SIGSEGV` ;
+- le témoin a son entrée, et l'essai à la limite `1` n'en a pas ;
+- la répétition n'a aucun autre constat que les verrous d'extraction (`core-proof-missing`
+  au début, rapport J0).
 
-| Option | Ce qu'elle change | Vérification synthétique | Reste |
-|---|---|---|---|
-| A. Accepter le résidu | Rien | `rehearse` : une entrée `COREFILE none` pour le plantage synthétique | Les métadonnées d'un plantage dans le journal |
-| B. `RLIMIT_CORE=1` pour l'extraction seule | La limite du processus ; `private_guard` exige `0` aujourd'hui | Le plantage synthétique ne laisse **aucune** entrée | Aucun programme lancé (noyau 6.12 à 6.18, mode tube) |
-| C. `Storage=none` et `ProcessSizeMax=0` dans `coredump.conf` | Le système (configuration NixOS) | `COREFILE none` | Les métadonnées dans le journal |
-| D. `kernel.core_pattern` vers un fichier | Le système | Aucune entrée ; aucun fichier sous la limite `0` | Rien, mais un réglage global |
+Elle est enregistrée dans `state.json` de la répétition. Elle vaut pour **ce démarrage**
+(`boot_id`), **ce noyau** (version et compilation), **ce `core_pattern`** (son SHA-256) et
+**ce `suid_dumpable`**. `run` la cherche, puis la revérifie juste avant l'extraction
+(`core-changed`). Un redémarrage, un autre noyau ou un autre réglage demandent une nouvelle
+répétition.
 
-## 7. Le rapport J0 local (B1-R06)
+**Ce qui reste** :
+- le plantage témoin laisse une entrée dans le journal du système, avec les métadonnées
+  d'un programme synthétique : sa ligne de commande dans `/nix/store`, `/` comme dossier
+  de travail, un environnement vide ;
+- après l'étape, toute entrée de `coredumpctl` depuis le début reste un constat, sauf les
+  deux plantages de la preuve.
+- **Aucune modification du système.**
+
+## 7. Le rapport J0 local (B1-R06, D-018)
+
+**Décision du porteur (D-018) : pas de B1 sans rapport J0 local.** Un rapport valide et
+concordant est obligatoire. Son absence, une erreur ou un écart bloquent l'extraction.
 
 - **Où** : `$WC2010_PRIVATE_DIR/logs/j0-identification.json`, là où
   `docs/J0_ISO_IDENTIFICATION.md` l'écrit, ou `--j0-report`, dans le dossier privé.
@@ -339,15 +367,9 @@ Aucune n'est appliquée.
   - 49 fichiers, 8 dossiers et les SHA-256 des deux modules, comme le rapport J0 public ;
   - la même taille que l'image ;
   - **puis l'empreinte de l'image, calculée avant le repère, égale à celle du rapport**.
-- **En cas d'écart, de rapport illisible ou d'absence : aucune extraction** (constats
-  `j0-report-mismatch`, `j0-report-invalid`, `j0-image-mismatch`, `j0-report-absent`).
+- **Constats bloquants** : `j0-report-absent`, `j0-report-invalid`, `j0-report-mismatch`,
+  `j0-image-mismatch`.
 - Après l'étape, l'empreinte de l'image est encore comparée au rapport.
-- **Rapport absent : règle à arbitrer.** Par défaut l'outil refuse (`j0-report-absent`).
-  Les options :
-  - exiger le rapport : c'est le choix actuel ;
-  - permettre B1 sans lui, avec la seule comparaison avant et après l'étape.
-
-  Le rapport public ne donne pas l'empreinte de l'image.
 
 ## 8. Chiffres de PB-1
 
@@ -441,17 +463,17 @@ propre du dépôt, hors du dossier privé.
    "$B" --repo "$PWD" prepare
    ```
 
-4. **Essai** du confinement, de la surveillance et du plantage synthétique, sans
-   extraction :
+   Il se termine par `core-proof-missing` tant qu'aucune répétition de ce démarrage n'a
+   apporté la preuve.
+4. **Répétition** : confinement, surveillance et preuve de l'option B, sans extraction :
 
    ```bash
    "$B" --repo "$PWD" rehearse
    ```
 
-   Sur la machine du porteur, il se termine par le constat `core-handler`. C'est attendu :
-   le résumé donne les éléments de la décision du §6.3.
-5. **B1**, seulement après les décisions des §6.3 et §7, et leur mise en œuvre dans une
-   nouvelle revue :
+   Le résumé doit montrer `proof_acquired True`.
+5. **B1**, dans le même démarrage, seulement après une répétition sans autre constat que
+   `core-proof-missing`, et une fois cette procédure revue et fusionnée :
 
    ```bash
    "$B" --repo "$PWD" run
@@ -460,12 +482,12 @@ propre du dépôt, hors du dossier privé.
 6. **Partage** : seulement `summary.txt`, après CP-5. **Ne jamais partager** `report.json`
    ni les autres fichiers du dossier d'exécution.
 
-**Variable requise** : `WC2010_PRIVATE_DIR`. CP-6 et CP-7 restent à faire comme au
-`docs/J2_PHASE_B_CONTROLS.md` §1 et §5.
+**Variable requise** : `WC2010_PRIVATE_DIR`. Le rapport J0 local doit être à sa place
+(§7). CP-6 et CP-7 restent à faire comme au `docs/J2_PHASE_B_CONTROLS.md` §1 et §5.
 
 ## 12. Essais sans données du jeu, et ce qu'ils ne couvrent pas
 
-**Tests unitaires** (`tools/test_b1_extract.py`, 55 tests), lancés par le contrôle Nix
+**Tests unitaires** (`tools/test_b1_extract.py`, 59 tests), lancés par le contrôle Nix
 `b1-extract-selftest` sous l'utilisateur sans privilèges du bac à sable, **sans aucun saut**.
 - **Simulés** : `rexglue`, `findmnt`, `coredumpctl`, `nix` et, pour l'orchestration,
   `bwrap`. Le faux `bwrap` vérifie les options du bac à sable et répond à la sonde et au
@@ -476,16 +498,18 @@ propre du dépôt, hors du dossier privé.
 |---|---|
 | R01 | Remplacement au même chemin, remontage, liaison, parent changé, montage apparu ou disparu ; `findmnt` en échec ou illisible ; événements de `mountinfo` |
 | R02 | Vrai bac à sable : sonde complète, écritures hors périmètre refusées par `EROFS` ; faux bac à sable : bubblewrap absent, trop ancien, qui ne démarre pas, contrôle en échec ; jamais d'extraction ni de lecture de l'image |
-| R03 | Réglages illisibles ; programme et socket bloquent `run` ; plantage synthétique et son entrée ; *core dump* consigné ; `coredumpctl` en échec |
+| R03, D-018 | Réglages illisibles ; socket et fichier refusés ; pas de preuve, preuve d'un autre démarrage, noyau, réglage ou `suid_dumpable`, ou d'une répétition avec constats : `run` refuse et `rexglue` ne démarre pas ; preuve acquise puis acceptée par `run` ; témoin sans entrée, limite `1` ignorée, `coredumpctl` en échec : pas de preuve ; *core dump* consigné ; limite `(1, 1)` reçue par l'extraction |
 | R04 | Sentinelles dans les chemins, un constat de la garde, le bloc de `rexglue` et les montages ; validateurs ; codes inconnus |
 | R05 | Repère absent après un `OK` ; repère présent avec un constat ; `SIGTERM` puis deux signaux pendant les contrôles ; `SIGKILL` de l'outil, état inachevé, refus, `still-running`, reprise sans relance ni suppression |
-| R06 | Rapport absent, illisible, d'un dossier, d'autres comptes ; empreinte de l'image différente : `rexglue` jamais lancé |
+| R06, D-018 | Rapport absent, illisible, d'un dossier, d'autres comptes ; empreinte de l'image différente : `rexglue` jamais lancé |
 | R07 | Liens à la place de `game`, `logs`, `xdg/config` et `app` ; parent modifiable par d'autres ; montage dans le dossier privé ; autre appareil |
 
 **Contrôle Nix `b1-extract-selftest`** : la commande empaquetée, avec le **vrai** bubblewrap
 et le **vrai** `rexglue vfs dump`, sur une image XDVDFS synthétique et un rapport J0
 synthétique.
-- **Quand le bac à sable peut démarrer** : sonde à 22 sur 22 ; `Nodes` 9 pour 5 fichiers
+- La preuve de l'option B y est écrite par les fonctions de l'outil, sur un réglage
+  synthétique en mode tube : seul `rehearse`, chez le porteur, fait la vraie.
+- **Quand le bac à sable peut démarrer** : sonde à 23 sur 23 ; `Nodes` 9 pour 5 fichiers
   et 3 dossiers ; écritures seulement dans `game/` et le dossier d'exécution ; second
   passage refusé ; échec de `rexglue` sur un fichier qui n'est pas un conteneur, avec
   `postflight`.
@@ -495,9 +519,11 @@ synthétique.
 **Non couvert, faute de root ou de la machine du porteur** :
 - **un vrai point de montage** ou un autre système de fichiers : il faut root. Les tables
   et les numéros d'appareil sont simulés ;
-- **un vrai enregistrement de systemd-coredump**, et un vrai `SIGSEGV` de `rexglue`, pour ne
-  pas envoyer de *core dump* au système de la CI : le plantage est simulé dans les tests ;
-  `rehearse` le fait chez le porteur ;
+- **la preuve de l'option B avec un vrai systemd-coredump** : dans les tests, le programme
+  du tube est simulé par le faux `bwrap`, qui ne « reçoit » le plantage qu'à la limite `0`.
+  Un vrai plantage synthétique dans le vrai bac à sable a été essayé dans ce conteneur, où
+  les *core dumps* vont dans un fichier : `SIGSEGV` aux limites `0` et `1`, aucun fichier
+  *core*. Seul `rehearse` fait la preuve avec le vrai programme du tube, chez le porteur ;
 - **`nix store verify` et `coredumpctl` réels** : le bac à sable de construction n'a ni
   démon Nix ni journal ;
 - **les 31 montages et `/run`** de la machine du porteur : seul `rehearse` les essaie ;

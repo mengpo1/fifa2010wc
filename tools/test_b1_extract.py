@@ -44,6 +44,8 @@ TOOL = os.path.join(HERE, "b1_extract.py")
 GUARD = os.path.join(HERE, "private_guard.py")
 SUBFOLDERS = ("iso", "game", "xex", "generated", "cache", "saves", "logs")
 SENTINEL = "SENTINEL"
+PIPE = "|/nix/store/x-systemd/lib/systemd/systemd-coredump %P %u %g %s %t %c %h"
+PROOF_DIR = "b1-rehearse-20000101T000000Z"
 
 
 def load_tool():
@@ -164,7 +166,14 @@ plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
 if plan.get("coredumpctl_status"):
     print("broken", file=sys.stderr)
     sys.exit(plan["coredumpctl_status"])
-entries = plan.get("coredumps", [])
+since = int(sys.argv[4].split("@")[1]) * 1000000
+entries = list(plan.get("coredumps", []))
+journal = os.environ["B1_FAKE_JOURNAL"]
+if os.path.exists(journal):
+    for line in open(journal):
+        entry = json.loads(line)
+        if entry["time"] >= since:
+            entries.append(entry)
 if entries:
     print(json.dumps(entries))
     sys.exit(0)
@@ -191,6 +200,12 @@ sys.exit(int(plan.get("nix_status", 0)))
 FAKE_BWRAP = r'''
 import json, os, sys
 args = sys.argv[1:]
+# The synthetic crash runs with an empty environment: the records are found from here.
+records = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0]))),
+                       "records")
+os.environ.setdefault("B1_FAKE_PLAN", os.path.join(records, "plan.json"))
+os.environ.setdefault("B1_FAKE_BWRAP_LOG", os.path.join(records, "bwrap.log"))
+os.environ.setdefault("B1_FAKE_JOURNAL", os.path.join(records, "journal.jsonl"))
 plan = json.load(open(os.environ["B1_FAKE_PLAN"]))
 with open(os.environ["B1_FAKE_BWRAP_LOG"], "a") as f:
     f.write(json.dumps(args) + "\n")
@@ -215,8 +230,15 @@ if "_probe" in cmd:
     status({"exit-code": 0})
     sys.exit(0)
 if "_crash" in cmd:
+    import resource, time
     status({"child-pid": os.getpid()})
     sys.stdin.buffer.read(1)
+    soft = resource.getrlimit(resource.RLIMIT_CORE)[0]
+    if (soft == 0 and not plan.get("handler_silent")) or \
+            (soft == 1 and plan.get("limit_one_ignored")):
+        with open(os.environ["B1_FAKE_JOURNAL"], "a") as f:
+            f.write(json.dumps({"time": int(time.time() * 1000000), "pid": os.getpid(),
+                                "sig": 11, "corefile": "none", "exe": sys.executable}) + "\n")
     status({"exit-code": 139})
     sys.exit(139)
 os.chdir(opts[opts.index("--chdir") + 1])
@@ -394,9 +416,9 @@ class Fixture(unittest.TestCase):
         self.bwrap_log = os.path.join(self.records, "bwrap.log")
         self.core_pattern = os.path.join(self.records, "core_pattern")
         self.suid = os.path.join(self.records, "suid_dumpable")
-        self.set_core_pattern("core")
+        self.set_core_pattern(PIPE)
         with open(self.suid, "w") as f:
-            f.write("0\n")
+            f.write("2\n")
         self.persist = os.path.join(self.home, "persist")
         self.persist_space = os.path.join(self.home, ".local", "share", "persist b")
         os.makedirs(self.persist)
@@ -422,6 +444,7 @@ class Fixture(unittest.TestCase):
         self.reference = os.path.join(self.records, "reference.json")
         self.write_reference(reference_for(self.tree))
         self.write_j0_report()
+        self.write_proof()
         self.extra_env = {}
 
     def cleanup(self):
@@ -439,6 +462,20 @@ class Fixture(unittest.TestCase):
                 mount(10, self.home), mount(11, self.persist, parent=10),
                 mount(12, self.persist_space, parent=10, fsroot="/@persist b"),
                 mount(13, self.bound_file, parent=10)]
+
+    def write_proof(self, **changes):
+        """A completed rehearsal holding the proof of option B for this boot, as the tool
+        writes it; `changes` alter the identity it holds."""
+        folder = os.path.join(self.logs, PROOF_DIR)
+        os.makedirs(folder, exist_ok=True)
+        identity = b1.core_identity(self.core_pattern, self.suid)
+        identity.update(changes)
+        b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
+                                "phase": "complete", "controls_clean": True,
+                                "core_proof": dict(identity, result="validated")})
+
+    def remove_proof(self):
+        shutil.rmtree(os.path.join(self.logs, PROOF_DIR), ignore_errors=True)
 
     def set_core_pattern(self, text):
         with open(self.core_pattern, "w") as f:
@@ -475,6 +512,7 @@ class Fixture(unittest.TestCase):
                "B1_FAKE_PLAN": os.path.join(self.records, "plan.json"),
                "B1_FAKE_TRAP": self.trap, "B1_FAKE_BWRAP_LOG": self.bwrap_log,
                "B1_FAKE_MOUNT_CALLS": os.path.join(self.records, "mount-calls"),
+               "B1_FAKE_JOURNAL": os.path.join(self.records, "journal.jsonl"),
                # Inherited ReXGlue settings that the tool must drop.
                "REX_LOG_LEVEL": "trace", "REX_LOG_FILE": "true"}
         env.update(self.extra_env)
@@ -505,7 +543,7 @@ class Fixture(unittest.TestCase):
 
     def run_dirs(self):
         return sorted(os.path.join(self.logs, name) for name in os.listdir(self.logs)
-                      if name.startswith("b1-"))
+                      if name.startswith("b1-") and name != PROOF_DIR)
 
     def report(self, name="report.json"):
         dirs = self.run_dirs()
@@ -658,21 +696,53 @@ class PrepareTest(Fixture):
         self.assertEqual(self.tool("prepare"), 1)
         self.assertIn("finding watch-unusable (x2)", self.output)
 
-    def test_core_settings_unreadable_or_handler(self):
-        """R03: unreadable settings are a finding; a handler blocks the extraction."""
+    def test_core_settings_and_modes(self):
+        """R03 option B: unreadable settings are a finding; a socket and a file are refused
+        modes; a pipe needs the local proof of this boot."""
         os.unlink(self.suid)
         self.assertEqual(self.tool("prepare"), 1)
         self.assertIn("finding core-settings-unreadable", self.output)
         with open(self.suid, "w") as f:
             f.write("2\n")
-        for pattern in ("|/nix/store/x-systemd/lib/systemd/systemd-coredump %P %u",
-                        "@/run/coredump.socket"):
+        for pattern in ("@/run/systemd/coredump.socket", "core", "/var/crash/core.%p"):
             with self.subTest(pattern=pattern):
                 self.set_core_pattern(pattern)
                 self.assertEqual(self.tool("run"), 1)
-                self.assertIn("finding core-handler", self.output)
+                self.assertIn("finding core-mode-refused", self.output)
                 self.assertEqual(self.run_dirs(), [])
                 self.assertIsNone(self.recorded())
+        self.set_core_pattern(PIPE)
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+        self.assertIn("proof_found True", self.output)
+
+    def test_run_needs_a_proof_of_this_boot_kernel_and_setting(self):
+        """R03 option B: no proof, a proof of another boot, kernel or setting, or a proof
+        from a rehearsal with findings: run refuses and rexglue never starts."""
+        cases = (("none", None), ("boot", {"boot_id": "another-boot"}),
+                 ("kernel", {"kernel_release": "0.0.0"}),
+                 ("pattern", {"core_pattern_sha256": "0" * 64}),
+                 ("suid", {"suid_dumpable": "0"}))
+        for name, changes in cases:
+            with self.subTest(name=name):
+                self.remove_proof()
+                if changes:
+                    self.write_proof(**changes)
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn("finding core-proof-missing", self.output)
+                self.assertIsNone(self.recorded())
+                self.assertEqual(self.run_dirs(), [])
+        self.remove_proof()
+        self.write_proof()
+        state = b1.read_state(os.path.join(self.logs, PROOF_DIR))
+        state["controls_clean"] = False
+        b1.write_state(os.path.join(self.logs, PROOF_DIR), state)
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding core-proof-missing", self.output)
+        self.remove_proof()
+        self.write_proof()
+        self.set_core_pattern(PIPE + " changed")
+        self.assertEqual(self.tool("run"), 1)
+        self.assertIn("finding core-proof-missing", self.output)
 
     def test_j0_report_gates(self):
         """R06: no report, an unreadable one, or one that differs from J0: no extraction."""
@@ -702,7 +772,7 @@ class RunTest(Fixture):
         self.assertEqual(record["argv"], ["vfs", "dump", self.iso, self.game])
         self.assertEqual(record["cwd"], self.private)
         self.assertEqual(record["umask"], 0o077)
-        self.assertEqual(record["core"], [0, 0])
+        self.assertEqual(record["core"], [1, 1])  # option B, the sandboxed process only
         env = record["env"]
         self.assertNotIn("REX_LOG_LEVEL", env)
         self.assertNotIn("REX_LOG_FILE", env)
@@ -985,21 +1055,53 @@ class RunTest(Fixture):
         self.assertIsNone(self.recorded())
         self.assertEqual(os.listdir(self.game), [])
 
-    def test_rehearse_with_a_core_handler_runs_the_synthetic_crash(self):
-        """R03: the crash probe gives evidence for the decision; the gate stays."""
-        self.set_core_pattern("|/nix/store/x-systemd/lib/systemd/systemd-coredump %P")
-        self.plan["coredumps"] = [{"pid": 1, "sig": 11, "corefile": "none",
-                                   "exe": sys.executable}]
+    def test_rehearse_acquires_the_proof_then_run_passes(self):
+        """R03 option B, the local protocol: a control crash at limit 0 reaches the handler,
+        the same crash at limit 1 does not; rehearse records the proof, and run accepts
+        it. Neither synthetic crash counts as a core dump of the step."""
+        self.remove_proof()
         self.assertEqual(self.tool("rehearse"), 1, self.output)
         report = self.report()
         probe = self.step(report, "core-probe")
-        self.assertEqual(probe["facts"], {"probe_signal": 11, "entry_found": True,
-                                          "corefile": "none"})
-        self.assertIn("core-handler", self.codes(report))
-        self.assertIn("finding core-handler", self.summary())
-        # The synthetic crash is not counted as a core dump of the step.
-        self.assertNotIn("core-dump-recorded", self.codes(report))
+        self.assertEqual(probe["facts"], {"control_signal": 11, "control_entry_found": True,
+                                          "control_corefile": "none", "limit_one_signal": 11,
+                                          "limit_one_entry_found": False,
+                                          "proof_acquired": True})
+        self.assertEqual(self.codes(report), ["core-proof-missing"])
         self.assertEqual(self.step(report, "core-dumps")["facts"]["core_dumps_since_start"], 0)
+        state = b1.read_state(self.run_dir)
+        self.assertEqual(state["core_proof"]["result"], "validated")
+        self.assertTrue(state["controls_clean"])
+        self.assertIn("proof_acquired True", self.summary())
+        rehearsal = self.run_dir
+        time.sleep(1.1)
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+        self.assertEqual(self.tool("run"), 0, self.output)
+        runs = [d for d in self.run_dirs() if d != rehearsal]
+        self.assertEqual(len(runs), 1)
+
+    def test_proof_fails_when_the_handler_or_the_kernel_misbehaves(self):
+        """R03 option B, negative cases: no entry for the control crash (handler or
+        coredumpctl not working), or an entry for the crash at limit 1 (a kernel that does
+        not drop it), or coredumpctl failing: no proof, and run stays blocked."""
+        for name, plan in (("silent handler", {"handler_silent": True}),
+                           ("limit 1 ignored", {"limit_one_ignored": True}),
+                           ("coredumpctl", {"coredumpctl_status": 2})):
+            with self.subTest(name=name):
+                self.remove_proof() if os.path.isdir(os.path.join(self.logs, PROOF_DIR)) \
+                    else None
+                saved = dict(self.plan)
+                self.plan.update(plan)
+                self.assertEqual(self.tool("rehearse"), 1)
+                report = self.report()
+                self.assertIn("core-probe-failed", self.codes(report))
+                self.assertNotIn("core_proof", b1.read_state(self.run_dir))
+                self.plan = saved
+                shutil.rmtree(self.run_dir)
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn("finding core-proof-missing", self.output)
+                if os.path.exists(os.path.join(self.records, "journal.jsonl")):
+                    os.unlink(os.path.join(self.records, "journal.jsonl"))
 
     def test_sandbox_failures_stop_before_the_image_is_read(self):
         """R02: no bubblewrap, a too old one, one that cannot start, or a probe check that
@@ -1192,10 +1294,18 @@ class RealSandboxTest(Fixture):
             self.assertIsNone(self.recorded())
             return
         say_mode("REAL SANDBOX: available")
-        self.assertEqual(self.tool("rehearse"), 0, self.output)
-        sandbox = self.step(self.report(), "sandbox")
+        # No real crash here: a file mode is refused, so rehearse runs only the probe.
+        self.set_core_pattern("core")
+        self.assertEqual(self.tool("rehearse"), 1, self.output)
+        report = self.report()
+        self.assertEqual(self.codes(report), ["core-mode-refused"])
+        sandbox = self.step(report, "sandbox")
         self.assertEqual(sandbox["facts"]["probe_failed_checks"], [], sandbox)
+        self.assertEqual(sandbox["facts"]["probe_checks_passed"], len(b1.PROBE_CHECKS))
         shutil.rmtree(self.run_dir)
+        self.set_core_pattern(PIPE)
+        self.remove_proof()
+        self.write_proof()
         targets = [os.path.join(self.home, "leak"), os.path.join(self.private, "leak"),
                    os.path.join(self.private, "iso", "leak"), os.path.join(self.repo, "leak")]
         self.plan["write_outside"] = targets
@@ -1206,6 +1316,8 @@ class RealSandboxTest(Fixture):
             self.assertEqual(record["attempts"][target], "EROFS")
             self.assertFalse(os.path.exists(target))
         self.assertIn(record["attempts"]["image"], ("EROFS", "EPERM", "EACCES"))
+        self.assertEqual(record["core"], [1, 1])
+        self.assertEqual(record["cwd"], self.private)
         self.assertIn("files: expected 5, found 5: match", self.summary())
 
 
@@ -1379,9 +1491,14 @@ class UnitTest(unittest.TestCase):
 
     def test_sandbox_options(self):
         with tempfile.TemporaryDirectory() as private:
-            ctx = mock.Mock(private=private)
+            ctx = mock.Mock(private=private, home=os.path.dirname(private))
             ctx.args.bwrap = "bwrap"
             argv = b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
+            home = argv.index(ctx.home)
+            self.assertEqual(argv[home - 1], "--tmpfs")
+            self.assertEqual(argv[argv.index("--remount-ro") + 1], ctx.home)
+            self.assertGreater(argv.index("--remount-ro"),
+                               max(i for i, a in enumerate(argv) if a == "--bind"))
             self.assertEqual(argv[:13], ["bwrap", "--unshare-all", "--unshare-user",
                                          "--disable-userns", "--die-with-parent",
                                          "--new-session", "--ro-bind", "/", "/", "--dev",
@@ -1395,6 +1512,20 @@ class UnitTest(unittest.TestCase):
             ro = argv.index(private)
             tmpfs = [i for i, a in enumerate(argv) if a == "--tmpfs"]
             self.assertTrue(all(i < ro for i in tmpfs))
+
+    def test_sandbox_blockers(self):
+        """The sandbox hides the home folder: the tool, Python and the SDK must lie
+        elsewhere, as with the packaged command in /nix/store."""
+        ctx = mock.Mock(home="/nonexistent-home", sdk="/nix/store/x-rexglue-sdk-0.11.0")
+        self.assertEqual(b1.sandbox_blockers(ctx), [])
+        ctx.home = os.path.dirname(os.path.realpath(TOOL))
+        self.assertEqual([code for code, _ in b1.sandbox_blockers(ctx)],
+                         ["sandbox-unavailable"])
+
+    def test_core_limits(self):
+        self.assertEqual(b1.EXTRACTION_CORE_LIMIT, (1, 1))
+        self.assertEqual(b1.SUPERVISOR_CORE_LIMIT[0], 0)
+        self.assertEqual(b1.SUPERVISOR_CORE_LIMIT[1], 1)
 
     def test_root_uids(self):
         uids = b1.root_uids()

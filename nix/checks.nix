@@ -577,9 +577,10 @@ in
   #      sandbox-unavailable, and extract nothing.
   #    sandbox-mode.txt says which case ran.
   # Stubs, because they cannot run in the build sandbox: `nix store verify` (no daemon) and
-  # coredumpctl (no journal). The core dump setting is a synthetic "core" file, since the
-  # handler of the build machine is not the user's. /tmp of the procedure is a folder of the
-  # build (--tmp-watch).
+  # coredumpctl (no journal). The core dump setting is a synthetic pipe to systemd-coredump,
+  # since the handler of the build machine is not the user's, and the proof of option B
+  # (D-018) is written with the tool's own functions: only rehearse on the user's machine
+  # makes the real one. /tmp of the procedure is a folder of the build (--tmp-watch).
   b1-extract-selftest =
     pkgs.runCommand "b1-extract-selftest"
       {
@@ -611,8 +612,10 @@ in
           test_marker_rules test_mount_identity_changes_are_findings \
           test_mount_table_errors_stop_everything test_mount_point_inside_the_private_folder_is_refused \
           test_folder_links_and_xdg_components_are_refused test_unsafe_parent_folder_is_refused \
-          test_core_settings_unreadable_or_handler test_core_dumps_and_coredumpctl_errors \
-          test_rehearse_with_a_core_handler_runs_the_synthetic_crash test_j0_report_gates \
+          test_core_settings_and_modes test_core_dumps_and_coredumpctl_errors \
+          test_rehearse_acquires_the_proof_then_run_passes test_j0_report_gates \
+          test_run_needs_a_proof_of_this_boot_kernel_and_setting \
+          test_proof_fails_when_the_handler_or_the_kernel_misbehaves \
           test_image_hash_mismatch_with_the_j0_report_stops_before_rexglue test_sandbox_failures_stop_before_the_image_is_read \
           test_summary_holds_no_free_text test_summary_validators_reject_free_text \
           test_sigterm_and_repeated_signals_finish_the_controls test_killed_supervisor_leaves_a_detectable_state_and_resume_finishes \
@@ -640,8 +643,9 @@ in
         printf '#!%s\n[ "$1 $2 $3" = "--no-pager --json=short list" ] || exit 64\necho "No coredumps found." >&2\nexit 1\n' \
           "${pkgs.bash}/bin/bash" > "$S/coredumpctl"
         chmod 755 "$S/nix" "$S/coredumpctl"
-        echo core > "$S/core_pattern"
-        echo 0 > "$S/suid_dumpable"
+        echo "|/nix/store/synthetic-systemd/lib/systemd/systemd-coredump %P %u %g %s %t %c %h" \
+          > "$S/core_pattern"
+        echo 2 > "$S/suid_dumpable"
         ${python}/bin/python3 -I -c '
         import hashlib, importlib.util, json, os, sys
         spec = importlib.util.spec_from_file_location("t", sys.argv[1])
@@ -666,6 +670,19 @@ in
         ' ${self}/tools/test_iso_identify.py "$P/iso/fifa2010wc.iso" "$W/reference.json" \
           "$P/logs/j0-identification.json"
         chmod a-w "$P/iso/fifa2010wc.iso"
+        ${python}/bin/python3 -I -c '
+        import importlib.util, os, sys
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location("b1", sys.argv[1])
+        b1 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(b1)
+        folder = os.path.join(sys.argv[2], "logs", "b1-rehearse-20000101T000000Z")
+        os.mkdir(folder, 0o700)
+        identity = b1.core_identity(sys.argv[3], sys.argv[4])
+        b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
+                                "phase": "complete", "controls_clean": True,
+                                "core_proof": dict(identity, result="validated")})
+        ' ${self}/tools/b1_extract.py "$P" "$S/core_pattern" "$S/suid_dumpable"
         b1() {
           (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
             --nix "$S/nix" --coredumpctl "$S/coredumpctl" --reference "$W/reference.json" \
@@ -674,7 +691,8 @@ in
 
         # prepare writes nothing.
         b1 prepare > "$out/1-prepare.txt" || { cat "$out/1-prepare.txt"; exit 1; }
-        [ "$(ls -A "$P/logs")" = "j0-identification.json" ] || { echo "prepare wrote"; exit 1; }
+        [ "$(ls -A "$P/logs" | tr '\n' ' ')" = "b1-rehearse-20000101T000000Z j0-identification.json " ] \
+          || { ls -A "$P/logs"; echo "prepare wrote"; exit 1; }
 
         if ! grep -q "REAL SANDBOX: available" "$out/sandbox-mode.txt"; then
           status=0
@@ -693,7 +711,8 @@ in
         cat "$out/2-run.txt"
         run=$(echo "$P"/logs/b1-run-*)
         for line in "vfs-dump             ok       exit 0   type GDFX, nodes 9" \
-                    "probe_checks_passed 22" \
+                    "probe_checks_passed 23" \
+                    "proof_found True" \
                     "files: expected 5, found 5: match" \
                     "directories (root not counted): expected 3, found 3: match" \
                     "ReXGlue nodes = files + directories + root: expected 9, found 9: match" \

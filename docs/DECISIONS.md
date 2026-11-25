@@ -26,6 +26,7 @@
 | D-015 | Lancement de J2 : autorisations PA-0 et PJ2-3, arbitrages de la phase A | **Acceptée** (2026-11-23) ; phase B soumise à PB-0, franchi le 2026-11-24 (D-017) |
 | D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi à cette date, franchi ensuite (D-017) |
 | D-017 | Entrée en phase B de J2 : PB-0 franchi, B1 seulement | **Acceptée** (2026-11-24) ; PB-1 non franchi |
+| D-018 | Arbitrages de B1 : plantages de l'extraction (option B) et rapport J0 local obligatoire | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
 
 ---
 
@@ -473,3 +474,34 @@
 - **Limite** : le passage de PB-0 autorise le travail local dans ce cadre. Il ne prétend
   pas garantir l'absence de fuite hors du périmètre couvert par les contrôles
   (`docs/J2_PHASE_B_CONTROLS.md` §3, « Limite »).
+
+## D-018 — Arbitrages de B1 : plantages de l'extraction et rapport J0 local
+
+- **Statut** : **Acceptée** (2026-11-25). Source : la décision du porteur du projet,
+  consignée dans la PR #33,
+  [commentaire 7161970968](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7161970968).
+  Elle répond aux questions posées après la revue
+  [7158108520](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7158108520) (B1-R03 et
+  B1-R06).
+- **Décision 1 : option B pour les plantages de l'extraction** (`docs/J2_B1_EXTRACTION.md`
+  §6) :
+  - `RLIMIT_CORE` exactement à `1` pour le seul processus d'extraction, dans le bac à
+    sable ;
+  - sous réserve d'une **validation synthétique** sur le noyau et le mode `core_pattern`
+    effectivement utilisés ;
+  - `private_guard` adapté de façon ciblée, sans affaiblir les autres contrôles. Dans
+    l'implémentation, aucun de ses contrôles n'a dû changer : l'outil garde une limite
+    souple de `0`, que `private_guard` contrôle, et seul le processus confiné reçoit `1` ;
+  - **seul le mode tube est accepté** ; le mode socket, ou tout mode non validé, est refusé ;
+  - **`run` reste bloqué** tant que la preuve locale n'est pas acquise ;
+  - aucun `sudo`, aucune modification globale de NixOS ;
+  - les cas négatifs et le protocole local, sans données propriétaires, sont documentés et
+    testés.
+- **Décision 2 : pas de B1 sans rapport J0 local.** Le rapport valide et concordant est
+  obligatoire ; son absence, une erreur ou une discordance bloquent l'extraction
+  (`docs/J2_B1_EXTRACTION.md` §7).
+- **Ce qui ne change pas** :
+  - ces arbitrages ne valent **ni autorisation de fusion, ni autorisation d'extraction
+    réelle** ;
+  - **PB-1 n'est pas franchi**, et B2 reste interdit ;
+  - D-017 reste en vigueur : B1 seulement, sur la machine du porteur.

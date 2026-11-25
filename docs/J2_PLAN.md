@@ -339,9 +339,13 @@ décision explicite) :
 - **État (2026-11-24)** : procédure et tests synthétiques en PR brouillon. B1 n'est pas
   exécutée.
 - **Revue de la PR #33 (2026-11-25)** : corrections B1-R01 à B1-R07, dont le confinement
-  de l'extraction dans un bac à sable bubblewrap. `run` reste bloqué jusqu'à la décision du
-  porteur sur les plantages (`J2_B1_EXTRACTION.md` §6.3) et, sans rapport J0 local, sur la
-  règle du §7.
+  de l'extraction dans un bac à sable bubblewrap.
+- **Arbitrages du porteur (D-018)** :
+  - option B pour les plantages : limite `1` pour l'extraction seule, mode tube seul ;
+  - rapport J0 local obligatoire.
+
+  `run` reste bloqué tant que `rehearse` n'a pas apporté la preuve locale du
+  `J2_B1_EXTRACTION.md` §6.3, dans le même démarrage.
 - **Critère de sortie** (PB-1) :
   - 49 fichiers et 8 dossiers, comme dans le rapport J0 ;
   - les SHA-256 de `default.xex` et `fifadllzf.xex` extraits sont ceux du rapport J0 ;
