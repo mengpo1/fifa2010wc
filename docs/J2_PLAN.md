@@ -352,6 +352,10 @@ décision explicite) :
 - **Arbitrage du porteur (D-019)** : du magasin Nix, le bac à sable ne montre que la
   fermeture de la commande empaquetée, calculée à la construction ; sans fermeture valide
   et complète, rien ne démarre (`J2_B1_EXTRACTION.md` §3.4).
+- **Essai local du porteur (2026-11-26)**, version 5 fusionnée : `prepare` conforme ;
+  `rehearse` en `core-probe-failed`, les plantages synthétiques ne démarrant pas. Cause :
+  bubblewrap cherché par son nom dans un environnement vide. Corrigé en version 6, avec
+  `diagnose` en lecture seule (`J2_B1_EXTRACTION.md` §6.4). `run` reste non autorisé.
 - **Critère de sortie** (PB-1) :
   - 49 fichiers et 8 dossiers, comme dans le rapport J0 ;
   - les SHA-256 de `default.xex` et `fifadllzf.xex` extraits sont ceux du rapport J0 ;
