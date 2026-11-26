@@ -1,7 +1,7 @@
 # Étape B1 — extraction contrôlée de l'arborescence du disque
 
 > Étape B1 de `docs/J2_PLAN.md` §4.1, [ticket #32](https://github.com/mengpo1/fifa2010wc/issues/32).
-> Version 5 :
+> Version 6 :
 > - corrections de la revue de l'orchestrateur sur la PR #33 (constats B1-R01 à B1-R07) ;
 > - arbitrages du porteur, D-018 : option B pour les plantages, rapport J0 local
 >   obligatoire ;
@@ -9,7 +9,10 @@
 >   liée au protocole et aux composants (R03-B), contrôles après coup isolés (R05-A),
 >   confinement par liste positive (R02) ;
 > - arbitrage du porteur, D-019 : du magasin Nix, le bac à sable ne montre que la
->   fermeture de la commande empaquetée (§3.4).
+>   fermeture de la commande empaquetée (§3.4) ;
+> - essai local du porteur de la version 5 : les plantages synthétiques de la preuve ne
+>   démarraient pas, faute de trouver bubblewrap par son nom ; corrigé, avec une commande
+>   de diagnostic en lecture seule (§6.4).
 > PB-0 est franchi depuis le 2026-11-24 (D-017). **Ce document et son outil ne valent ni
 > exécution de B1, ni PB-1.**
 > - Ils ont été préparés sans aucune donnée du jeu : ni ISO, ni XEX, ni journal du jeu.
@@ -449,7 +452,7 @@ La preuve n'est acquise que si :
 répétition, avec :
 - **ce démarrage** (`boot_id`), **ce noyau** (version et compilation), **ce
   `core_pattern`** (son SHA-256) et **ce `suid_dumpable`** ;
-- **la version du protocole** de la preuve (3) et **la version de l'outil** (5) ;
+- **la version du protocole** de la preuve (3) et **la version de l'outil** (6) ;
 - **le SHA-256 du fichier de l'outil** ;
 - **le chemin et le SHA-256 de bubblewrap**, et **le chemin de Python** ;
 - **la fermeture du magasin** que le bac à sable montre (le SHA-256 de `store-paths`,
@@ -474,6 +477,58 @@ demandent une nouvelle répétition.
   celle du plantage témoin, reconnue par son pid, son uid et son exécutable. Une entrée
   tardive de l'essai à la limite `1` n'est pas écartée : elle est un constat.
 - **Aucune modification du système.**
+
+### 6.4 Le lancement des plantages synthétiques, et leur diagnostic
+
+**Constat du porteur sur la version 5** ([commentaire 7188564347](https://github.com/mengpo1/fifa2010wc/pull/33#issuecomment-7188564347)) :
+`rehearse` passait la sonde (26 sur 26), puis `core-probe-failed`, avec un signal
+`invalid` et aucun pid, pour le témoin comme pour l'essai à la limite `1`.
+
+**Cause** [V] :
+- la commande empaquetée nomme bubblewrap `bwrap`, trouvé dans son `PATH` ;
+- les deux plantages synthétiques sont lancés avec un **environnement vide**, pour que le
+  journal ne nomme aucun chemin privé ;
+- avec un environnement vide, Python cherche un programme nommé dans `/bin` et `/usr/bin`
+  seulement. Sur NixOS, `bwrap` n'y est pas : le lancement échouait avant bubblewrap,
+  sans rien écrire ;
+- la sonde, elle, reçoit l'environnement de l'étape, avec `PATH` : elle passait ;
+- les tests donnaient toujours bubblewrap par un chemin absolu, et le contrôle Nix ne
+  lançait pas `rehearse` avec la commande empaquetée : le cas n'était pas couvert.
+
+Reproduit ici avec le faux et le vrai bubblewrap nommés `bwrap` : exactement les faits
+du porteur.
+
+**Correction (version 6)** :
+- bubblewrap est toujours lancé **par son chemin absolu**, trouvé une fois dans le `PATH`
+  de l'outil ; sans lui, rien ne démarre ;
+- l'issue de chaque lancement est donnée par des catégories fixes :
+  - `control_launch`, `limit_one_launch` : `ok`, `bwrap-not-found`,
+    `bwrap-not-started`, `no-program`, `several-programs`, `timed-out` ;
+  - `control_stderr`, `limit_one_stderr` : `absent`, `empty`, `bwrap-message`,
+    `python-traceback`, `unreadable`, `other`. Jamais le texte.
+
+La preuve, son protocole et D-018 ne changent pas : seule la façon de lancer bubblewrap
+change.
+
+**Diagnostic local, en lecture seule** (`diagnose`), par exemple pour la répétition faite
+avec la version 5 :
+
+```bash
+"$B" --repo "$PWD" diagnose --run-folder b1-rehearse-<date>
+```
+
+- Il ne lit que le dossier d'exécution : `state.json`, `report.json`, et les sorties des
+  deux plantages et de la sonde.
+- Il ne restitue que des catégories : la catégorie de chaque sortie, le nombre de pids
+  identifiés, et les faits des étapes `sandbox` et `core-probe`, passés par les
+  validateurs du résumé.
+- Il n'écrit rien et ne lance rien.
+- Sa dernière ligne est un code :
+  - `crashes-not-started` : aucune sortie et aucun pid, ce que donnait la version 5 ;
+  - `bubblewrap-refused-a-crash` ;
+  - `crash-program-error` ;
+  - `crashes-started` ;
+  - `unknown`.
 
 ## 7. Le rapport J0 local (B1-R06, D-018)
 
@@ -611,7 +666,8 @@ propre du dépôt, hors du dossier privé.
    ```
 
    Le résumé doit montrer `proof_acquired True`. La preuve vaut 24 heures, pour ce
-   démarrage et cette version de l'outil (§6.3).
+   démarrage et cette version de l'outil (§6.3). Sinon, `diagnose` aide à en trouver la
+   raison, sans rien à partager d'autre que son résultat (§6.4).
 5. **B1**, dans le même démarrage, seulement après une répétition sans autre constat que
    `core-proof-missing`, et une fois cette procédure revue et fusionnée :
 
@@ -627,7 +683,7 @@ propre du dépôt, hors du dossier privé.
 
 ## 12. Essais sans données du jeu, et ce qu'ils ne couvrent pas
 
-**Tests unitaires** (`tools/test_b1_extract.py`, 69 tests), lancés par le contrôle Nix
+**Tests unitaires** (`tools/test_b1_extract.py`, 78 tests), lancés par le contrôle Nix
 `b1-extract-selftest` sous l'utilisateur sans privilèges du bac à sable, **sans aucun saut**.
 - **Simulés** : `rexglue`, `findmnt`, `coredumpctl`, `nix` et, pour l'orchestration,
   `bwrap`. Le faux `bwrap` vérifie les options du bac à sable et répond à la sonde. Pour
@@ -645,6 +701,7 @@ propre du dépôt, hors du dossier privé.
 | R04 | Sentinelles dans les chemins, un constat de la garde, le bloc de `rexglue` et les montages ; validateurs ; codes inconnus |
 | R05 | Repère absent après un `OK` ; repère présent avec un constat ; `SIGTERM` puis deux signaux pendant les contrôles ; `SIGKILL` de l'outil, état inachevé, refus, `still-running`, reprise sans relance ni suppression |
 | D-019 | Fermeture valide et rapportée ; absente : `prepare`, `rehearse` et `run` refusent ; chemin hors du magasin, chemin manquant, `registration` différente, fichiers inscriptibles, `registration` malformée, lien, dossier hors du magasin, refus de `nix` : `store-closure-invalid` ; référence manquante, SDK ou Python absents : `store-closure-incomplete`. Chaque fois, ni bubblewrap ni `rexglue` ne démarrent. Options sans le magasin entier, et pas de bac à sable sans fermeture. Vrai bac à sable : sonde à 26, entrée synthétique hors fermeture, entrée de CP-3 et chemin de bubblewrap absents |
+| Essai du porteur, v5 (§6.4) | bubblewrap nommé `bwrap` et trouvé dans le `PATH`, faux et vrai : les deux plantages démarrent et sont identifiés ; bubblewrap qui refuse un plantage, bubblewrap introuvable : catégories `no-program`, `bwrap-message`, `bwrap-not-found` ; `diagnose` : répétition du porteur lue comme `crashes-not-started`, sorties en catégories et jamais en texte, faits validés, rien d'écrit, noms de dossier refusés |
 | R05-A | Erreur d'écriture dans CP-3 après, image illisible après : les contrôles suivants s'exécutent, `evidence-incomplete`, passage inachevé pour toute commande ; reprise qui échoue encore, puis qui termine (`complete`), chacune dans ses propres fichiers |
 | R06, D-018 | Rapport absent, illisible, d'un dossier, d'autres comptes ; empreinte de l'image différente : `rexglue` jamais lancé |
 | R07 | Liens à la place de `game`, `logs`, `xdg/config` et `app` ; parent modifiable par d'autres ; montage dans le dossier privé ; autre appareil |
@@ -658,7 +715,10 @@ synthétique.
 - La fermeture de la commande empaquetée y est contrôlée (`closure_closed True,
   closure_roots_covered True, closure_registered True`), et la vraie extraction tourne avec
   elle seule.
-- **Quand le bac à sable peut démarrer** : sonde à 26 sur 26 ; `Nodes` 9 pour 5 fichiers
+- **Quand le bac à sable peut démarrer** : `rehearse` de la commande empaquetée, qui
+  nomme bubblewrap `bwrap` comme chez le porteur : les deux plantages démarrent et sont
+  identifiés (`control_signal 11`, `limit_one_signal 11`), puis `diagnose` donne
+  `crashes-started` ; sonde à 26 sur 26 ; `Nodes` 9 pour 5 fichiers
   et 3 dossiers ; écritures seulement dans `game/` et le dossier d'exécution ; second
   passage refusé ; échec de `rexglue` sur un fichier qui n'est pas un conteneur, avec
   `postflight`.

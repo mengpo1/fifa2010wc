@@ -624,6 +624,11 @@ in
           test_an_error_in_one_control_lets_the_others_run_and_resume_finishes \
           test_an_unreadable_image_after_the_step_is_incomplete_evidence \
           test_socket_or_fifo_in_the_private_folder_is_refused test_sandbox_options \
+          test_bubblewrap_given_by_name_starts_the_synthetic_crashes \
+          test_real_crashes_start_with_bubblewrap_given_by_name \
+          test_a_crash_refused_by_bubblewrap_is_categorized \
+          test_the_owner_rehearsal_reads_as_crashes_not_started \
+          test_outputs_are_categories_never_text \
           test_a_valid_closure_is_checked_and_reported test_absent_closure_refuses_everything \
           test_invalid_closure_is_refused_before_anything_starts \
           test_missing_dependency_is_refused_before_anything_starts test_sandbox_blockers \
@@ -726,6 +731,28 @@ in
           echo "the sandbox cannot start here: run refused, nothing extracted" \
             >> "$out/sandbox-mode.txt"
           exit 0
+        fi
+
+        # rehearse, as on the owner's machine (PR #33, comment 7188564347): the packaged
+        # command names bubblewrap `bwrap`, found on its PATH, and the two synthetic crashes
+        # run with an empty environment. Both must start in the real sandbox and be
+        # identified. No handler lists them here (stub coredumpctl), so the proof itself
+        # fails, as it must; the extraction below uses the proof written above.
+        status=0
+        b1 rehearse > "$out/1b-rehearse.txt" || status=$?
+        cat "$out/1b-rehearse.txt"
+        [ "$status" -eq 1 ] || { echo "rehearse without a handler must not prove"; exit 1; }
+        for fact in "control_signal 11, control_launch ok" "control_identified True" \
+                    "limit_one_signal 11, limit_one_launch ok" "limit_one_identified True" \
+                    "probe_checks_passed 26"; do
+          grep -qF "$fact" "$out/1b-rehearse.txt" || { echo "rehearse lacks: $fact"; exit 1; }
+        done
+        rehearsal=$(cd "$P/logs" && ls -d b1-rehearse-2*Z | grep -v '^b1-rehearse-20000101' )
+        b1 diagnose --run-folder "$rehearsal" > "$out/1c-diagnose.txt"
+        cat "$out/1c-diagnose.txt"
+        grep -qx "diagnosis: crashes-started" "$out/1c-diagnose.txt"
+        if grep -qE -e "$W" -e "[0-9a-f]{64}" "$out/1b-rehearse.txt" "$out/1c-diagnose.txt"; then
+          echo "a path or a hash reached the console"; exit 1
         fi
 
         # run, in the real sandbox.

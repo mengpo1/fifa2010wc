@@ -252,6 +252,9 @@ if "_crash" in cmd:
     # does with a pipe. The plan can break the handler, the kernel, the identification of
     # the program, the journal or the settings.
     import resource, time
+    if plan.get("crash_bwrap_refuses"):
+        sys.stderr.write("bwrap: Can't mount proc on /newroot/proc: /SENTINEL/private\n")
+        sys.exit(1)
     status({"child-pid": os.getpid()})
     soft = resource.getrlimit(resource.RLIMIT_CORE)[0]
     reaches = (soft == 0 and not plan.get("handler_silent")) or \
@@ -1205,9 +1208,13 @@ class RunTest(Fixture):
         self.assertEqual(self.tool("rehearse"), 1, self.output)
         report = self.report()
         probe = self.step(report, "core-probe")
-        self.assertEqual(probe["facts"], {"control_signal": 11, "control_identified": True,
+        self.assertEqual(probe["facts"], {"control_signal": 11, "control_launch": "ok",
+                                          "control_stderr": "empty",
+                                          "control_identified": True,
                                           "control_entry_found": True,
                                           "control_corefile": "none", "limit_one_signal": 11,
+                                          "limit_one_launch": "ok",
+                                          "limit_one_stderr": "empty",
                                           "limit_one_identified": True,
                                           "limit_one_entry_found": False,
                                           "foreign_entries": 0, "settings_stable": True,
@@ -1256,6 +1263,39 @@ class RunTest(Fixture):
                 self.assertIn("finding core-proof-missing", self.output)
                 if os.path.exists(os.path.join(self.records, "journal.jsonl")):
                     os.unlink(os.path.join(self.records, "journal.jsonl"))
+
+    def test_bubblewrap_given_by_name_starts_the_synthetic_crashes(self):
+        """The owner's NixOS rehearsal of version 5 (PR #33, comment 7188564347): the
+        packaged command names bubblewrap `bwrap`, found on its PATH. The synthetic crashes
+        run with an empty environment, where `bwrap` cannot be found by name: neither crash
+        started (signal and pid unknown), while the probe, which has the step's PATH, passed.
+        The sandbox must start bubblewrap by its absolute path."""
+        self.bwrap = "bwrap"  # found in the fake bin folder through PATH, as packaged
+        self.remove_proof()
+        self.assertEqual(self.tool("rehearse"), 1, self.output)
+        report = self.report()
+        self.assertEqual(self.codes(report), ["core-proof-missing"], self.output)
+        facts = self.step(report, "core-probe")["facts"]
+        self.assertEqual((facts["control_signal"], facts["control_identified"],
+                          facts["limit_one_signal"], facts["limit_one_identified"]),
+                         (11, True, 11, True), facts)
+        self.assertEqual((facts["control_launch"], facts["limit_one_launch"]), ("ok", "ok"))
+        self.assertTrue(facts["proof_acquired"])
+
+    def test_a_crash_refused_by_bubblewrap_is_categorized(self):
+        """When bubblewrap refuses a synthetic crash, the summary says so with fixed
+        categories, never with its message."""
+        self.remove_proof()
+        self.plan["crash_bwrap_refuses"] = True
+        self.assertEqual(self.tool("rehearse"), 1)
+        facts = self.step(self.report(), "core-probe")["facts"]
+        self.assertEqual((facts["control_launch"], facts["control_stderr"],
+                          facts["limit_one_launch"], facts["limit_one_stderr"]),
+                         ("no-program", "bwrap-message", "no-program", "bwrap-message"))
+        self.assertIn("core-probe-failed", self.codes(self.report()))
+        self.assertIn("control_launch no-program, control_stderr bwrap-message", self.output)
+        self.assert_shareable(self.output)
+        self.assert_shareable(self.summary())
 
     def test_a_late_control_entry_is_still_found(self):
         """R03-A: a control entry that the journal writes late is found within the wait."""
@@ -1423,6 +1463,92 @@ class EvidenceTest(Fixture):
         for suffix in ("-resume", "-resume-2"):
             self.assertTrue(os.path.exists(os.path.join(self.run_dir,
                                                         f"report{suffix}.json")))
+
+
+class DiagnoseTest(Fixture):
+    """PR #33, comment 7188564347: a local, read-only diagnosis of a rehearsal folder that
+    gives only fixed categories, never the outputs or a path."""
+
+    OWNER_FACTS = {"control_signal": None, "control_identified": False,
+                   "control_entry_found": False, "control_corefile": "unknown",
+                   "limit_one_signal": None, "limit_one_identified": False,
+                   "limit_one_entry_found": False, "foreign_entries": 0,
+                   "settings_stable": True, "proof_acquired": False}
+
+    def folder(self, outputs=None, facts=None, pids=(), version=5):
+        """A rehearsal folder as version 5 left it on the owner's machine: the outputs of
+        the synthetic programs, state.json and report.json."""
+        run_dir = os.path.join(self.logs, "b1-rehearse-20261126T090000Z")
+        os.mkdir(run_dir, 0o700)
+        for name in b1.DIAGNOSED_OUTPUTS:
+            with open(os.path.join(run_dir, name), "w") as f:
+                f.write((outputs or {}).get(name, ""))
+        b1.write_state(run_dir, {"tool_version": version, "command": "rehearse",
+                                 "phase": "complete", "core_probe_pids": list(pids)})
+        report = {"steps": [{"step": "sandbox", "facts": {"probe_checks": 26,
+                                                          "probe_checks_passed": 26,
+                                                          "probe_failed_checks": []}},
+                            {"step": "core-probe", "facts": facts or self.OWNER_FACTS}]}
+        with open(os.path.join(run_dir, "report.json"), "w") as f:
+            json.dump(report, f)
+        return os.path.basename(run_dir)
+
+    def diagnose(self, name):
+        before = snapshot(self.w, skip=(self.records,))
+        self.assertEqual(self.tool("diagnose", "--run-folder", name), 0, self.output)
+        self.assertEqual(snapshot(self.w, skip=(self.records,)), before, "diagnose wrote")
+        self.assert_shareable(self.output)
+        return self.output
+
+    def test_the_owner_rehearsal_reads_as_crashes_not_started(self):
+        out = self.diagnose(self.folder())
+        self.assertIn("run folder: rehearse, tool version 5", out)
+        for name in b1.DIAGNOSED_OUTPUTS:
+            self.assertIn(f"{name:<24} empty", out)
+        self.assertIn("crash pids identified    0", out)
+        self.assertIn("control_signal invalid, control_identified False", out)
+        self.assertIn("probe_checks_passed 26, probe_failed_checks -", out)
+        self.assertTrue(out.rstrip().endswith("diagnosis: crashes-not-started"), out)
+        self.assertIsNone(self.recorded())
+
+    def test_outputs_are_categories_never_text(self):
+        cases = (({"core-control.stderr": f"bwrap: cannot open /{SENTINEL}/x\n"},
+                  "bubblewrap-refused-a-crash", "bwrap-message"),
+                 ({"core-limit-one.stderr": "Traceback (most recent call last):\n  File "
+                                            f"\"/{SENTINEL}\", line 1\n"},
+                  "crash-program-error", "python-traceback"),
+                 ({"core-control.stdout": f"{SENTINEL} free text\n"}, "unknown", "other"))
+        for outputs, diagnosis, kind in cases:
+            with self.subTest(diagnosis=diagnosis):
+                name = self.folder(outputs)
+                out = self.diagnose(name)
+                self.assertIn(f"diagnosis: {diagnosis}", out)
+                self.assertIn(f"{next(iter(outputs)):<24} {kind}", out)
+                shutil.rmtree(os.path.join(self.logs, name))
+
+    def test_report_facts_pass_the_summary_validators(self):
+        facts = dict(self.OWNER_FACTS, control_corefile=f"/{SENTINEL}/core",
+                     control_signal=f"{SENTINEL}")
+        out = self.diagnose(self.folder(facts=facts, pids=[4242, 4243]))
+        self.assertIn("control_signal invalid", out)
+        self.assertIn("control_corefile invalid", out)
+        self.assertIn("crash pids identified    2", out)
+        self.assertIn("diagnosis: crashes-started", out)
+
+    def test_a_fixed_rehearsal_reads_as_crashes_started(self):
+        self.remove_proof()
+        self.bwrap = "bwrap"
+        self.tool("rehearse")
+        out = self.diagnose(os.path.basename(self.report() and self.run_dir))
+        self.assertIn("run folder: rehearse, tool version 6", out)
+        self.assertIn("crash pids identified    1", out)  # the control's, kept since v5
+        self.assertIn("control_launch ok", out)
+        self.assertIn("diagnosis: crashes-started", out)
+
+    def test_bad_folder_names_are_refused(self):
+        for name in ("../x", "b1-rehearse-x", "b1-run-20261126T090000Z"):
+            with self.subTest(name=name):
+                self.assertEqual(self.tool("diagnose", "--run-folder", name), 2)
 
 
 class StoreClosureTest(Fixture):
@@ -1661,6 +1787,34 @@ class RealSandboxTest(Fixture):
         # D-019: the sandbox shows only the store closure, so Python needs its own.
         self.assertTrue(os.environ.get("B1_PYTHON_CLOSURE"),
                         "set B1_PYTHON_CLOSURE to a closureInfo folder of this Python")
+
+    def test_real_crashes_start_with_bubblewrap_given_by_name(self):
+        """The owner's NixOS rehearsal of version 5, with the real bubblewrap named `bwrap`
+        and found on PATH, as the packaged command does: both synthetic crashes must start
+        in the real sandbox and die by SIGSEGV, each with one identified pid. No handler
+        lists them here, so the proof itself fails, as it must without one."""
+        if self.real is None:
+            self.fail("bubblewrap is required for this test (B1_REAL_BWRAP or PATH)")
+        named = os.path.join(self.w, "named")
+        os.mkdir(named)
+        os.symlink(self.real, os.path.join(named, "bwrap"))
+        self.extra_env = {"PATH": os.pathsep.join([named, self.bin,
+                                                   os.environ.get("PATH", "")])}
+        self.bwrap = "bwrap"
+        self.remove_proof()
+        self.assertEqual(self.tool("rehearse"), 1, self.output)
+        report = self.report()
+        if self.reason:
+            self.assertIn("sandbox-unavailable", self.codes(report))
+            return
+        facts = self.step(report, "core-probe")["facts"]
+        self.assertEqual((facts["control_signal"], facts["control_identified"],
+                          facts["limit_one_signal"], facts["limit_one_identified"]),
+                         (11, True, 11, True), facts)
+        self.assertEqual((facts["control_launch"], facts["limit_one_launch"]), ("ok", "ok"))
+        self.assertFalse(facts["control_entry_found"])
+        self.assertEqual(sorted(set(self.codes(report))),
+                         ["core-probe-failed", "core-proof-missing"])
 
     def test_real_sandbox_confines_the_extraction(self):
         """R02 and D-019 with the real bubblewrap: the probe passes, and a fake rexglue that
@@ -1913,9 +2067,17 @@ class UnitTest(unittest.TestCase):
             closure = ["/nix/store/" + "a" * 32 + "-python3", "/nix/store/" + "b" * 32 + "-sdk"]
             ctx = mock.Mock(private=private, home=os.path.dirname(private), store=private,
                             closure=closure)
+            # bubblewrap is named, as in the packaged command, and started by its path.
+            bin_dir = os.path.join(private, "bin")
+            os.mkdir(bin_dir)
+            exe = os.path.join(bin_dir, "bwrap")
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(exe, 0o755)
             ctx.args.bwrap = "bwrap"
-            argv = b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
-            self.assertEqual(argv[:8], ["bwrap", "--unshare-all", "--unshare-user",
+            with mock.patch.dict(os.environ, {"PATH": bin_dir}):
+                argv = b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
+            self.assertEqual(argv[:8], [exe, "--unshare-all", "--unshare-user",
                                         "--disable-userns", "--die-with-parent",
                                         "--new-session", "--tmpfs", "/"])
             self.assertNotIn("--share-net", argv)
@@ -1932,10 +2094,25 @@ class UnitTest(unittest.TestCase):
             self.assertGreater(argv.index("--remount-ro"),
                                max(i for i, a in enumerate(argv) if a == "--bind"))
             self.assertEqual(argv[-3:], ["9", "--", "cmd"])
+            with mock.patch.dict(os.environ, {"PATH": private}):
+                with self.assertRaises(FileNotFoundError):
+                    b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
             for empty in (None, []):
                 ctx.closure = empty
                 with self.assertRaises(RuntimeError):
                     b1.sandbox_argv(ctx, private + "/logs/r", ["cmd"], 9)
+
+    def test_a_crash_without_bubblewrap_is_categorized(self):
+        """A synthetic crash whose bubblewrap cannot be found is reported as such."""
+        with tempfile.TemporaryDirectory() as run_dir:
+            ctx = mock.Mock(private=run_dir, closure=["/nix/store/" + "a" * 32 + "-x"])
+            ctx.args.bwrap = os.path.join(run_dir, "no-such-bwrap")
+            sig, pid, window, launch = b1.synthetic_crash(ctx, run_dir, "core-control",
+                                                          b1.CONTROL_CORE_LIMIT)
+            self.assertEqual((sig, pid, launch), (None, None, "bwrap-not-found"))
+            self.assertEqual(b1.output_kind(os.path.join(run_dir, "core-control.stderr")),
+                             "empty")
+            self.assertEqual(b1.output_kind(os.path.join(run_dir, "absent")), "absent")
 
     def test_sandbox_blockers(self):
         """D-019: Python and the SDK must be in the validated store closure; without one,

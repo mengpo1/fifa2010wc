@@ -53,7 +53,7 @@ import subprocess
 import sys
 import time
 
-TOOL_VERSION = 5
+TOOL_VERSION = 6
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GUARD = os.path.join(HERE, "private_guard.py")
 ISO_NAME = "fifa2010wc.iso"
@@ -124,6 +124,14 @@ STATE_FILE = "state.json"
 # (src/rexglue/command/vfs_command.cpp). Nodes counts the root of the container too. The
 # Source row names the image path, so it is never read here.
 BLOCK_RE = re.compile(r"^\s+(Type|Nodes):\s+(\S+)\s*$", re.MULTILINE)
+
+# How a synthetic crash of the proof was launched, and what its outputs hold: fixed
+# categories, the only things the summary and `diagnose` say about them.
+CRASH_LAUNCH = ("ok", "bwrap-not-found", "bwrap-not-started", "no-program",
+                "several-programs", "timed-out")
+OUTPUT_KINDS = ("absent", "empty", "bwrap-message", "python-traceback", "unreadable",
+                "other")
+
 
 # Finding codes. Only these codes, and their counts, reach the summary; the detail of a
 # finding, which can name a local path, stays in report.json.
@@ -278,9 +286,12 @@ SUMMARY_FACTS = {
     "j0-report": {"report_present": _bool, "report_matches_j0": _bool},
     "sandbox": {"bwrap_version_ok": _bool, "probe_checks": _int,
                 "probe_checks_passed": _int, "probe_failed_checks": _names(PROBE_CHECKS)},
-    "core-probe": {"control_signal": SIGNAL_NUMBER, "control_identified": _bool,
+    "core-probe": {"control_signal": SIGNAL_NUMBER, "control_launch": _enum(*CRASH_LAUNCH),
+                   "control_stderr": _enum(*OUTPUT_KINDS), "control_identified": _bool,
                    "control_entry_found": _bool, "control_corefile": COREFILE,
-                   "limit_one_signal": SIGNAL_NUMBER, "limit_one_identified": _bool,
+                   "limit_one_signal": SIGNAL_NUMBER,
+                   "limit_one_launch": _enum(*CRASH_LAUNCH),
+                   "limit_one_stderr": _enum(*OUTPUT_KINDS), "limit_one_identified": _bool,
                    "limit_one_entry_found": _bool, "foreign_entries": _int,
                    "settings_stable": _bool, "proof_acquired": _bool},
     "mounts-before": {"mounts_in_scope": _int, "mount_points_watched": _int},
@@ -1190,8 +1201,20 @@ def check_j0_report(ctx, findings, facts, notes):
 
 # --- the sandbox (R02) --------------------------------------------------------------------
 
+def bwrap_executable(ctx):
+    """bubblewrap by its absolute path, found on the PATH of this tool. The packaged command
+    names it `bwrap`; the synthetic crashes run with an empty environment, where a name
+    alone is looked up in /bin and /usr/bin only, so a sandbox is never started by name
+    (the owner's rehearsal of version 5, PR #33, comment 7188564347)."""
+    found = shutil.which(ctx.args.bwrap)
+    return os.path.abspath(found) if found else None
+
+
 def bwrap_version(ctx):
-    code, out, err, error = run_capture([ctx.args.bwrap, "--version"], timeout=30)
+    exe = bwrap_executable(ctx)
+    if not exe:
+        return None
+    code, out, err, error = run_capture([exe, "--version"], timeout=30)
     if error or code != 0:
         return None
     match = re.search(rb"(\d+)\.(\d+)\.(\d+)", out + err)
@@ -1234,7 +1257,10 @@ def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     read-only. Without a validated closure there is no sandbox, and no fallback."""
     if not ctx.closure:
         raise RuntimeError("no validated store closure")
-    argv = [ctx.args.bwrap, "--unshare-all", "--unshare-user", "--disable-userns",
+    exe = bwrap_executable(ctx)
+    if not exe:
+        raise FileNotFoundError(errno.ENOENT, "bubblewrap not found", ctx.args.bwrap)
+    argv = [exe, "--unshare-all", "--unshare-user", "--disable-userns",
             "--die-with-parent", "--new-session", "--tmpfs", "/"]
     for path in ctx.closure:
         argv += ["--ro-bind", path, path]
@@ -1552,11 +1578,30 @@ def crash_main(argv):
     return len(sentinel)
 
 
+def output_kind(path):
+    """The category of one output file of a synthetic program; never its text."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(65536)
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+    if not head.strip():
+        return "empty"
+    if head.lstrip().startswith(b"bwrap:"):
+        return "bwrap-message"
+    if b"Traceback (most recent call last)" in head:
+        return "python-traceback"
+    return "other"
+
+
 def synthetic_crash(ctx, run_dir, name, core_limit):
     """One synthetic crash in the sandbox, from / and with an empty environment, so that
     the journal entry of a handler names no private path. Returns (signal, host pid of the
-    crashing program, window) where the pid is None unless exactly one program was found
-    under the init of the sandbox, and the window is (start, end) in microseconds."""
+    crashing program, window, launch) where the pid is None unless exactly one program was
+    found under the init of the sandbox, the window is (start, end) in microseconds, and
+    launch is one of CRASH_LAUNCH."""
     command = [sys.executable, "-I", os.path.abspath(__file__), "_crash"]
     read_end, write_end = os.pipe()
     start_us = time.time_ns() // 1000
@@ -1565,10 +1610,12 @@ def synthetic_crash(ctx, run_dir, name, core_limit):
         try:
             box = Sandbox(ctx, run_dir, command, {}, out, err, stdin=read_end,
                           core_limit=core_limit, chdir="/")
-        except OSError:
+        except OSError as exc:
             os.close(read_end)
             os.close(write_end)
-            return None, None, (start_us, start_us)
+            launch = "bwrap-not-found" if isinstance(exc, FileNotFoundError) \
+                else "bwrap-not-started"
+            return None, None, (start_us, start_us), launch
         os.close(read_end)
         pids = []
         for _ in range(100):
@@ -1583,13 +1630,18 @@ def synthetic_crash(ctx, run_dir, name, core_limit):
         except OSError:
             pass  # the program ended before reading: the status below says how
         os.close(write_end)
+        timed_out = False
         try:
             code = box.proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
+            timed_out = True
             code = box.stop()
         box.close()
     sig = code - 128 if isinstance(code, int) and code > 128 else None
-    return sig, (pids[0] if len(pids) == 1 else None), (start_us, time.time_ns() // 1000)
+    launch = "timed-out" if timed_out else "no-program" if not pids \
+        else "several-programs" if len(pids) > 1 else "ok"
+    return sig, (pids[0] if len(pids) == 1 else None), (start_us, time.time_ns() // 1000), \
+        launch
 
 
 def entry_signal(value):
@@ -1666,10 +1718,12 @@ def run_core_probe(ctx, steps, run_dir, state):
     identity = proof_identity(ctx)
     started = time.monotonic()
     since = int(time.time()) - 1
-    signal_0, pid_0, window_0 = synthetic_crash(ctx, run_dir, "core-control",
-                                                CONTROL_CORE_LIMIT)
+    signal_0, pid_0, window_0, launch_0 = synthetic_crash(ctx, run_dir, "core-control",
+                                                          CONTROL_CORE_LIMIT)
     crashed = time.monotonic()
     facts["control_signal"] = signal_0
+    facts["control_launch"] = launch_0
+    facts["control_stderr"] = output_kind(os.path.join(run_dir, "core-control.stderr"))
     facts["control_identified"] = pid_0 is not None
     control, foreign = None, 0
     for _ in range(30):
@@ -1691,9 +1745,11 @@ def run_core_probe(ctx, steps, run_dir, state):
     since_1 = int(time.time()) + 1
     while time.time() < since_1:
         time.sleep(0.05)
-    signal_1, pid_1, window_1 = synthetic_crash(ctx, run_dir, "core-limit-one",
-                                                EXTRACTION_CORE_LIMIT)
+    signal_1, pid_1, window_1, launch_1 = synthetic_crash(ctx, run_dir, "core-limit-one",
+                                                          EXTRACTION_CORE_LIMIT)
     facts["limit_one_signal"] = signal_1
+    facts["limit_one_launch"] = launch_1
+    facts["limit_one_stderr"] = output_kind(os.path.join(run_dir, "core-limit-one.stderr"))
     facts["limit_one_identified"] = pid_1 is not None
     deadline = time.monotonic() + max(PROOF_MIN_WAIT, 3 * latency)
     reached = None
@@ -2607,6 +2663,75 @@ def cmd_resume(ctx):
                   suffix=suffix)
 
 
+DIAGNOSED_OUTPUTS = ("core-control.stdout", "core-control.stderr", "core-limit-one.stdout",
+                     "core-limit-one.stderr", "probe.stderr")
+DIAGNOSES = ("crashes-not-started", "bubblewrap-refused-a-crash", "crash-program-error",
+             "crashes-started", "unknown")
+
+
+def diagnosis_of(kinds, pids):
+    """One code from the categories of the outputs and the number of identified pids."""
+    crashes = [kinds[n] for n in DIAGNOSED_OUTPUTS if n.startswith("core-")]
+    if any(kind == "bwrap-message" for kind in crashes):
+        return "bubblewrap-refused-a-crash"
+    if any(kind == "python-traceback" for kind in crashes):
+        return "crash-program-error"
+    if isinstance(pids, int) and pids > 0:
+        return "crashes-started"
+    if pids == 0 and all(kind == "empty" for kind in crashes):
+        return "crashes-not-started"
+    return "unknown"
+
+
+def cmd_diagnose(ctx):
+    """Read only, for a run folder the owner keeps (PR #33, comment 7188564347): what the
+    two synthetic crashes and the probe left on their outputs, as fixed categories
+    (OUTPUT_KINDS), never their text; the number of crash pids identified; and the facts of
+    the sandbox and core-probe steps of its report, through the summary validators. It
+    writes nothing and starts nothing."""
+    name = ctx.args.run_folder or ""
+    if not RUN_DIR_RE.fullmatch(name):
+        raise UsageError("--run-folder takes the name of a run folder, b1-rehearse-<UTC "
+                         "time> or b1-run-<UTC time>")
+    run_dir = os.path.join(ctx.logs, name)
+    if os.path.islink(run_dir) or not os.path.isdir(run_dir):
+        raise UsageError("no such run folder")
+    state = read_state(run_dir) or {}
+    version = state.get("tool_version")
+    pids = state.get("core_probe_pids")
+    pids = len(pids) if isinstance(pids, list) else None
+    kinds = {n: output_kind(os.path.join(run_dir, n)) for n in DIAGNOSED_OUTPUTS}
+    lines = ["fifa2010wc B1 diagnosis: fixed categories only, no path and no output text. "
+             "Review it before sharing it (CP-5).",
+             f"run folder: {name.split('-')[1]}, tool version "
+             f"{version if _int(version) else 'invalid'}"]
+    lines += [f"  {n:<24} {kinds[n]}" for n in DIAGNOSED_OUTPUTS]
+    lines.append(f"  {'crash pids identified':<24} {pids if pids is not None else 'none'}")
+    try:
+        with open(os.path.join(run_dir, "report.json"), encoding="utf-8") as f:
+            steps = {item.get("step"): item for item in json.load(f).get("steps", [])
+                     if isinstance(item, dict)}
+    except (OSError, ValueError, AttributeError):
+        steps = {}
+        lines.append("  report                   unreadable")
+    for step in ("sandbox", "core-probe"):
+        facts = (steps.get(step) or {}).get("facts") or {}
+        shown = []
+        for key, valid in SUMMARY_FACTS[step].items():
+            if key in facts:
+                value = facts[key]
+                if not valid(value):
+                    shown.append(f"{key} invalid")
+                elif isinstance(value, list):
+                    shown.append(f"{key} {','.join(value) or '-'}")
+                else:
+                    shown.append(f"{key} {value}")
+        lines.append(f"  {step:<24} {', '.join(shown) or 'absent'}")
+    lines.append(f"diagnosis: {diagnosis_of(kinds, pids)}")
+    print("\n".join(lines))
+    return 0
+
+
 def main(argv):
     if argv[:1] == ["_probe"]:
         return probe_main(argv[1:])
@@ -2625,7 +2750,8 @@ def main(argv):
                                             f"$WC2010_PRIVATE_DIR/{DEFAULT_J0_REPORT}")
     parser.add_argument("--timeout", type=int, default=DUMP_TIMEOUT,
                         help=f"seconds before rexglue is stopped (default {DUMP_TIMEOUT})")
-    parser.add_argument("--run-folder", help="resume: the run folder to finish")
+    parser.add_argument("--run-folder", help="resume: the run folder to finish; diagnose: "
+                                             "the run folder to read")
     # Commands, files and references replaced by the tests (tools/test_b1_extract.py).
     for name, default in (("--git", "git"), ("--nix", "nix"), ("--find", "find"),
                           ("--findmnt", "findmnt"), ("--coredumpctl", "coredumpctl"),
@@ -2637,7 +2763,8 @@ def main(argv):
                           ("--core-pattern-file", "/proc/sys/kernel/core_pattern"),
                           ("--suid-dumpable-file", "/proc/sys/fs/suid_dumpable")):
         parser.add_argument(name, default=default, help=argparse.SUPPRESS)
-    parser.add_argument("command", choices=("prepare", "rehearse", "run", "verify", "resume"))
+    parser.add_argument("command", choices=("prepare", "rehearse", "run", "verify", "resume",
+                                            "diagnose"))
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -2654,6 +2781,8 @@ def main(argv):
             return cmd_verify(ctx)
         if args.command == "resume":
             return cmd_resume(ctx)
+        if args.command == "diagnose":
+            return cmd_diagnose(ctx)
         return cmd_step(ctx, extract=args.command == "run")
     except UsageError as exc:
         print(f"error: {exc}", file=sys.stderr)
