@@ -240,6 +240,11 @@ TEST_CONFIG = {
 }
 
 
+def read_text(path):
+    with open(path) as f:
+        return f.read()
+
+
 def write_tree(folder, tree):
     for name, value in tree.items():
         path = os.path.join(folder, name)
@@ -615,7 +620,7 @@ class ArbitrationTest(B2Fixture):
                 self.config("default.toml", "function_table_base = 0x8C100000\n" +
                             TEST_CONFIG["default.toml"]),
                 self.write_manifest(),
-                self.write_text(self.manifest, open(self.manifest).read().replace(
+                self.write_text(self.manifest, read_text(self.manifest).replace(
                     'out_directory_path = "../generated/default"\n',
                     'out_directory_path = "../generated/default"\n'
                     'function_table_base = 0\n', 1))), 2))
@@ -675,7 +680,7 @@ class ArbitrationTest(B2Fixture):
         copies the files and names them; prepare then sees what codegen will consume."""
         pp = load(os.path.join(HERE, "private_project.py"), "private_project_stage")
         shutil.rmtree(os.path.join(self.project, "config"))
-        self.write_text(self.manifest, open(TEMPLATE).read())
+        self.write_text(self.manifest, read_text(TEMPLATE))
         source = os.path.join(self.w, "project-a")
         files = {
             "pc/fifawc10_manifest.toml":

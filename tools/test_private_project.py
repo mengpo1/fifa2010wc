@@ -474,8 +474,8 @@ class StageConfigTests(Folder):
         self.assertFalse(any("fixes" in note for note in notes))
 
     def test_stage_config_reports_a_conflict_with_f_a_and_changes_nothing(self):
-        """F-a (D-021): a function_table_base in a staged file is reported, and the file is
-        copied unmodified; B2 then refuses to run (tools/test_b2_codegen.py)."""
+        # F-a (D-021): a function_table_base in a staged file is reported, and the file is
+        # copied unmodified; B2 then refuses to run (tools/test_b2_codegen.py).
         text = "function_table_base = 0x8C100000\n" + PROJECT_A_FILES["pc/config/default.toml"]
         source, commit = self.project_a({"pc/config/default.toml": text})
         findings, notes = pp.stage_config(self.private, source, GUARD, commit=commit)
