@@ -24,6 +24,12 @@
 >   `J2_B1_EXTRACTION.md`). B1 n'est pas encore exécutée ;
 > - **PB-1 n'est pas franchi** ; B2 attend sa décision.
 >
+> Mise à jour du 2026-11-27 (D-020, ticket #32) :
+> - **B1 est exécutée et validée : PB-1 est franchi** (`reports/J2_B1_RESULT.md`) ;
+> - **B2 n'est pas autorisée** : elle est soumise à un mandat distinct. Sa procédure est
+>   proposée, sans données du jeu (`J2_B2_COMPATIBILITY.md`), sur le moteur d'étapes de
+>   B1 (`J2_LOCAL_STEP_ENGINE.md`).
+>
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Cadre
@@ -68,7 +74,7 @@ de l'utilisateur et lier un exécutable Linux natif. Critères : C2.1 à C2.4.
 | **PA-0** | Avant la phase A | Porteur du projet, avec l'orchestrateur | Autorisation explicite de la phase A. **Accordée le 2026-11-23** (D-015) |
 | **PA-1** | Fin de la phase A | Orchestrateur, puis porteur du projet | Critères de sortie du §3.9. **Franchi le 2026-11-24** (D-016) |
 | **PB-0** | Avant la phase B | Porteur du projet | **Autorisation PJ2-3 expresse** (accordée le 2026-11-23, D-015), PA-1 franchi, contrôles CP-1 à CP-7 exécutés et consignés (`J2_PREREQUISITES.md` §6), méthode de validation des adresses décidée (`J2_PREREQUISITES.md` §3.3). **Franchi le 2026-11-24** (D-017), pour B1 seulement : la méthode est décidée (M1, §6), PA-1 est franchi (D-016), et les contrôles CP-1 à CP-7 sont exécutés sur la machine de l'utilisateur et consignés dans le ticket #14, dont la vérification des *core dumps* |
-| **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0. **Non franchi**. Chiffres comparés : `J2_B1_EXTRACTION.md` §6 |
+| **PB-1** | Après l'extraction (B1) | Orchestrateur | Nombres de fichiers et empreintes conformes au rapport J0. **Franchi le 2026-11-27** (D-020) : 49 fichiers, 8 dossiers, empreintes concordantes, aucun constat (`reports/J2_B1_RESULT.md`) |
 | **PB-2** | Après le contrôle de compatibilité (B2) | Orchestrateur, puis porteur du projet | Validation des adresses ou nouvelle analyse |
 | **PB-3** | Avant de versionner un fichier tiré du disque | Orchestrateur, puis porteur du projet | Seules des adresses et des métadonnées, autorisées par D-007, après le contrôle des données |
 | **PB-4** | Fin de J2 | Orchestrateur, puis porteur du projet | C2.1 à C2.4. J3 ne commence pas sans décision |
@@ -356,6 +362,8 @@ décision explicite) :
   `rehearse` en `core-probe-failed`, les plantages synthétiques ne démarrant pas. Cause :
   bubblewrap cherché par son nom dans un environnement vide. Corrigé en version 6, avec
   `diagnose` en lecture seule (`J2_B1_EXTRACTION.md` §6.4). `run` reste non autorisé.
+- **Exécution (2026-11-27)** : avec la version 6, sur la machine du porteur, sans constat.
+  **PB-1 est franchi** (D-020, `reports/J2_B1_RESULT.md`).
 - **Critère de sortie** (PB-1) :
   - 49 fichiers et 8 dossiers, comme dans le rapport J0 ;
   - les SHA-256 de `default.xex` et `fifadllzf.xex` extraits sont ceux du rapport J0 ;
@@ -377,6 +385,8 @@ décision explicite) :
   - un échec écarte la réutilisation telle quelle, et l'on passe à la nouvelle analyse
     (`J2_PREREQUISITES.md` §5) ;
   - un succès ne prouve pas l'identité du code.
+- **Procédure** : proposée le 2026-11-27, **non autorisée** (`J2_B2_COMPATIBILITY.md`,
+  outil `.#b2-codegen`). Elle demande un mandat distinct (D-020).
 
 ### 4.3 B3 — Validation des adresses
 

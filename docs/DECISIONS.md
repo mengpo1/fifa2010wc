@@ -27,7 +27,8 @@
 | D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi à cette date, franchi ensuite (D-017) |
 | D-017 | Entrée en phase B de J2 : PB-0 franchi, B1 seulement | **Acceptée** (2026-11-24) ; PB-1 non franchi |
 | D-018 | Arbitrages de B1 : plantages de l'extraction (option B) et rapport J0 local obligatoire | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
-| D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
+| D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; extraction réelle autorisée ensuite (D-020) |
+| D-020 | Extraction réelle de B1 autorisée et exécutée ; B1 validée, PB-1 franchi | **Acceptée** (2026-11-27) ; B2 soumis à un mandat distinct |
 
 ---
 
@@ -540,3 +541,31 @@
   - **PB-1 n'est pas franchi**, et B2 reste interdit ;
   - aucun `sudo`, aucune modification globale de NixOS ;
   - une nouvelle revue indépendante est demandée avant toute approbation.
+
+## D-020 — B1 exécutée et validée : PB-1 franchi
+
+- **Statut** : **Acceptée** (2026-11-27). Sources, dans le ticket #32 :
+  - l'autorisation explicite du porteur d'exécuter l'extraction réelle, et l'avis favorable
+    de l'orchestrateur sur la répétition :
+    [commentaire 7218617373](https://github.com/mengpo1/fifa2010wc/issues/32#issuecomment-7218617373) ;
+  - la validation de l'orchestrateur :
+    [commentaire 7218840297](https://github.com/mengpo1/fifa2010wc/issues/32#issuecomment-7218840297).
+- **Exécution** : par le porteur seul, sur sa machine NixOS, avec B1 v6 (`main` à
+  `773d1a8`), dans le même démarrage que la répétition, avec une preuve de moins de 24 h,
+  sans `sudo` ni modification du système.
+- **Résultats** (`docs/reports/J2_B1_RESULT.md`) : aucun constat ; 49 fichiers, 8 dossiers,
+  58 nœuds racine comprise ; empreintes des deux modules et de l'image concordantes avec
+  J0, avant et après ; sonde 26 sur 26, fermeture de 273 chemins, preuve reconnue ;
+  aucun changement de montage, aucun *core dump*, aucune nouvelle correspondance CP-3.
+- **Décision : B1 est validée, et PB-1 est franchi.**
+- **Limites** : les résultats viennent du résumé transmis par le porteur. Il n'y a ni
+  accès indépendant aux données privées, ni garantie exhaustive d'absence de fuite. La
+  preuve de l'option B est une observation, pas une garantie absolue.
+- **Ce qui ne change pas** :
+  - D-007, D-018 et D-019 restent en vigueur ; R-01 reste ouvert ;
+  - aucun fichier du jeu, aucun rapport brut ni aucune empreinte privée n'est publié ;
+  - **B2 reste soumis à un mandat distinct** : ni analyse des modules, ni génération de
+    code n'est autorisée par cette décision ;
+  - l'orchestrateur demande la consignation de ce résultat et une **proposition de
+    procédure pour B2**, sans données du jeu, dans une PR brouillon distincte
+    (`docs/J2_B2_COMPATIBILITY.md`). Aucune fusion sans revue et accord explicite.

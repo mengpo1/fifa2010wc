@@ -10,6 +10,8 @@
 > franchi.** Aucun fichier du jeu n'est encore traité.
 > Mis à jour le 2026-11-24 (D-017) : **PB-0 est franchi, pour B1 seulement.** La procédure
 > de B1 est `docs/J2_B1_EXTRACTION.md` ; PB-1 n'est pas franchi.
+> Mis à jour le 2026-11-27 (D-020) : **B1 est exécutée, PB-1 est franchi.** B2 attend un
+> mandat distinct ; sa procédure est proposée dans `docs/J2_B2_COMPATIBILITY.md`.
 > Étiquettes : **[V]** fait vérifié, **[H]** hypothèse, **[I]** inconnue.
 
 ## 1. Point de départ

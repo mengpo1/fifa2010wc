@@ -11,6 +11,7 @@
   address-compare,
   b1-extract,
   b1-closure,
+  b2-codegen,
 }:
 
 let
@@ -827,6 +828,190 @@ in
   # and its module, report no unknown key, resolve the entry XEX inside the private folder,
   # and stop there, before reading any XEX, without writing a file. Its log file is off and
   # its app root is in the build folder.
+  # J2, step B2 (docs/J2_B2_COMPATIBILITY.md): the B2 profile of the step engine. Its tests,
+  # with the real bubblewrap; then the packaged command runs the real `rexglue codegen` in
+  # the real sandbox, on a synthetic private folder. game/ holds two text files named like
+  # the modules, not XEX files: ReXGlue refuses them at their first bytes, before decoding
+  # anything. No game data is used or produced.
+  b2-codegen-selftest =
+    pkgs.runCommand "b2-codegen-selftest"
+      {
+        nativeBuildInputs = [
+          pkgs.git
+          pkgs.util-linux
+          pkgs.bubblewrap
+        ];
+      }
+      ''
+        set -euo pipefail
+        mkdir -p "$out"
+        B1_REAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap B1_SANDBOX_MODE_FILE="$out/sandbox-mode.txt" \
+          B1_PYTHON_CLOSURE=${pkgs.closureInfo { rootPaths = [ python ]; }} \
+          ${python}/bin/python3 -I ${self}/tools/test_b2_codegen.py > "$out/selftest.txt" 2>&1 \
+          || { cat "$out/selftest.txt"; exit 1; }
+        tail -n 3 "$out/selftest.txt"
+        if grep -q "skipped" "$out/selftest.txt"; then
+          echo "a test was skipped: they must all run as the unprivileged build user"; exit 1
+        fi
+        ${python}/bin/python3 -I -c '
+        import re, sys
+        text = open(sys.argv[1]).read()
+        missing = [t for t in sys.argv[2:] if not re.search(
+            "^" + t + r" \([^)]*\)(\n[^\n]*)? \.\.\. ok$", text, re.M)]
+        sys.exit("did not run or failed: " + ", ".join(missing) if missing else 0)
+        ' "$out/selftest.txt" \
+          test_prepare_passes_and_writes_nothing test_game_must_be_the_pb1_tree \
+          test_manifest_outputs_and_test_config test_run_success \
+          test_unresolved_calls_fail_c21_and_stay_local test_a_partial_log_is_refused_not_counted \
+          test_changes_to_inputs_and_outputs_are_findings test_the_proof_is_per_profile \
+          test_killed_supervisor_can_be_resumed test_real_sandbox_keeps_game_read_only \
+          test_probe_checks_of_b2
+        cat "$out/sandbox-mode.txt"
+        B=${b2-codegen}/bin/fifa2010wc-b2-codegen
+        "$B" --help > "$out/help.txt"
+
+        W="$TMPDIR/b2"
+        H="$W/home"
+        P="$H/private"
+        R="$H/repo"
+        S="$W/stubs"
+        mkdir -p "$H" "$W/tmp" "$S"
+        chmod 700 "$H" "$W/tmp"
+        mkdir -m 700 "$P"
+        (cd "$P" && mkdir -m 700 iso game xex generated generated/default generated/fifadllzf \
+          project project/config cache saves logs)
+        echo "synthetic disc image, no game data" > "$P/iso/fifa2010wc.iso"
+        chmod a-w "$P/iso/fifa2010wc.iso"
+        printf 'synthetic entry module, not a XEX\n' > "$P/game/default.xex"
+        printf 'synthetic second module, not a XEX\n' > "$P/game/fifadllzf.xex"
+        mkdir -m 700 "$P/game/media"
+        printf 'a\n' > "$P/game/media/a.txt"
+        git init -q "$R"
+        echo synthetic > "$R/README"
+        git -C "$R" add README
+        git -C "$R" -c user.name=test -c user.email=test@example.invalid commit -q -m init
+        printf '#!%s\nif [ "$1 $2 $3 $4" = "store verify --no-contents --no-trust" ]; then\n  shift 4; [ $# -gt 0 ] || exit 64\n  for p in "$@"; do grep -qxF -- "$p" %s/store-paths || exit 65; done; exit 0\nfi\n[ "$1 $2" = "store verify" ] && [ "$3" = %s ] && [ $# -eq 3 ]\n' \
+          "${pkgs.bash}/bin/bash" "${b1-closure}" "${rexglue-sdk}" > "$S/nix"
+        printf '#!%s\n[ "$1 $2 $3" = "--no-pager --json=short list" ] || exit 64\necho "No coredumps found." >&2\nexit 1\n' \
+          "${pkgs.bash}/bin/bash" > "$S/coredumpctl"
+        chmod 755 "$S/nix" "$S/coredumpctl"
+        echo "|/nix/store/synthetic-systemd/lib/systemd/systemd-coredump %P %u %g %s %t %c %h" \
+          > "$S/core_pattern"
+        echo 2 > "$S/suid_dumpable"
+        # The private copy of the A5 template, with a synthetic test configuration (made-up
+        # addresses), the test reference of game/, and a B2 proof as rehearse writes it.
+        ${python}/bin/python3 -I -c '
+        import hashlib, importlib.util, json, os, sys, time, types
+        sys.dont_write_bytecode = True
+        tools, private, pattern, suid, bwrap, closure, reference = sys.argv[1:8]
+        def load(name):
+            spec = importlib.util.spec_from_file_location(name, os.path.join(tools, name + ".py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        b1, b2 = load("b1_extract"), load("b2_codegen")
+        profile = b2.make_profile(b1, load("address_compare"), load("private_project"))
+        template = open(os.path.join(tools, "..", "config", "private-template",
+                                     "wc2010_manifest.toml")).read()
+        for name in ("default", "fifadllzf"):
+            template = template.replace(
+                f"out_directory_path = \"../generated/{name}\"\nincludes = []",
+                f"out_directory_path = \"../generated/{name}\"\n"
+                f"includes = [\"config/{name}.toml\"]", 1)
+        with open(os.path.join(private, "project", "wc2010_manifest.toml"), "w") as f:
+            f.write(template)
+        with open(os.path.join(private, "project", "config", "default.toml"), "w") as f:
+            f.write("[functions]\n0x82000010 = {}\n")
+        with open(os.path.join(private, "project", "config", "fifadllzf.toml"), "w") as f:
+            f.write("setjmp_address = 0x82100000\nlongjmp_address = 0x82100040\n")
+        modules = {}
+        for name in ("default.xex", "fifadllzf.xex"):
+            with open(os.path.join(private, "game", name), "rb") as f:
+                modules[name] = hashlib.sha256(f.read()).hexdigest()
+        json.dump({"files": 3, "directories": 1, "modules": modules}, open(reference, "w"))
+        folder = os.path.join(private, "logs", "b2-rehearse-20000101T000000Z")
+        os.mkdir(folder, 0o700)
+        ctx = types.SimpleNamespace(profile=profile, args=types.SimpleNamespace(
+            core_pattern_file=pattern, suid_dumpable_file=suid, bwrap=bwrap,
+            store_closure=closure))
+        identity = b1.proof_identity(ctx)
+        b1.write_state(folder, {"tool_version": b1.TOOL_VERSION, "command": "rehearse",
+                                "phase": "complete", "controls_clean": True,
+                                "evidence_incomplete": [],
+                                "core_proof": dict(identity, result="validated",
+                                                   proved_at=time.time())})
+        ' ${self}/tools "$P" "$S/core_pattern" "$S/suid_dumpable" ${pkgs.bubblewrap}/bin/bwrap \
+          ${b1-closure} "$W/reference.json"
+        b2() {
+          (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
+            --nix "$S/nix" --coredumpctl "$S/coredumpctl" --reference "$W/reference.json" \
+            --core-pattern-file "$S/core_pattern" --suid-dumpable-file "$S/suid_dumpable" "$@")
+        }
+
+        # prepare writes nothing.
+        b2 prepare > "$out/1-prepare.txt" || { cat "$out/1-prepare.txt"; exit 1; }
+        [ "$(ls -A "$P/logs" | tr '\n' ' ')" = "b2-rehearse-20000101T000000Z " ] \
+          || { ls -A "$P/logs"; echo "prepare wrote"; exit 1; }
+        for fact in "game_files 3, game_directories 1, game_anomalies 0, game_modules_match True" \
+                    "output_folders 2, output_folders_empty True" \
+                    "config_files 2, function_entries 1, crt_entries 2" \
+                    "closure_closed True, closure_roots_covered True, closure_registered True"; do
+          grep -qF "$fact" "$out/1-prepare.txt" || { echo "prepare lacks: $fact"; exit 1; }
+        done
+
+        if ! grep -q "REAL SANDBOX: available" "$out/sandbox-mode.txt"; then
+          status=0
+          b2 run > "$out/2-run.txt" || status=$?
+          cat "$out/2-run.txt"
+          [ "$status" -eq 1 ] || { echo "run must refuse without a sandbox"; exit 1; }
+          grep -q "finding sandbox-unavailable" "$out/2-run.txt"
+          [ -z "$(ls -A "$P/generated/default")$(ls -A "$P/generated/fifadllzf")" ] \
+            || { echo "generated without a sandbox"; exit 1; }
+          echo "the sandbox cannot start here: run refused, nothing generated" \
+            >> "$out/sandbox-mode.txt"
+          exit 0
+        fi
+
+        # run: the real rexglue codegen in the real sandbox. It reads the private copy and
+        # refuses the synthetic modules ("Unknown module magic"): exit status 1, C2.1 not met,
+        # and nothing written but its log.
+        status=0
+        b2 run > "$out/2-run.txt" || status=$?
+        cat "$out/2-run.txt"
+        [ "$status" -eq 1 ] || { echo "the synthetic modules must make codegen fail"; exit 1; }
+        run=$(echo "$P"/logs/b2-run-*)
+        for line in "probe_failed_checks -" \
+                    "proof_found True" \
+                    "codegen              finding  exit 1" \
+                    "finding codegen-failed (x1)" \
+                    "game/ unchanged, PB-1 figures and module hashes: match" \
+                    "manifest changed only by its sdk_version line: match" \
+                    "codegen exit status: expected 0, found 1: DIFFERS" \
+                    "unresolved calls: expected 0, found 0: match" \
+                    "C2.1 met: no" \
+                    "decision: this tool does not declare PB-2"; do
+          grep -qF "$line" "$run/summary.txt" || { echo "summary lacks: $line"; exit 1; }
+        done
+        grep -q "Unknown module magic" "$run/codegen.log" \
+          || { echo "codegen did not read the synthetic module"; exit 1; }
+        if grep -qE -e "$W" -e "[0-9a-f]{64}" -e "0x8" "$run/summary.txt" "$out/2-run.txt"; then
+          echo "a path, a hash or an address reached the summary"; exit 1
+        fi
+        [ -z "$(ls -A "$P/generated/default")$(ls -A "$P/generated/fifadllzf")" ] \
+          || { echo "codegen wrote outputs for the synthetic modules"; exit 1; }
+        find "$P" -newer "$run/b2.marker" | sed "s|^$P|\$WC2010_PRIVATE_DIR|" | sort \
+          > "$out/3-written.txt"
+        cat "$out/3-written.txt"
+        if grep -v -E '^\$WC2010_PRIVATE_DIR/(logs/b2-run-[0-9TZ]+|app|tmp|xdg)(/|$)' \
+            "$out/3-written.txt"; then
+          echo "the step wrote somewhere else than its run folder"; exit 1
+        fi
+        [ -z "$(find "$H" -path "$P" -prune -o -path "$R/.git" -prune -o -newer "$run/b2.marker" -print)" ] \
+          || { echo "the step wrote in the home folder"; exit 1; }
+        [ -z "$(ls /dev/shm | grep xenia_memory || true)" ] \
+          || { echo "a guest memory object is left in /dev/shm"; exit 1; }
+      '';
+
   private-project-selftest =
     pkgs.runCommand "private-project-selftest" { nativeBuildInputs = [ pkgs.git ]; } ''
       set -euo pipefail
@@ -964,6 +1149,7 @@ in
           private-project
           address-compare
           b1-extract
+          b2-codegen
         ];
       };
     in
