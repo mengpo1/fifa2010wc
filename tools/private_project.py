@@ -17,8 +17,12 @@ Commands:
             of the private manifest: at the pinned commit, the files project A's manifest
             includes for each binary, and their includes, transitively, without its C++
             fixes. Only git objects of that commit are read (no working tree, no hook).
-            Nothing is modified: a file is copied byte for byte, never overwritten, and a
-            value that conflicts with option F-a (function_table_base) is reported.
+            A file is copied byte for byte and never overwritten, with one exception, the
+            derogation G-3 to C-a (D-021): config/default.toml is the pinned file without
+            its one top-level function_table_base line, so that option F-a holds; the
+            pinned original is kept intact in config/original/default.toml, which nothing
+            includes. Any other case (no such line, several, another form, another file
+            that sets the key) is refused.
 
 It reads no XEX and runs no ReXGlue command. Only `init` and `stage-config` write, in two
 phases:
@@ -86,6 +90,55 @@ MAX_INCLUDE_DEPTH = 32  # ReXGlue v0.11.0, src/codegen/config.cpp:24
 # Option F-a: no value of function_table_base is imposed. A 0 does not undo an inherited
 # value (MergeScalar, src/codegen/config.cpp:40-41): any occurrence is a conflict.
 TABLE_BASE_KEY = "function_table_base"
+# Derogation G-3 to C-a (D-021): the only change to the pinned configuration. The test copy
+# of default.toml lacks its one top-level function_table_base line; the original is kept,
+# intact, where no include reaches it.
+G3_FILE = "default.toml"
+G3_ORIGINAL = "original/default.toml"
+G3_LINE = re.compile(rb"^function_table_base[ \t]*=[ \t]*(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*$")
+
+
+def g3_derive(data):
+    """Derogation G-3: the test copy of the pinned default.toml, that is its bytes without
+    the one line that sets function_table_base at the top level, and nothing else. Refused:
+    no such line, the key named more than once (ambiguous), a line of another form, or a
+    removal that changes the parsed table otherwise than by that key. Returns (copy, line
+    number, problems)."""
+    lines = data.splitlines(keepends=True)
+    hits = [i for i, line in enumerate(lines) if TABLE_BASE_KEY.encode() in line]
+    if not hits:
+        return None, None, [f"G-3: {G3_FILE} names no {TABLE_BASE_KEY}: it is not the file "
+                            "the derogation was decided on"]
+    if len(hits) > 1:
+        return None, None, [f"G-3: {G3_FILE} names {TABLE_BASE_KEY} {len(hits)} times: "
+                            "ambiguous"]
+    index = hits[0]
+    if not G3_LINE.match(lines[index].rstrip(b"\r\n")):
+        return None, None, [f"G-3: line {index + 1} of {G3_FILE} is not a plain "
+                            f"`{TABLE_BASE_KEY} = <integer>` line"]
+    copy = b"".join(lines[:index] + lines[index + 1:])
+    try:
+        original = tomllib.loads(data.decode("utf-8"))
+        derived = tomllib.loads(copy.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        return None, None, [f"G-3: {G3_FILE} is not TOML ({type(error).__name__})"]
+    expected = {k: v for k, v in original.items() if k != TABLE_BASE_KEY}
+    if TABLE_BASE_KEY not in original or derived != expected:
+        return None, None, [f"G-3: removing line {index + 1} of {G3_FILE} changes more than "
+                            f"its top-level {TABLE_BASE_KEY}"]
+    return copy, index + 1, []
+
+
+def g3_check(original, staged):
+    """The problems of a staged default.toml against the kept original: it must be exactly
+    g3_derive(original), byte for byte."""
+    copy, _, problems = g3_derive(original)
+    if problems:
+        return problems
+    if staged != copy:
+        return [f"G-3: {CONFIG_DIR}/{G3_FILE} is not the original less its {TABLE_BASE_KEY} "
+                "line: another change"]
+    return []
 
 
 def canonical(path):
@@ -618,14 +671,31 @@ def stage_config(private, source, guard_path, repo=None, git="git",
         findings += link_findings(real_private, parts, f"{CONFIG_DIR}/{rel}")
         if os.path.lexists(os.path.join(real_private, *parts)):
             findings.append(f"{PROJECT_DIR}/{CONFIG_DIR}/{rel} exists: never overwritten")
+    if not findings:
+        # G-3: the one derogation; any other value of the key would still be inherited.
+        if G3_FILE not in files:
+            findings.append(f"G-3: project A includes no {G3_FILE}")
+        else:
+            copy, line, problems = g3_derive(files[G3_FILE])
+            findings += problems
+        for rel, content in files.items():
+            if rel != G3_FILE and TABLE_BASE_KEY in tomllib.loads(content.decode("utf-8")):
+                findings.append(f"{CONFIG_DIR}/{rel} sets {TABLE_BASE_KEY}: another inherited "
+                                "value, not covered by G-3")
+        parts = [PROJECT_DIR, CONFIG_DIR] + G3_ORIGINAL.split("/")
+        findings += link_findings(real_private, parts, f"{CONFIG_DIR}/{G3_ORIGINAL}")
+        if os.path.lexists(os.path.join(real_private, *parts)):
+            findings.append(f"{PROJECT_DIR}/{CONFIG_DIR}/{G3_ORIGINAL} exists: never "
+                            "overwritten")
     if findings:
         return findings + ["nothing was written"], notes
-    conflicts = sorted(rel for rel, content in files.items()
-                       if TABLE_BASE_KEY in tomllib.loads(content.decode("utf-8")))
+    writes = dict(files)
+    writes[G3_ORIGINAL] = files[G3_FILE]
+    writes[G3_FILE] = copy
 
     root_fd = os.open(real_private, DIR_FLAGS)
     try:
-        for rel, content in files.items():
+        for rel, content in writes.items():
             *folders, name = rel.split("/")
             folder_fd = open_below(root_fd, [PROJECT_DIR, CONFIG_DIR] + folders, create=True)
             try:
@@ -652,12 +722,12 @@ def stage_config(private, source, guard_path, repo=None, git="git",
     finally:
         os.close(root_fd)
     notes.append(f"project A at {commit}: {len(files)} files copied into "
-                 f"{PROJECT_DIR}/{CONFIG_DIR}/, unmodified")
+                 f"{PROJECT_DIR}/{CONFIG_DIR}/, unmodified but one")
+    notes.append(f"G-3: {CONFIG_DIR}/{G3_FILE} is the pinned file without its line {line} "
+                 f"({TABLE_BASE_KEY}); the original is kept in {CONFIG_DIR}/{G3_ORIGINAL}, "
+                 "included by nothing")
     for label, values in zip([label for label, _ in binaries(table)], plan):
         notes.append(f"{label}.includes = {values}")
-    for rel in conflicts:
-        notes.append(f"CONFLICT with option F-a: {CONFIG_DIR}/{rel} sets {TABLE_BASE_KEY}. "
-                     "B2 refuses to run until a separate arbitration (D-021)")
     check, _ = check_manifest(manifest, private)
     return check, notes
 

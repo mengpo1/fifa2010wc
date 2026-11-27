@@ -400,7 +400,11 @@ PROJECT_A_FILES = {
         'includes = ["config/codegen_options.toml", "config/fifadllzf.toml", '
         '"config/fifadllzf_pointers.toml"]\n'),
     "pc/config/codegen_options.toml": "generate_exception_handlers = true\n",
-    "pc/config/default.toml": "[functions]\n0x8C010000 = {}\n",
+    # As at the audited commit, default.toml sets function_table_base (here a made-up value):
+    # the derogation G-3 removes that line, and only it, from the test copy.
+    "pc/config/default.toml": ("# Synthetic overrides for default.xex.\n"
+                               "function_table_base = 0x8C100000\n\n"
+                               "[functions]\n0x8C010000 = {}\n"),
     "pc/config/default_pointers.toml": 'includes = ["more/extra.toml"]\n',
     "pc/config/more/extra.toml": "[functions]\n0x8C010040 = {}\n",
     "pc/config/fifadllzf.toml": "setjmp_address = 0x8C020000\nlongjmp_address = 0x8C020040\n",
@@ -455,10 +459,13 @@ class StageConfigTests(Folder):
                         for top, _, names in os.walk(config) for n in names)
         self.assertEqual(staged, ["codegen_options.toml", "default.toml",
                                   "default_pointers.toml", "fifadllzf.toml",
-                                  "fifadllzf_pointers.toml", "more/extra.toml"])
+                                  "fifadllzf_pointers.toml", "more/extra.toml",
+                                  "original/default.toml"])
         for rel in staged:
-            self.assertEqual(read(os.path.join(config, rel)),
-                             PROJECT_A_FILES["pc/config/" + rel])
+            pinned = PROJECT_A_FILES["pc/config/" + rel.replace("original/", "")]
+            expected = (pinned.replace("function_table_base = 0x8C100000\n", "")
+                        if rel == "default.toml" else pinned)
+            self.assertEqual(read(os.path.join(config, rel)), expected, rel)
             self.assertEqual(os.stat(os.path.join(config, rel)).st_mode & 0o777, 0o600)
         manifest = read(self.manifest_path())
         self.assertIn('includes = ["config/codegen_options.toml", "config/default.toml", '
@@ -470,20 +477,56 @@ class StageConfigTests(Folder):
                          [pp.CONFIG_DIR, pp.MANIFEST_NAME])
         self.assertEqual(pp.check_manifest(self.manifest_path(), self.private)[0], [])
         self.assertTrue(any(commit in note for note in notes))
-        self.assertFalse(any("CONFLICT" in note for note in notes))
+        self.assertTrue(any("G-3: config/default.toml is the pinned file without its line 2"
+                            in note for note in notes), notes)
         self.assertFalse(any("fixes" in note for note in notes))
+        self.assertNotIn("original", manifest)
 
-    def test_stage_config_reports_a_conflict_with_f_a_and_changes_nothing(self):
-        # F-a (D-021): a function_table_base in a staged file is reported, and the file is
-        # copied unmodified; B2 then refuses to run (tools/test_b2_codegen.py).
-        text = "function_table_base = 0x8C100000\n" + PROJECT_A_FILES["pc/config/default.toml"]
-        source, commit = self.project_a({"pc/config/default.toml": text})
-        findings, notes = pp.stage_config(self.private, source, GUARD, commit=commit)
-        self.assertEqual(findings, [])
-        self.assertTrue(any("CONFLICT with option F-a: config/default.toml" in note
-                            for note in notes), notes)
-        self.assertEqual(read(os.path.join(self.private, pp.PROJECT_DIR, pp.CONFIG_DIR,
-                                           "default.toml")), text)
+    def test_g3_removes_one_line_and_nothing_else(self):
+        # G-3 (D-021), byte for byte: the copy is the original less one whole line; the
+        # check refuses a copy with any other change, and accepts only that copy.
+        original = PROJECT_A_FILES["pc/config/default.toml"].encode()
+        copy, line, problems = pp.g3_derive(original)
+        self.assertEqual(problems, [])
+        self.assertEqual(line, 2)
+        self.assertEqual(copy, original.replace(b"function_table_base = 0x8C100000\n", b""))
+        self.assertEqual(pp.g3_check(original, copy), [])
+        for label, staged in (("unchanged", original),
+                              ("one more byte", copy + b"\n"),
+                              ("another value", copy.replace(b"0x8C010000", b"0x8C010004")),
+                              ("a line removed too", copy.replace(b"\n\n", b"\n", 1))):
+            with self.subTest(label=label):
+                self.assertTrue(pp.g3_check(original, staged))
+
+    def test_g3_refuses_what_it_does_not_cover(self):
+        # G-3 covers one top-level line of default.toml and nothing else; refused, with
+        # nothing written: no such line, the key named twice, the key inside a table, a line
+        # of another form, and the key in another staged file.
+        line = "function_table_base = 0x8C100000\n"
+        functions = "[functions]\n0x8C010000 = {}\n"
+        cases = (
+            ("line absent", {"pc/config/default.toml": functions}, "names no"),
+            ("key named twice", {"pc/config/default.toml": line + "# function_table_base\n" +
+                                 functions}, "2 times: ambiguous"),
+            ("inside a table", {"pc/config/default.toml": functions + "[analysis]\n" + line},
+             "changes more than"),
+            ("another form", {"pc/config/default.toml":
+                              "function_table_base = 0x8C100000 # moved\n" + functions},
+             "not a plain"),
+            ("a string value", {"pc/config/default.toml":
+                                'function_table_base = "0x8C100000"\n' + functions},
+             "not a plain"),
+            ("another inherited value", {"pc/config/codegen_options.toml": line},
+             "another inherited value"),
+        )
+        before = self.project_tree()
+        for name, changes, fragment in cases:
+            with self.subTest(name=name):
+                source, commit = self.project_a(changes)
+                findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
+                self.assertFound(findings, fragment)
+                self.assertFound(findings, "nothing was written")
+                self.assertEqual(self.project_tree(), before)
 
     def test_stage_config_refusals_write_nothing(self):
         cases = (
@@ -516,13 +559,14 @@ class StageConfigTests(Folder):
     def test_stage_config_never_overwrites(self):
         source, commit = self.project_a()
         config = os.path.join(self.private, pp.PROJECT_DIR, pp.CONFIG_DIR)
-        os.mkdir(config, 0o700)
-        write(os.path.join(config, "default.toml"), "the owner's own file\n")
-        before = self.project_tree()
-        findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
-        self.assertFound(findings, "never overwritten")
-        self.assertEqual(self.project_tree(), before)
-        os.unlink(os.path.join(config, "default.toml"))
+        os.makedirs(os.path.join(config, "original"), 0o700)
+        for rel in ("default.toml", "original/default.toml"):
+            write(os.path.join(config, rel), "the owner's own file\n")
+            before = self.project_tree()
+            findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
+            self.assertFound(findings, f"{rel} exists: never overwritten")
+            self.assertEqual(self.project_tree(), before)
+            os.unlink(os.path.join(config, rel))
         self.assertEqual(pp.stage_config(self.private, source, GUARD, commit=commit)[0], [])
         # Staged once: a second run finds the includes set and the files there.
         before = self.project_tree()

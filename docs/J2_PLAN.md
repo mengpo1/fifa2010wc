@@ -389,9 +389,9 @@ décision explicite) :
   (`J2_B2_COMPATIBILITY.md`, outil `.#b2-codegen`). Elle demande un mandat distinct
   (D-020). Elle propose un critère de plus, distinct de C2.1 : la complétude de la
   génération (`J2_B2_COMPATIBILITY.md` §6.3).
-- **Arbitrages** (D-021) : C-a, F-a, T-a et L-a. **C-a et F-a sont en conflit** : la
-  configuration épinglée du projet A fixe `function_table_base`. Un arbitrage distinct est
-  demandé avant toute exécution (`J2_B2_COMPATIBILITY.md` §11.5).
+- **Arbitrages** (D-021) : C-a, F-a, T-a et L-a. C-a et F-a étaient en conflit : la
+  configuration épinglée du projet A fixe `function_table_base`. Le porteur l'a réglé par
+  G-3, seule dérogation documentée et vérifiée à C-a (`J2_B2_COMPATIBILITY.md` §11.5).
 
 ### 4.3 B3 — Validation des adresses
 

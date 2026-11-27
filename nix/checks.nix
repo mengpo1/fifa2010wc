@@ -880,7 +880,8 @@ in
           test_a_time_out_above_two_hours_is_refused \
           test_resources_are_recorded_without_a_claimed_need \
           test_the_log_level_is_info_and_local \
-          test_the_staged_configuration_of_c_a_passes_prepare
+          test_the_staged_configuration_of_c_a_passes_prepare \
+          test_g3_is_checked_at_each_prepare
         cat "$out/sandbox-mode.txt"
         B=${b2-codegen}/bin/fifa2010wc-b2-codegen
         "$B" --help > "$out/help.txt"
@@ -943,7 +944,8 @@ in
                 "\"config/codegen_options.toml\", \"config/fifadllzf.toml\", "
                 "\"config/fifadllzf_pointers.toml\"]\n",
             "pc/config/codegen_options.toml": "\n",
-            "pc/config/default.toml": "[functions]\n0x82000010 = {}\n",
+            "pc/config/default.toml":
+                "function_table_base = 0x8C100000\n[functions]\n0x82000010 = {}\n",
             "pc/config/default_pointers.toml": "[functions]\n0x82000020 = {}\n",
             "pc/config/fifadllzf.toml":
                 "setjmp_address = 0x82100000\nlongjmp_address = 0x82100040\n",
@@ -982,13 +984,15 @@ in
           --private-dir "$P" --repo "$R" stage-config --source "$A" --commit "$C") \
           > "$out/0-stage-config.txt" || { cat "$out/0-stage-config.txt"; exit 1; }
         cat "$out/0-stage-config.txt"
-        grep -q "5 files copied into project/config/, unmodified" "$out/0-stage-config.txt"
-        if grep -q "CONFLICT" "$out/0-stage-config.txt"; then
-          echo "the synthetic configuration sets no function_table_base"; exit 1
-        fi
+        grep -q "5 files copied into project/config/, unmodified but one" "$out/0-stage-config.txt"
+        grep -q "G-3: config/default.toml is the pinned file without its line 1" \
+          "$out/0-stage-config.txt"
         [ "$(ls -A "$P/project" | tr '\n' ' ')" = "config wc2010_manifest.toml " ] \
           && [ ! -e "$P/project/config/fixes" ] \
           || { ls -A "$P/project"; echo "stage-config wrote elsewhere"; exit 1; }
+        # G-3, byte for byte: the test copy is the original less its first line, only.
+        tail -n +2 "$P/project/config/original/default.toml" | cmp - "$P/project/config/default.toml"
+        git -C "$A" show "$C:pc/config/default.toml" | cmp - "$P/project/config/original/default.toml"
 
         b2() {
           (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
@@ -1002,9 +1006,10 @@ in
           || { ls -A "$P/logs"; echo "prepare wrote"; exit 1; }
         for fact in "game_files 3, game_directories 1, game_anomalies 0, game_modules_match True" \
                     "output_folders 2, output_folders_empty True, project_entries_ok True" \
-                    "config_files 5, binary_config_files 5, shared_config_files 0, config_tree_files 5" \
+                    "config_files 5, binary_config_files 5, shared_config_files 0, config_tree_files 6" \
+                    "config_unused_files 1, include_depth 1" \
                     "include_depth 1, hook_files 0, template_dirs 0, function_entries 2, crt_entries 2" \
-                    "table_base_settings 0, timeout_seconds 7200" \
+                    "table_base_settings 0, timeout_seconds 7200, g3_original_present True, g3_derogation_ok True" \
                     "resources            ok                memory_total_mib " \
                     "closure_closed True, closure_roots_covered True, closure_registered True"; do
           grep -qF "$fact" "$out/1-prepare.txt" || { echo "prepare lacks: $fact"; exit 1; }
@@ -1082,7 +1087,7 @@ in
                test_template_paths_that_leave_the_private_root_are_refused_before_install \
                test_init_refuses_a_template_replaced_by_a_clean_one_after_reading \
                test_stage_config_copies_the_pinned_files_and_names_them \
-               test_stage_config_reports_a_conflict_with_f_a_and_changes_nothing \
+               test_g3_removes_one_line_and_nothing_else test_g3_refuses_what_it_does_not_cover \
                test_stage_config_refusals_write_nothing test_stage_config_never_overwrites \
                test_stage_config_needs_the_private_copy; do
         grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }

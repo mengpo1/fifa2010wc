@@ -15,6 +15,10 @@ adds only what is proper to B2:
   includes, transitively, hook sources and templates) are inventoried; all but the
   manifest must lie in project/config/, read-only in the sandbox; the manifest may change
   only by its sdk_version line, and codegen.d must list nothing else;
+- the arbitrations of D-021: no consumed configuration sets function_table_base (F-a),
+  config/default.toml is the kept original less that one line and nothing else (G-3),
+  the original is consumed by nothing, the time-out is two hours at most (T-a), the log
+  level is info (L-a);
 - the sandboxed command is `rexglue --log-level info --log-file <run folder>/codegen.log
   codegen <manifest>`, never with --force;
 - C2.1 (0 unresolved call, 0 validation error) is read from that log by the parser of
@@ -327,6 +331,12 @@ def make_profile(engine, compare, project):
                                "before B2, nothing is changed here",
         "timeout-above-t-a": "--timeout is above the two hours of option T-a (D-021), or "
                              "not positive",
+        "g3-original-missing": "config/original/default.toml, the pinned original kept for "
+                               "the derogation G-3 (D-021), is missing or not a regular file",
+        "g3-derogation-invalid": "config/default.toml is not the kept original less its one "
+                                 "function_table_base line (G-3), or is not consumed",
+        "g3-original-consumed": "an include reaches config/original/: the kept original "
+                                "must stay out of the consumed inputs (G-3)",
         "test-config-invalid": "an included configuration is missing, unreadable, not "
                                "TOML, circular, too deep, or sets a key of the manifest",
         "app-config-present": "app/rexglue.toml exists: ReXGlue would read it",
@@ -341,7 +351,8 @@ def make_profile(engine, compare, project):
                        "configuration error",
     })
     engine.EXTRACTION_GATES.update(("test-config-absent", "table-base-conflict",
-                                    "timeout-above-t-a"))
+                                    "timeout-above-t-a", "g3-original-missing",
+                                    "g3-derogation-invalid", "g3-original-consumed"))
     engine.PROBE_CHECK_NAMES.update(("write-denied-game", "write-denied-project-config",
                                      "writable-generated", "writable-project",
                                      "shm-private"))
@@ -356,7 +367,8 @@ def make_profile(engine, compare, project):
                         "config_unused_files": _int, "include_depth": _int,
                         "hook_files": _int, "template_dirs": _int,
                         "function_entries": _int, "crt_entries": _int,
-                        "table_base_settings": _int, "timeout_seconds": _int},
+                        "table_base_settings": _int, "timeout_seconds": _int,
+                        "g3_original_present": _bool, "g3_derogation_ok": _bool},
         "resources": {"memory_total_mib": _int, "memory_available_mib": _int,
                       "swap_total_mib": _int, "disk_free_mib": _int,
                       "shm_default_limit_mib": _int},
@@ -410,6 +422,41 @@ def make_profile(engine, compare, project):
 
         def config_root(self, ctx):
             return os.path.join(ctx.private, CONFIG_DIR)
+
+        def g3_state(self, ctx, inputs):
+            """Derogation G-3 (D-021), checked at each prepare by the same function as
+            stage-config (private_project.g3_check): the kept original is a regular file,
+            consumed by nothing, and config/default.toml, consumed, is exactly the
+            original less its one top-level function_table_base line."""
+            root = os.path.realpath(self.config_root(ctx))
+            original = os.path.join(root, project.G3_ORIGINAL)
+            staged = os.path.join(root, project.G3_FILE)
+            findings, present, ok = [], False, False
+            try:
+                st = os.lstat(original)
+                present = stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+            except OSError:
+                pass
+            if not present:
+                findings.append(("g3-original-missing", project.G3_ORIGINAL))
+            else:
+                try:
+                    with open(original, "rb") as f:
+                        kept = f.read()
+                    with open(staged, "rb") as f:
+                        copy = f.read()
+                    problems = project.g3_check(kept, copy)
+                except OSError as exc:
+                    problems = [f"{project.G3_FILE}: {exc.strerror}"]
+                consumed = (inputs or {}).get("configs", [])
+                if consumed and staged not in consumed:  # none: test-config-absent says it
+                    problems.append(f"{project.G3_FILE} is not consumed")
+                ok = not problems
+                findings += [("g3-derogation-invalid", text) for text in problems]
+            folder = os.path.dirname(original)
+            if any(inside(path, folder) for path in (inputs or {}).get("configs", [])):
+                findings.append(("g3-original-consumed", "an include"))
+            return {"g3_original_present": present, "g3_derogation_ok": ok}, findings
 
         def resources(self, ctx):
             """Option T-a: the memory and the free disk of the private folder, in MiB,
@@ -567,6 +614,9 @@ def make_profile(engine, compare, project):
                                                         "consumed tables"))
             if not 0 < ctx.args.timeout <= MAX_TIMEOUT:
                 findings.append(("timeout-above-t-a", f"{ctx.args.timeout} s"))
+            g3_facts, g3_findings = self.g3_state(ctx, inputs)
+            facts.update(g3_facts)
+            findings += g3_findings
             steps.add("test-config", "ok", facts=facts, findings=findings)
             steps.add("resources", "ok", facts=self.resources(ctx),
                       notes=["recorded before the step; the needs of a real generation "

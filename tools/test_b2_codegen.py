@@ -238,6 +238,9 @@ TEST_CONFIG = {
     "fifadllzf.toml": ('setjmp_address = 0x82100000\nlongjmp_address = 0x82100040\n'
                        '[functions]\n0x82100080 = {}\n'),
 }
+# Derogation G-3 (D-021): the kept original of default.toml, with its function_table_base
+# line (a made-up value); config/default.toml is that file less the line.
+G3_ORIGINAL = "function_table_base = 0x8C100000\n" + TEST_CONFIG["default.toml"]
 
 
 def read_text(path):
@@ -274,6 +277,9 @@ class B2Fixture(t1.Fixture):
         for name, text in TEST_CONFIG.items():
             with open(os.path.join(self.project, "config", name), "w") as f:
                 f.write(text)
+        os.mkdir(os.path.join(self.project, "config", "original"), 0o700)
+        with open(os.path.join(self.project, "config", "original", "default.toml"), "w") as f:
+            f.write(G3_ORIGINAL)
         self.manifest = os.path.join(self.project, "wc2010_manifest.toml")
         self.write_manifest()
         for name in ("default", "fifadllzf"):
@@ -358,10 +364,10 @@ class PrepareTest(B2Fixture):
                      "project              ok                manifest_findings 0, "
                      "output_folders 2, output_folders_empty True, project_entries_ok True",
                      "test-config          ok                config_files 2, "
-                     "binary_config_files 2, shared_config_files 0, config_tree_files 2, "
-                     "config_unused_files 0, include_depth 1, hook_files 0, template_dirs 0, "
+                     "binary_config_files 2, shared_config_files 0, config_tree_files 3, "
+                     "config_unused_files 1, include_depth 1, hook_files 0, template_dirs 0, "
                      "function_entries 3, crt_entries 2, table_base_settings 0, "
-                     "timeout_seconds 7200",
+                     "timeout_seconds 7200, g3_original_present True, g3_derogation_ok True",
                      "resources            ok                memory_total_mib ",
                      "store-closure        ok"):
             self.assertIn(line, self.output)
@@ -461,8 +467,8 @@ class ConfigInputsTest(B2Fixture):
         return path
 
     def test_transitive_includes_are_inventoried_and_listed_by_codegen(self):
-        self.config("default.toml", 'includes = ["common/base.toml"]\n' +
-                    TEST_CONFIG["default.toml"])
+        self.config("fifadllzf.toml", 'includes = ["common/base.toml"]\n' +
+                    TEST_CONFIG["fifadllzf.toml"])
         self.config("common/base.toml", 'includes = ["more.toml"]\n'
                     '[functions]\n0x82000030 = {}\n')
         self.config("common/more.toml", "[functions]\n0x82000040 = {}\n")
@@ -473,7 +479,7 @@ class ConfigInputsTest(B2Fixture):
         self.assertEqual((facts["config_files"], facts["binary_config_files"],
                           facts["include_depth"], facts["config_tree_files"],
                           facts["config_unused_files"], facts["function_entries"]),
-                         (4, 4, 3, 5, 1, 5))
+                         (4, 4, 3, 6, 2, 5))
         inputs = self.step(report, "codegen-inputs")["facts"]
         self.assertEqual((inputs["depfile_found"], inputs["unexpected_inputs"],
                           inputs["configs_not_in_depfile"]), (True, 0, 0))
@@ -519,7 +525,7 @@ class ConfigInputsTest(B2Fixture):
                 self.assertIsNone(self.recorded())
                 for entry in os.listdir(os.path.join(self.project, "config")):
                     path = os.path.join(self.project, "config", entry)
-                    if entry not in TEST_CONFIG and entry != "real.toml":
+                    if entry not in TEST_CONFIG and entry not in ("real.toml", "original"):
                         os.unlink(path)
         for key, value in (("hook_sources", '["../app"]'), ("template_dir", '"../app"')):
             with self.subTest(key=key):
@@ -645,6 +651,39 @@ class ArbitrationTest(B2Fixture):
                 self.write_manifest()
         self.assertEqual(self.tool("prepare"), 0, self.output)
 
+    def test_g3_is_checked_at_each_prepare(self):
+        """G-3: the kept original is there and consumed by nothing, and default.toml is it
+        less its one function_table_base line, nothing else; a residual inherited value
+        elsewhere is still a conflict. Each case stops before anything starts."""
+        original = os.path.join(self.project, "config", "original", "default.toml")
+        cases = (
+            ("original missing", lambda: os.unlink(original), "g3-original-missing"),
+            ("another change", lambda: self.config(
+                "default.toml", TEST_CONFIG["default.toml"] + "0x82000030 = {}\n"),
+             "g3-derogation-invalid"),
+            ("line not removed", lambda: self.config("default.toml", G3_ORIGINAL),
+             "g3-derogation-invalid"),
+            ("original consumed", lambda: self.write_text(self.manifest, read_text(
+                self.manifest).replace('includes = ["config/default.toml"]',
+                                       'includes = ["config/default.toml", '
+                                       '"config/original/default.toml"]', 1)),
+             "g3-original-consumed"),
+            ("residual inherited value", lambda: self.config(
+                "fifadllzf.toml", "function_table_base = 0x8C200000\n" +
+                TEST_CONFIG["fifadllzf.toml"]), "table-base-conflict"))
+        for name, change, code in cases:
+            with self.subTest(name=name):
+                change()
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn(f"finding {code}", self.output)
+                self.assertEqual(self.run_dirs(), [])
+                self.assertIsNone(self.recorded())
+                self.write_text(original, G3_ORIGINAL)
+                for rel, text in TEST_CONFIG.items():
+                    self.config(rel, text)
+                self.write_manifest()
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+
     def test_a_time_out_above_two_hours_is_refused(self):
         for value in ("7201", "0"):
             with self.subTest(value=value):
@@ -692,7 +731,7 @@ class ArbitrationTest(B2Fixture):
                 'includes = ["config/codegen_options.toml", "config/fifadllzf.toml", '
                 '"config/fifadllzf_pointers.toml"]\n',
             "pc/config/codegen_options.toml": "\n",
-            "pc/config/default.toml": TEST_CONFIG["default.toml"],
+            "pc/config/default.toml": G3_ORIGINAL,
             "pc/config/default_pointers.toml": "[functions]\n0x82000030 = {}\n",
             "pc/config/fifadllzf.toml": TEST_CONFIG["fifadllzf.toml"],
             "pc/config/fifadllzf_pointers.toml": "[functions]\n0x821000C0 = {}\n"}
@@ -711,8 +750,14 @@ class ArbitrationTest(B2Fixture):
         self.assertEqual(findings, [], notes)
         self.assertEqual(self.tool("prepare"), 0, self.output)
         self.assertIn("config_files 5, binary_config_files 5, shared_config_files 0, "
-                      "config_tree_files 5, config_unused_files 0, include_depth 1", self.output)
-        self.assertIn("function_entries 5, crt_entries 2, table_base_settings 0", self.output)
+                      "config_tree_files 6, config_unused_files 1, include_depth 1", self.output)
+        self.assertIn("function_entries 5, crt_entries 2, table_base_settings 0, "
+                      "timeout_seconds 7200, g3_original_present True, g3_derogation_ok True",
+                      self.output)
+        with open(os.path.join(self.project, "config", "original", "default.toml")) as f:
+            self.assertEqual(f.read(), G3_ORIGINAL)
+        with open(os.path.join(self.project, "config", "default.toml")) as f:
+            self.assertEqual(f.read(), TEST_CONFIG["default.toml"])
         self.assertEqual(self.tool("run"), 0, self.output)
         self.assertIn("  B2 result for PB-2 (C2.1 met and generation complete): yes",
                       self.output)

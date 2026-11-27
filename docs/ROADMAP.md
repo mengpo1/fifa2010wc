@@ -98,7 +98,7 @@
   (D-017) ; la procédure de B1 est `docs/J2_B1_EXTRACTION.md`. PB-1 n'est pas franchi.
 - **État (2026-11-27)** : B1 est exécutée et validée, **PB-1 est franchi** (D-020). B2
   n'est pas autorisée : sa procédure est proposée (`docs/J2_B2_COMPATIBILITY.md`), et ses
-  arbitrages sont rendus (D-021), avec un conflit entre C-a et F-a à arbitrer à part.
+  arbitrages sont rendus (D-021), dont G-3 pour le conflit entre C-a et F-a.
 - Correctifs du SDK nécessaires à ce jeu transposés vers le commit retenu. Au minimum
   l'équivalent de 0003 (table de fonctions) et de 0002 (module chargé par son nom nu) ;
   0005 (ISO comme racine) est facultatif, car l'ISO peut être extraite. *Analyse de

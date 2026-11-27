@@ -2,8 +2,9 @@
 
 > Étape B2 de `docs/J2_PLAN.md` §4.2. Version 3, **proposée à la revue** :
 > - la version 2 répond à la revue ciblée de la PR #35 (commentaire 7220519596) ;
-> - la version 3 applique les arbitrages du porteur C-a, F-a, T-a et L-a (**D-021**). Elle
->   constate un **conflit entre C-a et F-a**, soumis à un arbitrage distinct (§11.5).
+> - la version 3 applique les arbitrages du porteur C-a, F-a, T-a et L-a (**D-021**), et
+>   **G-3**, qui règle le conflit entre C-a et F-a par une dérogation unique et vérifiée
+>   (§11.5).
 > **B2 n'est pas autorisée** : PB-1 est franchi (D-020), mais B2 reste soumise à un mandat
 > distinct. Rien ici n'a lu, décodé ni généré quoi que ce soit du jeu.
 > - L'outil est `tools/b2_codegen.py`, empaqueté par le flake (`.#b2-codegen`). C'est le
@@ -101,7 +102,12 @@ Règles de B2 :
 - **F-a** (D-021) : aucune configuration consommée ne fixe `function_table_base`, ni le
   manifeste, ni un fichier inclus, à quelque profondeur que ce soit. Une valeur `0` est
   comptée aussi : elle ne remplace pas une valeur héritée (`MergeScalar`,
-  `config.cpp:40-41`). Sinon, `table-base-conflict` bloque `run`, et rien n'est modifié.
+  `config.cpp:40-41`). Sinon, `table-base-conflict` bloque `run`, et rien n'est modifié ;
+- **G-3** (D-021) : `config/original/default.toml` existe, fichier ordinaire, et aucune
+  inclusion ne l'atteint (`g3-original-missing`, `g3-original-consumed`) ;
+  `config/default.toml`, consommé, est exactement l'original moins sa seule ligne
+  `function_table_base` (`g3-derogation-invalid`). La vérification est celle de
+  `stage-config` (`private_project.g3_check`).
 
 **Inventaire** : `prepare` fait la liste des fichiers consommés, en cascade, et
 l'**inventaire de tout `project/config/`** (§5.2). Le résumé n'en donne que des nombres :
@@ -380,8 +386,11 @@ l'étape 9 génère du code, et seulement après le mandat**.
    - copie chaque fichier octet pour octet, sans jamais écraser, puis remplace
      `includes = []` dans les deux tables de binaire de la copie privée ;
    - ne copie pas `pc/fixes/` ;
-   - signale, sans rien modifier, tout fichier qui fixe `function_table_base`
-     (`CONFLICT with option F-a`).
+   - applique **G-3**, la seule dérogation : `config/default.toml` est le fichier épinglé
+     sans sa ligne `function_table_base`, et l'original reste intact dans
+     `config/original/default.toml`, qu'aucune inclusion n'atteint ;
+   - refuse, sans rien écrire, tout ce que G-3 ne couvre pas : ligne absente, clé nommée
+     deux fois, ligne d'une autre forme ou dans une table, une autre valeur héritée.
 
 **Contrôles avant la demande de mandat**
 
@@ -394,11 +403,10 @@ l'étape 9 génère du code, et seulement après le mandat**.
    - `test-config` dit ce que `codegen` consommera : fichiers, profondeur, fichiers non
      consommés, et `table_base_settings`.
    - `resources` relève la mémoire, l'espace d'échange et le disque libre (T-a).
-   - **Avec C-a, `table-base-conflict` est attendu** (§11.5). Le porteur s'arrête alors, et
-     transmet le résumé pour l'arbitrage distinct. Il ne modifie pas la configuration
-     copiée.
-6. **Répétition de B2**, une fois le conflit arbitré, qui apporte la preuve de l'option B
-   propre au profil B2 :
+   - Attendu avec G-3 : `table_base_settings 0`, `g3_original_present True`,
+     `g3_derogation_ok True`, `config_unused_files 1` (l'original). Le moindre constat
+     arrête la procédure ; le porteur ne corrige pas la configuration à la main.
+6. **Répétition de B2**, qui apporte la preuve de l'option B propre au profil B2 :
 
    ```bash
    "$B" --repo "$PWD" rehearse
@@ -425,7 +433,7 @@ l'étape 9 génère du code, et seulement après le mandat**.
 
 ## 10. Essais sans données du jeu, et ce qu'ils ne couvrent pas
 
-**Tests** (`tools/test_b2_codegen.py`, 31 tests) : ils reprennent le montage synthétique
+**Tests** (`tools/test_b2_codegen.py`, 32 tests) : ils reprennent le montage synthétique
 des tests de B1 (`tools/test_b1_extract.py`), avec un faux `rexglue codegen` qui écrit les
 sorties, `codegen.stamp`, `codegen.d`, `codegen.build.stamp`, le registre et le journal
 aux formats de ReXGlue (§6.3).
@@ -446,18 +454,23 @@ aux formats de ReXGlue (§6.3).
 | Preuve | Une preuve de B1, ou d'une autre version du profil, n'ouvre pas B2 ; la répétition de B2 l'apporte |
 | Vrai bubblewrap | Sonde à 30 ; écritures dans `game/`, un module, `project/config/`, une configuration, même à taille et date inchangées, le dossier personnel et le dépôt refusées par `EROFS` ; sorties et réécriture du manifeste permises |
 | Unitaires | Inventaire : contenu à taille et date inchangées, copie identique (inode), dossier illisible ; `survey_tree` sans inventaire inchangé pour B1 ; formats de `codegen.d` et de `codegen.stamp` |
-| Arbitrages D-021 | F-a : `function_table_base` dans une inclusion, dans une inclusion indirecte, ou à `0` dans le manifeste par-dessus une valeur héritée : `table-base-conflict`, `codegen` ne démarre pas, rien n'est modifié. T-a : `--timeout` à 7201 ou à 0 refusé ; ressources relevées depuis un `meminfo` synthétique. L-a : niveau `info`, journal dans le dossier d'exécution. C-a de bout en bout : `stage-config` sur un clone synthétique à la disposition du projet A, puis `prepare` sans constat et `run` réussi |
+| Arbitrages D-021 | G-3 à chaque `prepare` : original absent, autre changement de `default.toml`, ligne non retirée, original inclus, autre valeur héritée résiduelle : refusés avant tout lancement. F-a : `function_table_base` dans une inclusion, dans une inclusion indirecte, ou à `0` dans le manifeste par-dessus une valeur héritée : `table-base-conflict`, `codegen` ne démarre pas, rien n'est modifié. T-a : `--timeout` à 7201 ou à 0 refusé ; ressources relevées depuis un `meminfo` synthétique. L-a : niveau `info`, journal dans le dossier d'exécution. C-a de bout en bout : `stage-config` sur un clone synthétique à la disposition du projet A, puis `prepare` sans constat et `run` réussi |
 
-**Préparation des entrées** (`tools/test_private_project.py`, 6 tests de `stage-config`
-sur 38) : sur un clone git synthétique, à la disposition du projet A, aux adresses
-inventées :
+**Préparation des entrées** (`tools/test_private_project.py`, 7 tests de `stage-config`
+et de G-3 sur 39) : sur un clone git synthétique, à la disposition du projet A, aux
+adresses inventées :
 - copie fidèle des six fichiers, dont une inclusion indirecte, et `includes` posés dans
   les deux tables de binaire ; `pc/fixes/` non copié ;
-- conflit F-a signalé, fichier copié tel quel ;
+- G-3 : copie de test égale à l'original moins une ligne entière, original intact ; toute
+  autre différence refusée par la vérification (rien de changé, un octet de plus, une
+  autre valeur, une autre ligne retirée) ;
+- G-3 refusé, sans rien écrire : ligne absente, clé nommée deux fois, clé dans une table,
+  ligne avec un commentaire, valeur en chaîne, une autre valeur héritée ;
 - refusés, sans rien écrire : identifiant de commit abrégé ou inconnu, lien dans le
   commit, inclusion hors de `pc/config/`, boucle, fichier absent, inclusion qui n'est pas
   un chemin ;
-- jamais d'écrasement ; une seconde copie refusée ; copie privée absente.
+- jamais d'écrasement, ni de la copie ni de l'original ; une seconde copie refusée ;
+  copie privée absente.
 
 **Comparateur** (`tools/test_address_compare.py`, 31 tests) : le test
 `test_a_completed_log_must_be_whole` couvre l'option `completed` ; les 30 autres sont
@@ -466,7 +479,9 @@ inchangés.
 **Contrôle Nix `b2-codegen-selftest`** : les tests, puis les commandes empaquetées avec
 le **vrai** bubblewrap et le **vrai** `rexglue codegen`, sur un projet synthétique.
 - La configuration est copiée par la vraie commande `stage-config`, depuis un clone git
-  synthétique à la disposition du projet A : cinq fichiers, `project/` sans autre entrée.
+  synthétique à la disposition du projet A : cinq fichiers et l'original, `project/` sans
+  autre entrée. G-3 y est vérifié par `cmp` : l'original égal à l'objet git du commit, la
+  copie de test égale à l'original moins sa première ligne.
 - `game/` contient deux fichiers texte aux noms des modules : ReXGlue les refuse à leurs
   premiers octets (« Unknown module magic »), avant tout décodage.
 - [V] `prepare` sans constat ; `run` : sonde à 30, inventaire de `game/` (3 fichiers
@@ -492,7 +507,8 @@ des tests gagne une clé de plan, `probe_writes`, que B1 n'utilise pas.
 
 Chaque point a été présenté par options comparables. **Le porteur a retenu C-a, F-a, T-a
 et L-a (D-021).** Les options écartées restent décrites pour mémoire. Le choix de C-a
-avec F-a crée un conflit, soumis à un arbitrage distinct (§11.5).
+avec F-a créait un conflit, soumis à un arbitrage distinct : le porteur a retenu G-3
+(§11.5).
 
 ### 11.1 La configuration de test, épinglée
 
@@ -553,7 +569,7 @@ Elle ne change donc pas C2.1, sauf par une valeur invalide.
 | **F-b** | `0x86C10000` | Valable quelles que soient les tailles de code, sous T-5 (`J2_A3_FUNCTION_TABLE.md` §7) [V calcul] | Choix d'exécution fait avant d'avoir les tailles ; [I] allocations du jeu |
 | **F-c** | `0x86100000`, celle du projet A | Celle de la configuration du projet A, sans changement | Valable seulement si `c_dll ≤ 0x12C8000` [I] |
 
-**Choix : F-a** (D-021). **Il est en conflit avec C-a** : voir §11.5.
+**Choix : F-a** (D-021), en conflit avec C-a, réglé par **G-3** (§11.5).
 
 ### 11.3 Délai et ressources, mesurés sur synthétique
 
@@ -606,7 +622,7 @@ avec L-b. Seule la preuve d'un journal complet demande `info`.
 **Choix : L-a** (D-021). La commande fixe `--log-level info` ; le journal reste dans le
 dossier d'exécution, local ; `debug` et `trace` sont exclus.
 
-### 11.5 Conflit entre C-a et F-a : arbitrage distinct demandé
+### 11.5 Conflit entre C-a et F-a : réglé par G-3
 
 **Constat** [V, lecture du projet A lors de l'audit ; `J2_A3_FUNCTION_TABLE.md` §1] : au
 commit épinglé, `pc/config/default.toml`, que le manifeste du projet A inclut pour
@@ -617,16 +633,15 @@ C-a, cette valeur est donc héritée.
 dans le manifeste ne remplace pas une valeur non nulle héritée. Ne rien imposer
 demanderait de ne pas copier ce fichier, ou de le modifier.
 
-**Ce que fait l'outil**, conformément à D-021 :
-- `stage-config` copie le fichier tel quel et signale le conflit ;
-- `prepare` donne `table_base_settings 1` et `table-base-conflict`. **`run` est bloqué** ;
-- rien n'est modifié en silence, et ni F-b ni F-c n'est substitué.
+**Avant l'arbitrage**, conformément à D-021 : rien n'a été modifié en silence, ni F-b ni
+F-c n'a été substitué, et `table-base-conflict` bloquait `run`. Ce contrôle reste en
+place pour toute autre valeur.
 
 **Effet sur le contrôle de compatibilité** [V, lecture du correctif A3] : la clé n'entre
 pas dans l'analyse. C2.1 serait le même avec chacune des options ci-dessous ; seuls les
 gabarits du code généré, et donc l'exécution future, en dépendent.
 
-**Options pour l'arbitrage distinct**, comparables, **aucune retenue** :
+**Options présentées pour l'arbitrage distinct** :
 
 | Option | Ce qui est fait | Conséquence sur C-a | Conséquence sur F-a |
 |---|---|---|---|
@@ -635,9 +650,19 @@ gabarits du code généré, et donc l'exécution future, en dépendent.
 | **G-3** | Copier `default.toml` sans sa seule ligne `function_table_base`, écart consigné | Modifiée, d'un écart unique et documenté | Tenue |
 | **G-4** | Renoncer à `default.toml` | Amputée de ses débuts de fonctions | Tenue, mais C2.1 ne dirait plus rien de la configuration du projet A |
 
-Quelle que soit l'option retenue, l'outil devra être aligné sur elle dans une PR, avant
-la demande de mandat. Le contrôle `table-base-conflict` reste en place tant que F-a
-s'applique.
+**Choix : G-3** (D-021), seule dérogation documentée à C-a :
+- `stage-config` conserve l'original **intact**, octet pour octet, dans
+  `config/original/default.toml`. Aucune inclusion ne l'atteint ;
+- dans `config/default.toml`, la copie destinée au test, il retire **une seule ligne
+  entière**, de la forme `function_table_base = <entier>`, au premier niveau ;
+- la vérification (`private_project.g3_derive` et `g3_check`) exige :
+  - que la clé soit nommée une seule fois dans le fichier ;
+  - que la ligne ait cette forme exacte, sans commentaire ni chaîne ;
+  - que la copie soit l'original moins cette ligne, octet pour octet ;
+  - que la table lue soit celle de l'original moins cette seule clé ;
+- elle tourne à la copie, puis à chaque `prepare` de B2 ;
+- tout autre cas est refusé : ligne absente, ambiguë ou inattendue, autre modification,
+  autre valeur héritée ailleurs, original absent ou consommé. Rien n'est jamais écrasé.
 
 ## 12. Ce qui revient dans le dépôt après B2
 
