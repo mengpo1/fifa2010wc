@@ -29,6 +29,7 @@
 | D-018 | Arbitrages de B1 : plantages de l'extraction (option B) et rapport J0 local obligatoire | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
 | D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; extraction réelle autorisée ensuite (D-020) |
 | D-020 | Extraction réelle de B1 autorisée et exécutée ; B1 validée, PB-1 franchi | **Acceptée** (2026-11-27) ; B2 soumis à un mandat distinct |
+| D-021 | Arbitrages de la procédure B2 : C-a, F-a, T-a, L-a | **Acceptée** (2026-11-27) ; **conflit F-a avec C-a constaté**, arbitrage distinct demandé ; B2 toujours soumis à un mandat distinct |
 
 ---
 
@@ -569,3 +570,52 @@
   - l'orchestrateur demande la consignation de ce résultat et une **proposition de
     procédure pour B2**, sans données du jeu, dans une PR brouillon distincte
     (`docs/J2_B2_COMPATIBILITY.md`). Aucune fusion sans revue et accord explicite.
+
+## D-021 — Arbitrages de la procédure B2 : C-a, F-a, T-a, L-a
+
+- **Statut** : **Acceptée** (2026-11-27). Le porteur déclare : « Je valide les arbitrages
+  C-a, F-a, T-a et L-a pour B2. » Décision relayée par l'orchestrateur dans la PR #35,
+  [commentaire 7223364424](https://github.com/mengpo1/fifa2010wc/pull/35#issuecomment-7223364424).
+  Options de `docs/J2_B2_COMPATIBILITY.md` §11.
+- **C-a, la configuration de test** : celle du projet A
+  (`CalinGraphics/fifa-world-cup-2010-recompiled`) au commit de l'audit,
+  **`498d18ae09175d4991b24b633a9a5f2e0e1cc73e`** (2026-10-26, abrégé `498d18a`), sans ses
+  correctifs C++ (`pc/fixes/`).
+  - Le SHA complet est celui relevé lors de l'audit du dépôt public. `stage-config` le
+    vérifie sur le clone du porteur.
+  - Fichiers : ceux que le manifeste du projet A (`pc/fifawc10_manifest.toml`) inclut pour
+    chaque binaire, et leurs inclusions en cascade. Au commit épinglé [V, lecture lors de
+    l'audit] : `config/codegen_options.toml`, `config/default.toml`,
+    `config/default_pointers.toml` pour `default.xex` ; `config/codegen_options.toml`,
+    `config/fifadllzf.toml`, `config/fifadllzf_pointers.toml` pour `fifadllzf.xex`.
+  - Récupération **par le porteur seul, sur sa machine**, depuis un clone local, par
+    `private_project.py stage-config`. Aucun contenu du projet A n'entre dans le dépôt
+    (CP-7) ; seuls l'identifiant du commit et les chemins, publics, y figurent.
+- **F-a, `function_table_base`** : aucune valeur imposée, selon
+  `J2_A3_FUNCTION_TABLE.md` §7 (étape 1 : relever d'abord les tailles de code).
+  - Contrôle : B2 refuse de lancer la génération si une configuration consommée fixe la
+    clé, même à `0`, car `0` ne remplace pas une valeur héritée (`table-base-conflict`).
+  - **Conflit constaté avec C-a** [V, lecture lors de l'audit, et
+    `J2_A3_FUNCTION_TABLE.md` §1] : `pc/config/default.toml` du projet A, inclus pour
+    `default.xex`, fixe `function_table_base`. Avec C-a tel qu'épinglé, F-a n'est donc pas
+    tenable.
+  - **Conformément à la décision** : la configuration épinglée n'est pas modifiée, et ni
+    F-b ni F-c ne lui est substitué. Le conflit est documenté
+    (`J2_B2_COMPATIBILITY.md` §11.5), et **un arbitrage distinct est demandé avant toute
+    exécution**. Tant qu'il manque, `run` est bloqué.
+- **T-a, délai et ressources** : deux heures au plus. `--timeout` au-delà, ou nul, bloque
+  `run` (`timeout-above-t-a`). `prepare` relève la mémoire, l'espace d'échange et le
+  disque libre du dossier privé, en Mio, sans prétendre connaître les besoins d'une vraie
+  génération, qui ne sont pas mesurés.
+- **L-a, journal** : niveau `info`, strictement local, qui permet le contrôle de
+  complétude (`J2_B2_COMPATIBILITY.md` §6.2). Ni `debug` ni `trace`.
+- **Avant toute demande de mandat réel** : préparation des entrées par `stage-config`,
+  arbitrage du conflit F-a, répétition de B2 propre au profil (`rehearse`), puis un
+  `prepare` final sans constat (`J2_B2_COMPATIBILITY.md` §9).
+- **Ce qui ne change pas** :
+  - D-007, D-018, D-019 et D-020 restent en vigueur ; R-01 reste ouvert ;
+  - **B2 reste soumis à un mandat distinct** ; aucune génération réelle n'est autorisée
+    par cette décision ;
+  - la revue de l'orchestrateur sur `2a683e8` est favorable sur les corrections
+    examinées, mais ciblée : ce n'est pas un avis final de fusion. Aucune fusion sans la
+    revue finale et l'accord explicite du porteur.

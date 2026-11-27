@@ -57,6 +57,14 @@ REGISTRY_FILES = ("module_registry.cpp", "dll_targets.cmake")
 REQUIRED_OUTPUTS = ("_pch.h", "_funcs.h", "_init.h", "_init.cpp", "_register.cpp")
 REQUIRED_NAMES = ("sources.cmake", "codegen.partition.json", "codegen.mmio.json")
 NUMBERED_OUTPUTS = (re.compile(r"_funcs\.\d+\.h$"), re.compile(r"_recomp\.\d+\.cpp$"))
+# The arbitrations of the owner for B2 (D-021, docs/J2_B2_COMPATIBILITY.md §11):
+# F-a, no value of function_table_base imposed: a consumed configuration that sets it, even
+# to 0, which does not undo an inherited value (src/codegen/config.cpp:40-41), is a
+# conflict to arbitrate, never resolved here; T-a, two hours at most; L-a, the info level.
+TABLE_BASE_KEY = "function_table_base"
+MAX_TIMEOUT = 7200
+LOG_LEVEL = "info"
+MIB = 1 << 20
 # Anomalies of survey_tree that mean the inventory could not be completed.
 UNREADABLE = ("unreadable folder", "unreadable entry", "changed while counted")
 
@@ -110,12 +118,13 @@ def config_inputs(manifest, config_root):
     Every input must be a regular file (or folder) inside project/config/, reached with no
     link. Returns (inputs, findings): inputs holds the configuration files in load order,
     those reached from binary tables (the ones codegen.d lists), the hook files, the
-    template folders, the deepest level and the counts of entries."""
+    template folders, the deepest level and the counts of entries, function_table_base
+    settings included."""
     findings = []
     base = os.path.dirname(os.path.realpath(manifest))
     root = os.path.realpath(config_root)
     inputs = {"configs": [], "binary_configs": [], "shared_configs": [], "hook_files": [],
-              "template_dirs": [], "depth": 0, "functions": 0, "crt": 0}
+              "template_dirs": [], "depth": 0, "functions": 0, "crt": 0, "table_base": 0}
 
     def placed(label, path, folder=False):
         """The real path of an input, or None with a finding."""
@@ -142,6 +151,7 @@ def config_inputs(manifest, config_root):
         inputs["functions"] += len(functions) if isinstance(functions, dict) else 0
         inputs["crt"] += sum(1 for key in ("setjmp_address", "longjmp_address")
                              if key in table)
+        inputs["table_base"] += TABLE_BASE_KEY in table
         if "template_dir" in table:
             value = table["template_dir"]
             if not isinstance(value, str) or not value:
@@ -279,7 +289,8 @@ def make_profile(engine, compare, project):
 
     # Names, codes and facts of B2, in the allowlists of the engine's summary.
     engine.STEP_NAMES = engine.STEP_NAMES + (
-        "game-tree", "project", "test-config", "game-before", "before-codegen", RUN_STEP,
+        "game-tree", "project", "test-config", "resources", "game-before",
+        "before-codegen", RUN_STEP,
         "game-after", "config-after", "manifest-after", "generated", "outputs",
         "codegen-inputs", "c21")
     engine.FINDING_CODES.update({
@@ -311,6 +322,11 @@ def make_profile(engine, compare, project):
         "generated-unlisted": "an output folder holds a file that no codegen.stamp lists",
         "test-config-absent": "the private copy consumes no configuration file: the test "
                               "input of project A is missing",
+        "table-base-conflict": "a consumed configuration sets function_table_base: option "
+                               "F-a (D-021) imposes none; a separate arbitration is needed "
+                               "before B2, nothing is changed here",
+        "timeout-above-t-a": "--timeout is above the two hours of option T-a (D-021), or "
+                             "not positive",
         "test-config-invalid": "an included configuration is missing, unreadable, not "
                                "TOML, circular, too deep, or sets a key of the manifest",
         "app-config-present": "app/rexglue.toml exists: ReXGlue would read it",
@@ -324,7 +340,8 @@ def make_profile(engine, compare, project):
         "c21-not-met": "C2.1 is not met: an unresolved call, a millicode error or a "
                        "configuration error",
     })
-    engine.EXTRACTION_GATES.add("test-config-absent")
+    engine.EXTRACTION_GATES.update(("test-config-absent", "table-base-conflict",
+                                    "timeout-above-t-a"))
     engine.PROBE_CHECK_NAMES.update(("write-denied-game", "write-denied-project-config",
                                      "writable-generated", "writable-project",
                                      "shm-private"))
@@ -338,7 +355,11 @@ def make_profile(engine, compare, project):
                         "shared_config_files": _int, "config_tree_files": _int,
                         "config_unused_files": _int, "include_depth": _int,
                         "hook_files": _int, "template_dirs": _int,
-                        "function_entries": _int, "crt_entries": _int},
+                        "function_entries": _int, "crt_entries": _int,
+                        "table_base_settings": _int, "timeout_seconds": _int},
+        "resources": {"memory_total_mib": _int, "memory_available_mib": _int,
+                      "swap_total_mib": _int, "disk_free_mib": _int,
+                      "shm_default_limit_mib": _int},
         "game-before": {"game_files": _int, "game_modules_match": _bool,
                         "game_entries_hashed": _int},
         RUN_STEP: {"signal": engine.SIGNAL_NUMBER},
@@ -389,6 +410,29 @@ def make_profile(engine, compare, project):
 
         def config_root(self, ctx):
             return os.path.join(ctx.private, CONFIG_DIR)
+
+        def resources(self, ctx):
+            """Option T-a: the memory and the free disk of the private folder, in MiB,
+            before the step. The sandbox's /dev/shm, where the guest memory goes, is a
+            tmpfs of the default size, half the memory (measured, §11.3). Only numbers;
+            no need is claimed."""
+            facts = {}
+            try:
+                with open(ctx.args.meminfo, encoding="ascii") as f:
+                    info = {line.split(":")[0]: int(line.split()[1]) for line in f
+                            if line.split()[1:2] and line.split()[1].isdigit()}
+                facts.update(memory_total_mib=info.get("MemTotal", 0) // 1024,
+                             memory_available_mib=info.get("MemAvailable", 0) // 1024,
+                             swap_total_mib=info.get("SwapTotal", 0) // 1024,
+                             shm_default_limit_mib=info.get("MemTotal", 0) // 2048)
+            except (OSError, ValueError, IndexError):
+                pass
+            try:
+                st = os.statvfs(ctx.private)
+                facts["disk_free_mib"] = st.f_bavail * st.f_frsize // MIB
+            except OSError:
+                pass
+            return facts
 
         # --- inventories ----------------------------------------------------------------
 
@@ -494,7 +538,8 @@ def make_profile(engine, compare, project):
             facts = {"config_files": 0, "binary_config_files": 0, "shared_config_files": 0,
                      "config_tree_files": 0, "config_unused_files": 0, "include_depth": 0,
                      "hook_files": 0, "template_dirs": 0, "function_entries": 0,
-                     "crt_entries": 0}
+                     "crt_entries": 0, "table_base_settings": 0,
+                     "timeout_seconds": ctx.args.timeout}
             inputs, tree, findings = self.config_state(ctx)
             files = [e[0] for e in tree["entries"] if e[1] == "file"]
             facts["config_tree_files"] = len(files)
@@ -513,10 +558,19 @@ def make_profile(engine, compare, project):
                              hook_files=len(inputs["hook_files"]),
                              template_dirs=len(inputs["template_dirs"]),
                              function_entries=inputs["functions"],
-                             crt_entries=inputs["crt"])
+                             crt_entries=inputs["crt"],
+                             table_base_settings=inputs["table_base"])
             if not facts["config_files"]:
                 findings.append(("test-config-absent", "no configuration file consumed"))
+            if facts["table_base_settings"]:
+                findings.append(("table-base-conflict", f"{facts['table_base_settings']} "
+                                                        "consumed tables"))
+            if not 0 < ctx.args.timeout <= MAX_TIMEOUT:
+                findings.append(("timeout-above-t-a", f"{ctx.args.timeout} s"))
             steps.add("test-config", "ok", facts=facts, findings=findings)
+            steps.add("resources", "ok", facts=self.resources(ctx),
+                      notes=["recorded before the step; the needs of a real generation "
+                             "are unknown (docs/J2_B2_COMPATIBILITY.md §11.3)"])
             try:
                 manifest_sha = file_sha256(self.manifest(ctx))
             except OSError:
@@ -582,7 +636,7 @@ def make_profile(engine, compare, project):
             the run folder. Never --force: validation errors must stop it."""
             manifest = self.manifest(ctx)
             rexglue = os.path.join(ctx.sdk, "bin", "rexglue")
-            command = [rexglue, "--log-level", "info", "--log-file",
+            command = [rexglue, "--log-level", LOG_LEVEL, "--log-file",
                        os.path.join(run_dir, "codegen.log"), RUN_STEP, manifest]
             started = time.monotonic()
             final, facts, findings = engine.supervise(
@@ -913,7 +967,11 @@ def main(argv):
     compare = load_module(known.address_compare, "address_compare")
     project = load_module(known.private_project, "private_project")
     profile = make_profile(engine, compare, project)
-    return engine.main(rest, profile=profile)
+
+    def add_arguments(parser):
+        parser.add_argument("--meminfo", default="/proc/meminfo",
+                            help="memory of the machine, recorded by prepare (T-a)")
+    return engine.main(rest, profile=profile, add_arguments=add_arguments)
 
 
 if __name__ == "__main__":

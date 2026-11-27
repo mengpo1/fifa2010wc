@@ -1,7 +1,9 @@
 # Étape B2 — contrôle de compatibilité : proposition de procédure
 
-> Étape B2 de `docs/J2_PLAN.md` §4.2. Version 2, **proposée à la revue** ; elle répond à
-> la revue ciblée de la PR #35 (commentaire 7220519596).
+> Étape B2 de `docs/J2_PLAN.md` §4.2. Version 3, **proposée à la revue** :
+> - la version 2 répond à la revue ciblée de la PR #35 (commentaire 7220519596) ;
+> - la version 3 applique les arbitrages du porteur C-a, F-a, T-a et L-a (**D-021**). Elle
+>   constate un **conflit entre C-a et F-a**, soumis à un arbitrage distinct (§11.5).
 > **B2 n'est pas autorisée** : PB-1 est franchi (D-020), mais B2 reste soumise à un mandat
 > distinct. Rien ici n'a lu, décodé ni généré quoi que ce soit du jeu.
 > - L'outil est `tools/b2_codegen.py`, empaqueté par le flake (`.#b2-codegen`). C'est le
@@ -95,7 +97,11 @@ Règles de B2 :
   `hook_sources`, qui reviennent au manifeste (`test-config-invalid`) ;
 - un élément d'`includes` qui n'est pas un chemin est refusé ; ReXGlue l'ignorerait sans
   rien dire ;
-- `project/` ne contient que le manifeste et `config/` (`project-unexpected-entry`).
+- `project/` ne contient que le manifeste et `config/` (`project-unexpected-entry`) ;
+- **F-a** (D-021) : aucune configuration consommée ne fixe `function_table_base`, ni le
+  manifeste, ni un fichier inclus, à quelque profondeur que ce soit. Une valeur `0` est
+  comptée aussi : elle ne remplace pas une valeur héritée (`MergeScalar`,
+  `config.cpp:40-41`). Sinon, `table-base-conflict` bloque `run`, et rien n'est modifié.
 
 **Inventaire** : `prepare` fait la liste des fichiers consommés, en cascade, et
 l'**inventaire de tout `project/config/`** (§5.2). Le résumé n'en donne que des nombres :
@@ -331,9 +337,13 @@ L'outil de B2 ne fait pas cet examen : il est humain, et porte sur du code priv�
   - Échec : nouvelle analyse (`J2_PREREQUISITES.md` §5), méthode M3.
 - Un succès ne prouve pas l'identité du code avec le projet A (CP-7).
 
-## 9. Procédure pour le porteur, après le mandat de B2
+## 9. Procédure pour le porteur
 
-Sur la machine de l'utilisateur, depuis une copie propre de `main`.
+Sur la machine de l'utilisateur, depuis une copie propre de `main`, avec
+`WC2010_PRIVATE_DIR` défini. Les étapes 1 à 7 préparent la demande de mandat ; **seule
+l'étape 9 génère du code, et seulement après le mandat**.
+
+**Préparation des entrées (C-a, D-021)**
 
 1. **Construire l'outil** :
 
@@ -341,43 +351,81 @@ Sur la machine de l'utilisateur, depuis une copie propre de `main`.
    B="$(nix build --no-link --print-out-paths .#b2-codegen)/bin/fifa2010wc-b2-codegen"
    ```
 
-2. **Copier le gabarit**, si ce n'est pas déjà fait (`init` n'écrase jamais une copie ;
-   `WC2010_PRIVATE_DIR` doit être défini) :
+2. **Copier le gabarit**, si ce n'est pas déjà fait (`init` n'écrase jamais une copie) :
 
    ```bash
    nix run .#private-project -- --repo "$PWD" init
    ```
 
-3. **Placer la configuration de test** retenue au §11.1 dans `project/config/`, avec ses
-   inclusions dans la même disposition relative, sans lien, et la nommer dans `includes`
-   de la copie privée (§3.2). Rien d'autre dans `project/` que le manifeste et `config/`.
-4. **Diagnostic sans écriture** :
+3. **Cloner le projet A**, hors du dépôt et hors du dossier privé. Le clone ne contient que
+   des fichiers publics, mais il ne doit jamais être commité ici :
+
+   ```bash
+   git clone https://github.com/CalinGraphics/fifa-world-cup-2010-recompiled "$HOME/project-a"
+   ```
+
+4. **Copier la configuration épinglée** dans `project/config/`, et la nommer dans la copie
+   privée du manifeste :
+
+   ```bash
+   nix run .#private-project -- --repo "$PWD" stage-config --source "$HOME/project-a"
+   ```
+
+   `stage-config` (`tools/private_project.py`, `docs/J2_A5_CONFIG_TEMPLATE.md`) :
+   - vérifie que le commit `498d18ae09175d4991b24b633a9a5f2e0e1cc73e` existe dans le clone
+     et se résout bien en lui-même ;
+   - lit, dans les objets de ce commit seulement, le manifeste du projet A et les fichiers
+     qu'il inclut pour chaque binaire, en cascade, sans copie de travail ni crochet git ;
+   - refuse un lien, un sous-module, un fichier hors de `pc/config/`, une boucle ;
+   - copie chaque fichier octet pour octet, sans jamais écraser, puis remplace
+     `includes = []` dans les deux tables de binaire de la copie privée ;
+   - ne copie pas `pc/fixes/` ;
+   - signale, sans rien modifier, tout fichier qui fixe `function_table_base`
+     (`CONFLICT with option F-a`).
+
+**Contrôles avant la demande de mandat**
+
+5. **Diagnostic sans écriture** :
 
    ```bash
    "$B" --repo "$PWD" prepare
    ```
 
-   Les nombres de `test-config` disent ce que `codegen` consommera : fichiers, profondeur,
-   fichiers non consommés.
-5. **Répétition de B2**, qui apporte sa propre preuve de l'option B :
+   - `test-config` dit ce que `codegen` consommera : fichiers, profondeur, fichiers non
+     consommés, et `table_base_settings`.
+   - `resources` relève la mémoire, l'espace d'échange et le disque libre (T-a).
+   - **Avec C-a, `table-base-conflict` est attendu** (§11.5). Le porteur s'arrête alors, et
+     transmet le résumé pour l'arbitrage distinct. Il ne modifie pas la configuration
+     copiée.
+6. **Répétition de B2**, une fois le conflit arbitré, qui apporte la preuve de l'option B
+   propre au profil B2 :
 
    ```bash
    "$B" --repo "$PWD" rehearse
    ```
 
-6. **B2**, dans le même démarrage :
+   Si elle échoue : `diagnose --run-folder b2-rehearse-<date>`.
+7. **`prepare` final**, qui doit être **sans constat**, puis **partage** des deux
+   `summary.txt`, après CP-5. C'est sur eux que l'orchestrateur, puis le porteur, décident
+   du mandat réel.
+
+**Après le mandat seulement**
+
+8. La preuve de l'option B vaut pour un démarrage : après un redémarrage, refaire la
+   répétition et le `prepare` final.
+9. **B2**, dans le même démarrage que la répétition, avec le délai par défaut de deux
+   heures (T-a ; au-delà, l'outil refuse) :
 
    ```bash
    "$B" --repo "$PWD" run
    ```
 
-7. Si la répétition échoue : `diagnose --run-folder b2-rehearse-<date>`. Si l'outil est
-   interrompu : `resume --run-folder b2-run-<date>`.
-8. **Partage** : `summary.txt` seulement, après CP-5.
+   Si l'outil est interrompu : `resume --run-folder b2-run-<date>`.
+10. **Partage** : `summary.txt` seulement, après CP-5.
 
 ## 10. Essais sans données du jeu, et ce qu'ils ne couvrent pas
 
-**Tests** (`tools/test_b2_codegen.py`, 26 tests) : ils reprennent le montage synthétique
+**Tests** (`tools/test_b2_codegen.py`, 31 tests) : ils reprennent le montage synthétique
 des tests de B1 (`tools/test_b1_extract.py`), avec un faux `rexglue codegen` qui écrit les
 sorties, `codegen.stamp`, `codegen.d`, `codegen.build.stamp`, le registre et le journal
 aux formats de ReXGlue (§6.3).
@@ -398,13 +446,27 @@ aux formats de ReXGlue (§6.3).
 | Preuve | Une preuve de B1, ou d'une autre version du profil, n'ouvre pas B2 ; la répétition de B2 l'apporte |
 | Vrai bubblewrap | Sonde à 30 ; écritures dans `game/`, un module, `project/config/`, une configuration, même à taille et date inchangées, le dossier personnel et le dépôt refusées par `EROFS` ; sorties et réécriture du manifeste permises |
 | Unitaires | Inventaire : contenu à taille et date inchangées, copie identique (inode), dossier illisible ; `survey_tree` sans inventaire inchangé pour B1 ; formats de `codegen.d` et de `codegen.stamp` |
+| Arbitrages D-021 | F-a : `function_table_base` dans une inclusion, dans une inclusion indirecte, ou à `0` dans le manifeste par-dessus une valeur héritée : `table-base-conflict`, `codegen` ne démarre pas, rien n'est modifié. T-a : `--timeout` à 7201 ou à 0 refusé ; ressources relevées depuis un `meminfo` synthétique. L-a : niveau `info`, journal dans le dossier d'exécution. C-a de bout en bout : `stage-config` sur un clone synthétique à la disposition du projet A, puis `prepare` sans constat et `run` réussi |
+
+**Préparation des entrées** (`tools/test_private_project.py`, 6 tests de `stage-config`
+sur 38) : sur un clone git synthétique, à la disposition du projet A, aux adresses
+inventées :
+- copie fidèle des six fichiers, dont une inclusion indirecte, et `includes` posés dans
+  les deux tables de binaire ; `pc/fixes/` non copié ;
+- conflit F-a signalé, fichier copié tel quel ;
+- refusés, sans rien écrire : identifiant de commit abrégé ou inconnu, lien dans le
+  commit, inclusion hors de `pc/config/`, boucle, fichier absent, inclusion qui n'est pas
+  un chemin ;
+- jamais d'écrasement ; une seconde copie refusée ; copie privée absente.
 
 **Comparateur** (`tools/test_address_compare.py`, 31 tests) : le test
 `test_a_completed_log_must_be_whole` couvre l'option `completed` ; les 30 autres sont
 inchangés.
 
-**Contrôle Nix `b2-codegen-selftest`** : les tests, puis la commande empaquetée avec le
-**vrai** bubblewrap et le **vrai** `rexglue codegen`, sur un projet synthétique.
+**Contrôle Nix `b2-codegen-selftest`** : les tests, puis les commandes empaquetées avec
+le **vrai** bubblewrap et le **vrai** `rexglue codegen`, sur un projet synthétique.
+- La configuration est copiée par la vraie commande `stage-config`, depuis un clone git
+  synthétique à la disposition du projet A : cinq fichiers, `project/` sans autre entrée.
 - `game/` contient deux fichiers texte aux noms des modules : ReXGlue les refuse à leurs
   premiers octets (« Unknown module magic »), avant tout décodage.
 - [V] `prepare` sans constat ; `run` : sonde à 30, inventaire de `game/` (3 fichiers
@@ -426,10 +488,11 @@ des tests gagne une clé de plan, `probe_writes`, que B1 n'utilise pas.
   le porteur, la fait ;
 - les vraies valeurs et la vraie disposition de la configuration du projet A (§11.1).
 
-## 11. Points à arbitrer avant le mandat de B2
+## 11. Points arbitrés avant le mandat de B2
 
-Chaque point est présenté par options comparables. **Aucune n'est retenue ici** : le choix
-revient à l'orchestrateur, puis au porteur.
+Chaque point a été présenté par options comparables. **Le porteur a retenu C-a, F-a, T-a
+et L-a (D-021).** Les options écartées restent décrites pour mémoire. Le choix de C-a
+avec F-a crée un conflit, soumis à un arbitrage distinct (§11.5).
 
 ### 11.1 La configuration de test, épinglée
 
@@ -441,9 +504,12 @@ revient à l'orchestrateur, puis au porteur.
   `fifadllzf.xex` ;
 - des correctifs en C++ dans `pc/fixes/`.
 
-**Ce que l'on ne sait pas** [I] : comment ces fichiers s'incluent les uns les autres, et
-si l'un d'eux fixe une clé du manifeste (§3.2). Le porteur le lit sur son clone ; `prepare`
-le dit par ses nombres.
+**Comment ils s'incluent** [V, lecture lors de l'audit, au commit épinglé] : le manifeste
+du projet A inclut, pour `default.xex`, `config/codegen_options.toml`,
+`config/default.toml` et `config/default_pointers.toml` ; pour `fifadllzf.xex`,
+`config/codegen_options.toml`, `config/fifadllzf.toml` et `config/fifadllzf_pointers.toml`.
+Les pointeurs entrent donc par le manifeste, ce qui distingue C-a de C-d. `stage-config`
+relit ces listes sur le clone du porteur, et suit les inclusions en cascade [I au-delà].
 
 | Option | Contenu | Pour | Contre |
 |---|---|---|---|
@@ -451,6 +517,10 @@ le dit par ses nombres.
 | **C-b** | C-a, avec les correctifs de `pc/fixes/` en `hook_sources` | Plus proche de la génération du projet A | Des crochets à adresses fixes entrent dans la génération : un échec serait plus difficile à attribuer ; leurs adresses relèvent de B3 |
 | **C-c** | Un commit plus récent du projet A, après une mise à jour de l'audit | Corrections éventuelles du projet A | Nouvel audit d'abord ; le contrôle de disposition est à refaire |
 | **C-d** | Débuts de fonctions, `setjmp` et `longjmp` seulement, sans les pointeurs | Entrée plus petite | Des appels non résolus attendus, que les pointeurs auraient résolus : C2.1 ne dirait plus rien de la configuration du projet A |
+
+**Choix : C-a** (D-021), au commit **`498d18ae09175d4991b24b633a9a5f2e0e1cc73e`** : les
+fichiers que le manifeste du projet A inclut pour chaque binaire, et leurs inclusions en
+cascade, sans `pc/fixes/`. Copie par `stage-config` (§9, étapes 3 et 4).
 
 **Épinglage**, commun aux options :
 - le porteur clone le projet A **sur sa machine**, se place sur le commit retenu, et en
@@ -483,6 +553,8 @@ Elle ne change donc pas C2.1, sauf par une valeur invalide.
 | **F-b** | `0x86C10000` | Valable quelles que soient les tailles de code, sous T-5 (`J2_A3_FUNCTION_TABLE.md` §7) [V calcul] | Choix d'exécution fait avant d'avoir les tailles ; [I] allocations du jeu |
 | **F-c** | `0x86100000`, celle du projet A | Celle de la configuration du projet A, sans changement | Valable seulement si `c_dll ≤ 0x12C8000` [I] |
 
+**Choix : F-a** (D-021). **Il est en conflit avec C-a** : voir §11.5.
+
 ### 11.3 Délai et ressources, mesurés sur synthétique
 
 **Mesures** [V, sur des données synthétiques, dans le conteneur de Claude Code, pas sur la
@@ -512,6 +584,13 @@ publie que la durée de construction de son SDK, pas celle de sa génération.
 Dans les deux cas, le porteur relève avant la répétition la mémoire de la machine et le
 disque libre du dossier privé. Ce ne sont que deux nombres, partageables après relecture.
 
+**Choix : T-a** (D-021) : deux heures au plus. L'outil refuse `--timeout` au-delà, ou nul
+(`timeout-above-t-a`). `prepare` relève, dans l'étape `resources`, en Mio : la mémoire
+totale et disponible, l'espace d'échange, le disque libre du dossier privé, et la taille
+par défaut du `/dev/shm` du bac à sable (la moitié de la mémoire). Ce ne sont que des
+relevés : **les besoins d'une vraie génération restent inconnus** [I], et l'outil n'en
+déduit aucun seuil.
+
 ### 11.4 Le niveau du journal
 
 | Option | Effet | Compatible avec la procédure |
@@ -523,6 +602,42 @@ disque libre du dossier privé. Ce ne sont que deux nombres, partageables après
 Les erreurs et diagnostics que lit C2.1 sont écrits aux niveaux `error` et `warn`
 (`analyze.cpp:108-128`, `phase_validate.cpp:57`) : ils sont dans le journal avec L-a comme
 avec L-b. Seule la preuve d'un journal complet demande `info`.
+
+**Choix : L-a** (D-021). La commande fixe `--log-level info` ; le journal reste dans le
+dossier d'exécution, local ; `debug` et `trace` sont exclus.
+
+### 11.5 Conflit entre C-a et F-a : arbitrage distinct demandé
+
+**Constat** [V, lecture du projet A lors de l'audit ; `J2_A3_FUNCTION_TABLE.md` §1] : au
+commit épinglé, `pc/config/default.toml`, que le manifeste du projet A inclut pour
+`default.xex`, fixe `function_table_base` (la valeur du projet A, examinée en A3). Avec
+C-a, cette valeur est donc héritée.
+
+**Pourquoi F-a ne peut pas l'annuler** [V, `config.cpp:40-41`, `465`] : une valeur `0`
+dans le manifeste ne remplace pas une valeur non nulle héritée. Ne rien imposer
+demanderait de ne pas copier ce fichier, ou de le modifier.
+
+**Ce que fait l'outil**, conformément à D-021 :
+- `stage-config` copie le fichier tel quel et signale le conflit ;
+- `prepare` donne `table_base_settings 1` et `table-base-conflict`. **`run` est bloqué** ;
+- rien n'est modifié en silence, et ni F-b ni F-c n'est substitué.
+
+**Effet sur le contrôle de compatibilité** [V, lecture du correctif A3] : la clé n'entre
+pas dans l'analyse. C2.1 serait le même avec chacune des options ci-dessous ; seuls les
+gabarits du code généré, et donc l'exécution future, en dépendent.
+
+**Options pour l'arbitrage distinct**, comparables, **aucune retenue** :
+
+| Option | Ce qui est fait | Conséquence sur C-a | Conséquence sur F-a |
+|---|---|---|---|
+| **G-1** | Garder la valeur héritée | Inchangée | Abandonnée : revient à F-c |
+| **G-2** | Fixer une valeur non nulle dans la table du binaire de la copie privée, qui l'emporte | Inchangée | Abandonnée : revient à F-b |
+| **G-3** | Copier `default.toml` sans sa seule ligne `function_table_base`, écart consigné | Modifiée, d'un écart unique et documenté | Tenue |
+| **G-4** | Renoncer à `default.toml` | Amputée de ses débuts de fonctions | Tenue, mais C2.1 ne dirait plus rien de la configuration du projet A |
+
+Quelle que soit l'option retenue, l'outil devra être aligné sur elle dans une PR, avant
+la demande de mandat. Le contrôle `table-base-conflict` reste en place tant que F-a
+s'applique.
 
 ## 12. Ce qui revient dans le dépôt après B2
 

@@ -875,7 +875,12 @@ in
           test_success_needs_a_complete_generation \
           test_a_module_changed_at_constant_size_and_mtime_is_seen \
           test_inventory_sees_content_identity_and_errors \
-          test_survey_tree_is_unchanged_without_listing test_depfile_and_stamp_formats
+          test_survey_tree_is_unchanged_without_listing test_depfile_and_stamp_formats \
+          test_a_table_base_in_any_consumed_configuration_blocks_run \
+          test_a_time_out_above_two_hours_is_refused \
+          test_resources_are_recorded_without_a_claimed_need \
+          test_the_log_level_is_info_and_local \
+          test_the_staged_configuration_of_c_a_passes_prepare
         cat "$out/sandbox-mode.txt"
         B=${b2-codegen}/bin/fifa2010wc-b2-codegen
         "$B" --help > "$out/help.txt"
@@ -908,8 +913,9 @@ in
         echo "|/nix/store/synthetic-systemd/lib/systemd/systemd-coredump %P %u %g %s %t %c %h" \
           > "$S/core_pattern"
         echo 2 > "$S/suid_dumpable"
-        # The private copy of the A5 template, with a synthetic test configuration (made-up
-        # addresses), the test reference of game/, and a B2 proof as rehearse writes it.
+        # The private copy of the A5 template, the test reference of game/, a B2 proof as
+        # rehearse writes it, and a synthetic clone of project A, with its layout at the
+        # commit of option C-a and made-up addresses (D-021).
         ${python}/bin/python3 -I -c '
         import hashlib, importlib.util, json, os, sys, time, types
         sys.dont_write_bytecode = True
@@ -923,17 +929,30 @@ in
         profile = b2.make_profile(b1, load("address_compare"), load("private_project"))
         template = open(os.path.join(tools, "..", "config", "private-template",
                                      "wc2010_manifest.toml")).read()
-        for name in ("default", "fifadllzf"):
-            template = template.replace(
-                f"out_directory_path = \"../generated/{name}\"\nincludes = []",
-                f"out_directory_path = \"../generated/{name}\"\n"
-                f"includes = [\"config/{name}.toml\"]", 1)
         with open(os.path.join(private, "project", "wc2010_manifest.toml"), "w") as f:
             f.write(template)
-        with open(os.path.join(private, "project", "config", "default.toml"), "w") as f:
-            f.write("[functions]\n0x82000010 = {}\n")
-        with open(os.path.join(private, "project", "config", "fifadllzf.toml"), "w") as f:
-            f.write("setjmp_address = 0x82100000\nlongjmp_address = 0x82100040\n")
+        source = os.path.join(os.path.dirname(reference), "project-a")
+        manifest_a = ("[project]\nname = \"fifawc10\"\n\n[entrypoint]\n"
+                      "file_path = \"../out/game-files/default.xex\"\nincludes = [")
+        files = {
+            "pc/fifawc10_manifest.toml": manifest_a +
+                "\"config/codegen_options.toml\", \"config/default.toml\", "
+                "\"config/default_pointers.toml\"]\n\n[[modules]]\n"
+                "guest_path = \"fifadllzf.xex\"\n"
+                "file_path = \"../out/game-files/fifadllzf.xex\"\nincludes = ["
+                "\"config/codegen_options.toml\", \"config/fifadllzf.toml\", "
+                "\"config/fifadllzf_pointers.toml\"]\n",
+            "pc/config/codegen_options.toml": "\n",
+            "pc/config/default.toml": "[functions]\n0x82000010 = {}\n",
+            "pc/config/default_pointers.toml": "[functions]\n0x82000020 = {}\n",
+            "pc/config/fifadllzf.toml":
+                "setjmp_address = 0x82100000\nlongjmp_address = 0x82100040\n",
+            "pc/config/fifadllzf_pointers.toml": "\n",
+            "pc/fixes/boot_fixes.cpp": "// synthetic fix, never staged\n"}
+        for rel, text in files.items():
+            os.makedirs(os.path.dirname(os.path.join(source, rel)), exist_ok=True)
+            with open(os.path.join(source, rel), "w") as f:
+                f.write(text)
         modules = {}
         for name in ("default.xex", "fifadllzf.xex"):
             with open(os.path.join(private, "game", name), "rb") as f:
@@ -952,6 +971,25 @@ in
                                                    proved_at=time.time())})
         ' ${self}/tools "$P" "$S/core_pattern" "$S/suid_dumpable" ${pkgs.bubblewrap}/bin/bwrap \
           ${b1-closure} "$W/reference.json"
+        # Option C-a, through the packaged command: the files project A's manifest includes,
+        # copied from git objects of the pinned commit into project/config/, and named.
+        A="$W/project-a"
+        git -C "$A" init -q
+        git -C "$A" add -A
+        git -C "$A" -c user.name=test -c user.email=test@example.invalid commit -q -m synthetic
+        C=$(git -C "$A" rev-parse HEAD)
+        (cd "$W" && HOME="$H" ${private-project}/bin/fifa2010wc-private-project \
+          --private-dir "$P" --repo "$R" stage-config --source "$A" --commit "$C") \
+          > "$out/0-stage-config.txt" || { cat "$out/0-stage-config.txt"; exit 1; }
+        cat "$out/0-stage-config.txt"
+        grep -q "5 files copied into project/config/, unmodified" "$out/0-stage-config.txt"
+        if grep -q "CONFLICT" "$out/0-stage-config.txt"; then
+          echo "the synthetic configuration sets no function_table_base"; exit 1
+        fi
+        [ "$(ls -A "$P/project" | tr '\n' ' ')" = "config wc2010_manifest.toml " ] \
+          && [ ! -e "$P/project/config/fixes" ] \
+          || { ls -A "$P/project"; echo "stage-config wrote elsewhere"; exit 1; }
+
         b2() {
           (cd "$W" && HOME="$H" WC2010_PRIVATE_DIR="$P" "$B" --repo "$R" --tmp-watch "$W/tmp" \
             --nix "$S/nix" --coredumpctl "$S/coredumpctl" --reference "$W/reference.json" \
@@ -964,8 +1002,10 @@ in
           || { ls -A "$P/logs"; echo "prepare wrote"; exit 1; }
         for fact in "game_files 3, game_directories 1, game_anomalies 0, game_modules_match True" \
                     "output_folders 2, output_folders_empty True, project_entries_ok True" \
-                    "config_files 2, binary_config_files 2, shared_config_files 0" \
-                    "include_depth 1, hook_files 0, template_dirs 0, function_entries 1, crt_entries 2" \
+                    "config_files 5, binary_config_files 5, shared_config_files 0, config_tree_files 5" \
+                    "include_depth 1, hook_files 0, template_dirs 0, function_entries 2, crt_entries 2" \
+                    "table_base_settings 0, timeout_seconds 7200" \
+                    "resources            ok                memory_total_mib " \
                     "closure_closed True, closure_roots_covered True, closure_registered True"; do
           grep -qF "$fact" "$out/1-prepare.txt" || { echo "prepare lacks: $fact"; exit 1; }
         done
@@ -1040,7 +1080,11 @@ in
                test_init_refuses_a_project_link_and_writes_nothing_outside \
                test_init_stops_on_a_link_put_in_place_during_init \
                test_template_paths_that_leave_the_private_root_are_refused_before_install \
-               test_init_refuses_a_template_replaced_by_a_clean_one_after_reading; do
+               test_init_refuses_a_template_replaced_by_a_clean_one_after_reading \
+               test_stage_config_copies_the_pinned_files_and_names_them \
+               test_stage_config_reports_a_conflict_with_f_a_and_changes_nothing \
+               test_stage_config_refusals_write_nothing test_stage_config_never_overwrites \
+               test_stage_config_needs_the_private_copy; do
         grep -q "^$t .* ok$" "$out/selftest.txt" || { echo "$t did not run"; exit 1; }
       done
       ${private-project}/bin/fifa2010wc-private-project template > "$out/template.txt"

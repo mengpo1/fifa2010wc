@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import types
@@ -354,7 +355,9 @@ class PrepareTest(B2Fixture):
                      "test-config          ok                config_files 2, "
                      "binary_config_files 2, shared_config_files 0, config_tree_files 2, "
                      "config_unused_files 0, include_depth 1, hook_files 0, template_dirs 0, "
-                     "function_entries 3, crt_entries 2",
+                     "function_entries 3, crt_entries 2, table_base_settings 0, "
+                     "timeout_seconds 7200",
+                     "resources            ok                memory_total_mib ",
                      "store-closure        ok"):
             self.assertIn(line, self.output)
         self.assert_shareable(self.output)
@@ -584,6 +587,130 @@ class ConfigInputsTest(B2Fixture):
                     shutil.rmtree(folder)
                     os.mkdir(folder, 0o700)
                 self.write_manifest()
+
+
+class ArbitrationTest(B2Fixture):
+    """The arbitrations of the owner (D-021): C-a staged by private_project stage-config,
+    F-a (no function_table_base), T-a (two hours at most, resources recorded), L-a (info)."""
+
+    def config(self, name, text):
+        path = os.path.join(self.project, "config", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+    def test_a_table_base_in_any_consumed_configuration_blocks_run(self):
+        """F-a: a value set in an include, even an indirect one, is a conflict; a 0 in the
+        manifest does not undo it (MergeScalar keeps a non-zero value) and is counted too.
+        Nothing is changed in the configuration, and codegen does not start."""
+        cases = (
+            ("in an include", lambda: self.config(
+                "default.toml", "function_table_base = 0x8C100000\n" +
+                TEST_CONFIG["default.toml"]), 1),
+            ("in an indirect include", lambda: (
+                self.config("default.toml", 'includes = ["common/base.toml"]\n' +
+                            TEST_CONFIG["default.toml"]),
+                self.config("common/base.toml", "function_table_base = 0x8C100000\n")), 1),
+            ("a 0 in the manifest over an inherited value", lambda: (
+                self.config("default.toml", "function_table_base = 0x8C100000\n" +
+                            TEST_CONFIG["default.toml"]),
+                self.write_manifest(),
+                self.write_text(self.manifest, open(self.manifest).read().replace(
+                    'out_directory_path = "../generated/default"\n',
+                    'out_directory_path = "../generated/default"\n'
+                    'function_table_base = 0\n', 1))), 2))
+        for name, setup, count in cases:
+            with self.subTest(name=name):
+                setup()
+                with open(os.path.join(self.project, "config", "default.toml")) as f:
+                    staged = f.read()
+                # Found by the checks before any write: no run folder, nothing started.
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn(f"table_base_settings {count}, ", self.output)
+                self.assertIn("finding table-base-conflict", self.output)
+                self.assertEqual(self.run_dirs(), [])
+                self.assertIsNone(self.recorded())
+                with open(os.path.join(self.project, "config", "default.toml")) as f:
+                    self.assertEqual(f.read(), staged)
+                self.assertNotIn("0x8C1", self.output)
+                self.assert_shareable(self.output)
+                self.config("default.toml", TEST_CONFIG["default.toml"])
+                shutil.rmtree(os.path.join(self.project, "config", "common"),
+                              ignore_errors=True)
+                self.write_manifest()
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+
+    def test_a_time_out_above_two_hours_is_refused(self):
+        for value in ("7201", "0"):
+            with self.subTest(value=value):
+                self.assertEqual(self.tool("run", "--timeout", value), 1)
+                self.assertIn("finding timeout-above-t-a", self.output)
+                self.assertEqual(self.run_dirs(), [])
+                self.assertIsNone(self.recorded())
+        self.assertEqual(self.tool("prepare", "--timeout", "7200"), 0, self.output)
+
+    def test_resources_are_recorded_without_a_claimed_need(self):
+        meminfo = os.path.join(self.records, "meminfo")
+        self.write_text(meminfo, "MemTotal:       16384000 kB\nMemFree:  1 kB\n"
+                                 "MemAvailable:    8192000 kB\nSwapTotal:       0 kB\n")
+        self.assertEqual(self.tool("prepare", "--meminfo", meminfo), 0, self.output)
+        self.assertIn("resources            ok                memory_total_mib 16000, "
+                      "memory_available_mib 8000, swap_total_mib 0, disk_free_mib ",
+                      self.output)
+        self.assertIn(", shm_default_limit_mib 8000\n", self.output)
+        self.assert_shareable(self.output)
+
+    def test_the_log_level_is_info_and_local(self):
+        """L-a: the command sets the info level, and the log stays in the run folder."""
+        self.assertEqual(b2.LOG_LEVEL, "info")
+        self.assertEqual(self.tool("run"), 0, self.output)
+        record = self.recorded()
+        self.assertEqual(record["argv"][:2], ["--log-level", "info"])
+        self.assertEqual(os.path.dirname(record["argv"][3]), self.run_dirs()[0])
+        for level in ("debug", "trace"):
+            self.assertNotIn(level, record["argv"])
+
+    def test_the_staged_configuration_of_c_a_passes_prepare(self):
+        """C-a end to end, on a synthetic clone with the layout of project A: stage-config
+        copies the files and names them; prepare then sees what codegen will consume."""
+        pp = load(os.path.join(HERE, "private_project.py"), "private_project_stage")
+        shutil.rmtree(os.path.join(self.project, "config"))
+        self.write_text(self.manifest, open(TEMPLATE).read())
+        source = os.path.join(self.w, "project-a")
+        files = {
+            "pc/fifawc10_manifest.toml":
+                '[project]\nname = "fifawc10"\n\n[entrypoint]\n'
+                'file_path = "../out/game-files/default.xex"\n'
+                'includes = ["config/codegen_options.toml", "config/default.toml", '
+                '"config/default_pointers.toml"]\n\n[[modules]]\nguest_path = "fifadllzf.xex"\n'
+                'file_path = "../out/game-files/fifadllzf.xex"\n'
+                'includes = ["config/codegen_options.toml", "config/fifadllzf.toml", '
+                '"config/fifadllzf_pointers.toml"]\n',
+            "pc/config/codegen_options.toml": "\n",
+            "pc/config/default.toml": TEST_CONFIG["default.toml"],
+            "pc/config/default_pointers.toml": "[functions]\n0x82000030 = {}\n",
+            "pc/config/fifadllzf.toml": TEST_CONFIG["fifadllzf.toml"],
+            "pc/config/fifadllzf_pointers.toml": "[functions]\n0x821000C0 = {}\n"}
+        for rel, text in files.items():
+            os.makedirs(os.path.dirname(os.path.join(source, rel)), exist_ok=True)
+            self.write_text(os.path.join(source, rel), text)
+        git = ["git", "-C", source, "-c", "user.name=test", "-c",
+               "user.email=test@example.invalid", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "init", "-q", source], check=True)
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "synthetic project A"], check=True)
+        commit = subprocess.run(["git", "-C", source, "rev-parse", "HEAD"], check=True,
+                                capture_output=True, text=True).stdout.strip()
+        findings, notes = pp.stage_config(self.private, source, t1.GUARD, repo=self.repo,
+                                          commit=commit)
+        self.assertEqual(findings, [], notes)
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+        self.assertIn("config_files 5, binary_config_files 5, shared_config_files 0, "
+                      "config_tree_files 5, config_unused_files 0, include_depth 1", self.output)
+        self.assertIn("function_entries 5, crt_entries 2, table_base_settings 0", self.output)
+        self.assertEqual(self.tool("run"), 0, self.output)
+        self.assertIn("  B2 result for PB-2 (C2.1 met and generation complete): yes",
+                      self.output)
 
 
 class RunTest(B2Fixture):
