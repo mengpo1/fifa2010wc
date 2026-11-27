@@ -385,8 +385,10 @@ décision explicite) :
   - un échec écarte la réutilisation telle quelle, et l'on passe à la nouvelle analyse
     (`J2_PREREQUISITES.md` §5) ;
   - un succès ne prouve pas l'identité du code.
-- **Procédure** : proposée le 2026-11-27, **non autorisée** (`J2_B2_COMPATIBILITY.md`,
-  outil `.#b2-codegen`). Elle demande un mandat distinct (D-020).
+- **Procédure** : proposée le 2026-11-27, version 2 après la revue ciblée de la PR #35 ;
+  **non autorisée** (`J2_B2_COMPATIBILITY.md`, outil `.#b2-codegen`). Elle demande un
+  mandat distinct (D-020). Elle propose un critère de plus, distinct de C2.1 : la
+  complétude de la génération (`J2_B2_COMPATIBILITY.md` §6.3).
 
 ### 4.3 B3 — Validation des adresses
 

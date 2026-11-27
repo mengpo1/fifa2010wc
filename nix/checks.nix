@@ -865,7 +865,17 @@ in
           test_unresolved_calls_fail_c21_and_stay_local test_a_partial_log_is_refused_not_counted \
           test_changes_to_inputs_and_outputs_are_findings test_the_proof_is_per_profile \
           test_killed_supervisor_can_be_resumed test_real_sandbox_keeps_game_read_only \
-          test_probe_checks_of_b2
+          test_probe_checks_of_b2 test_unreadable_entries_are_findings \
+          test_transitive_includes_are_inventoried_and_listed_by_codegen \
+          test_inputs_must_stay_in_config_and_be_valid \
+          test_an_include_changed_between_prepare_and_the_step_stops_it \
+          test_changes_during_the_step_are_findings \
+          test_codegen_inputs_are_checked_against_the_inventory \
+          test_an_empty_or_truncated_log_after_exit_0_is_refused \
+          test_success_needs_a_complete_generation \
+          test_a_module_changed_at_constant_size_and_mtime_is_seen \
+          test_inventory_sees_content_identity_and_errors \
+          test_survey_tree_is_unchanged_without_listing test_depfile_and_stamp_formats
         cat "$out/sandbox-mode.txt"
         B=${b2-codegen}/bin/fifa2010wc-b2-codegen
         "$B" --help > "$out/help.txt"
@@ -953,8 +963,9 @@ in
         [ "$(ls -A "$P/logs" | tr '\n' ' ')" = "b2-rehearse-20000101T000000Z " ] \
           || { ls -A "$P/logs"; echo "prepare wrote"; exit 1; }
         for fact in "game_files 3, game_directories 1, game_anomalies 0, game_modules_match True" \
-                    "output_folders 2, output_folders_empty True" \
-                    "config_files 2, function_entries 1, crt_entries 2" \
+                    "output_folders 2, output_folders_empty True, project_entries_ok True" \
+                    "config_files 2, binary_config_files 2, shared_config_files 0" \
+                    "include_depth 1, hook_files 0, template_dirs 0, function_entries 1, crt_entries 2" \
                     "closure_closed True, closure_roots_covered True, closure_registered True"; do
           grep -qF "$fact" "$out/1-prepare.txt" || { echo "prepare lacks: $fact"; exit 1; }
         done
@@ -980,15 +991,19 @@ in
         cat "$out/2-run.txt"
         [ "$status" -eq 1 ] || { echo "the synthetic modules must make codegen fail"; exit 1; }
         run=$(echo "$P"/logs/b2-run-*)
-        for line in "probe_failed_checks -" \
+        for line in "probe_checks 30, probe_checks_passed 30, probe_failed_checks -" \
                     "proof_found True" \
+                    "game_entries_hashed 3" \
                     "codegen              finding  exit 1" \
                     "finding codegen-failed (x1)" \
-                    "game/ unchanged, PB-1 figures and module hashes: match" \
+                    "game/ unchanged (content, metadata and identity of every entry; PB-1 figures): match" \
+                    "configuration inputs unchanged (project/config/, project/): match" \
                     "manifest changed only by its sdk_version line: match" \
                     "codegen exit status: expected 0, found 1: DIFFERS" \
                     "unresolved calls: expected 0, found 0: match" \
                     "C2.1 met: no" \
+                    "generation complete (every listed output, every kind, the entry files, the log summary): no" \
+                    "B2 result for PB-2 (C2.1 met and generation complete): no" \
                     "decision: this tool does not declare PB-2"; do
           grep -qF "$line" "$run/summary.txt" || { echo "summary lacks: $line"; exit 1; }
         done

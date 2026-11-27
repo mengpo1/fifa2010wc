@@ -118,7 +118,8 @@ MOUNT_COLUMNS = ("ID,UNIQ-ID,PARENT,MAJ:MIN,FSROOT,TARGET,FSTYPE,SOURCE,VFS-OPTI
                  "FS-OPTIONS,PROPAGATION")
 MOUNT_KEYS = ("id", "uniq-id", "parent", "maj:min", "fsroot", "target", "fstype", "source",
               "vfs-options", "fs-options", "propagation")
-# Run folders of every step of the engine: b1-run-…, b2-rehearse-… (docs/J2_LOCAL_STEP_ENGINE.md).
+# Run folders of every step of the engine: b1-run-…, b2-rehearse-…
+# (docs/J2_LOCAL_STEP_ENGINE.md).
 RUN_DIR_RE = re.compile(r"b[1-9]-(run|rehearse)-[0-9]{8}T[0-9]{6}Z")
 STATE_FILE = "state.json"
 # The summary block that `rexglue vfs dump` writes on stderr
@@ -540,6 +541,12 @@ class Context:
 
 # --- step profiles -----------------------------------------------------------------------
 
+def probe_name(prefix, folder):
+    """The name of a probe check on a folder of the private folder: `project/config`
+    gives `write-denied-project-config`."""
+    return f"{prefix}-{folder.replace(os.sep, '-')}"
+
+
 class Profile:
     """What one controlled step adds to the generic engine (docs/J2_LOCAL_STEP_ENGINE.md).
     The engine runs the checks, the sandbox, the proof of option B, preflight and
@@ -551,7 +558,8 @@ class Profile:
     title = "B1"
     tool = "b1_extract"
     run_step = "vfs-dump"
-    # Folders the sandbox may write, besides the run folder; folders it must not write.
+    # Folders the sandbox may write, besides the run folder; folders it must not write,
+    # bound read-only after the writable ones (one may lie inside a writable folder).
     writable = SANDBOX_WRITABLE
     read_only = ()
     components = PRIVATE_COMPONENTS
@@ -563,7 +571,7 @@ class Profile:
         """The probe checks of this profile, in a fixed order."""
         checks = list(PROBE_CHECKS)
         at = checks.index("write-denied-repo") + 1
-        checks[at:at] = [f"write-denied-{name}" for name in self.read_only]
+        checks[at:at] = [probe_name("write-denied", name) for name in self.read_only]
         at = checks.index("writable-game")
         checks[at:at + 3] = [f"writable-{name}" for name in self.writable]
         return tuple(checks)
@@ -1402,8 +1410,9 @@ def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     network: only a loopback of its own), no further user namespace, killed with this
     process; an empty root holding only the paths of the store closure (read-only, D-019),
     /dev and /proc of the sandbox, an empty /tmp, the tool, the private folder (read-only)
-    and the run folder, game/, app/ and tmp/ (writable); then the root is remounted
-    read-only. Without a validated closure there is no sandbox, and no fallback."""
+    and the run folder, game/, app/ and tmp/ (writable), the read-only folders of the
+    profile bound again read-only; then the root is remounted read-only. Without a
+    validated closure there is no sandbox, and no fallback."""
     if not ctx.closure:
         raise RuntimeError("no validated store closure")
     exe = bwrap_executable(ctx)
@@ -1421,6 +1430,11 @@ def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     for name in ctx.profile.writable:
         path = os.path.join(ctx.private, name)
         argv += ["--bind", path, path]
+    # Read-only folders last: one inside a writable folder (B2: project/config/ inside
+    # project/) stays read-only.
+    for name in ctx.profile.read_only:
+        path = os.path.join(ctx.private, name)
+        argv += ["--ro-bind", path, path]
     argv += ["--remount-ro", "/"]
     argv += ["--chdir", chdir or ctx.private, "--json-status-fd", str(status_fd), "--"]
     return argv + list(command)
@@ -1670,7 +1684,7 @@ def probe_main(argv):
     for name, folder in spec["writable"].items():
         check(f"writable-{name}", os.access(folder, os.W_OK))
     for name, folder in spec["read_only"].items():
-        write_denied(f"write-denied-{name}", folder)
+        write_denied(probe_name("write-denied", name), folder)
     check("image-read-only", os.access(spec["image"], os.R_OK)
           and not os.access(spec["image"], os.W_OK))
     check("tmp-private-empty", os.listdir("/tmp") == [])
@@ -2024,16 +2038,31 @@ def image_state(path):
     return {"sha256": digest.hexdigest(), "identity": identity}
 
 
-def survey_tree(root, modules):
+def survey_tree(root, modules, listing=False, content=False):
     """The PB-1 figures of an extracted tree. Every entry below `root` is counted, the root
     itself is not, as the J0 tool counts the disc. Names that start with a dot are counted
     too, and reported. Folders are opened with O_NOFOLLOW from the descriptor of their
     parent, so a link is never followed. A link, a special file, a hard link, an entry on
     another file system or an unreadable entry is an anomaly, and is not counted. The
     modules named in `modules` are looked for at the root, by name in any case, and
-    hashed."""
+    hashed.
+
+    With `listing`, figures["entries"] lists the root and every entry counted, sorted by
+    path: [path, kind, mode, size, mtime_ns, ctime_ns, device, inode, sha256]. With
+    `content`, the sha256 of each file is that of its content, read through hash_module
+    (a descriptor opened without following links, checked against the listed identity);
+    a module is then not read twice. Without it, sha256 is None. This is an observation
+    at one time: it does not see a change made and fully undone between two
+    observations."""
     figures = {"files": 0, "directories": 0, "bytes": 0, "hidden_names": 0,
                "anomalies": [], "modules": {}}
+    inventory = [] if listing else None
+    hashed = {}
+
+    def listed(path, kind, st, digest=None):
+        if listing:
+            inventory.append([path, kind, st.st_mode, st.st_size if kind == "file" else 0,
+                              st.st_mtime_ns, st.st_ctime_ns, st.st_dev, st.st_ino, digest])
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     anomalies = figures["anomalies"]
     try:
@@ -2042,6 +2071,7 @@ def survey_tree(root, modules):
         anomalies.append(["unreadable folder", f". ({exc.strerror})"])
         return figures
     root_st = os.fstat(root_fd)
+    listed(".", "dir", root_st)
     at_root = {}
     stack = [(root_fd, "")]
     try:
@@ -2078,13 +2108,24 @@ def survey_tree(root, modules):
                         anomalies.append(["changed while counted", path])
                         continue
                     figures["directories"] += 1
+                    listed(path, "dir", child_st)
                     stack.append((child, path))
                 elif stat.S_ISREG(st.st_mode):
                     if st.st_nlink != 1:
                         anomalies.append(["hard link", path])
                         continue
+                    digest = None
+                    if content:
+                        found = hash_module(fd, name, st)
+                        if found["status"] != "hashed":
+                            anomalies.append(["unreadable entry",
+                                              f"{path} ({found['status']})"])
+                            continue
+                        hashed[path] = found
+                        digest = found["sha256"]
                     figures["files"] += 1
                     figures["bytes"] += st.st_size
+                    listed(path, "file", st, digest)
                     if not rel:
                         at_root.setdefault(name.lower(), []).append((name, st))
                 else:
@@ -2100,12 +2141,15 @@ def survey_tree(root, modules):
                 anomalies.append(["several names for one module", key])
             else:
                 name, st = found[0]
-                figures["modules"][key] = hash_module(root_fd, name, st)
+                figures["modules"][key] = hashed.get(name) or hash_module(root_fd, name, st)
     finally:
         for fd, _ in stack:
             if fd != root_fd:
                 os.close(fd)
         os.close(root_fd)
+    if listing:
+        inventory.sort(key=lambda entry: entry[0])
+        figures["entries"] = inventory
     return figures
 
 

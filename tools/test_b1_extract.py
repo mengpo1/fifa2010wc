@@ -243,6 +243,10 @@ def status(doc):
     except OSError:
         pass
 if "_probe" in cmd:
+    # A change made while the probe runs: after prepare, before the step.
+    for path, text in plan.get("probe_writes", []):
+        with open(path, "w") as f:
+            f.write(text)
     status({"child-pid": os.getpid()})
     print(json.dumps(plan["probe_results"]))
     status({"exit-code": 0})

@@ -48,12 +48,17 @@ B2 = b2.make_profile(b1, load(os.path.join(HERE, "address_compare.py"), "address
 SENTINEL = t1.SENTINEL
 
 # The fake `rexglue codegen`. It records its arguments, working folder, core size limit and
-# environment in the run folder, then follows the plan: outputs in each output folder of the
-# manifest, a log in the formats of ReXGlue v0.11.0, and the rewrite of [project].sdk_version
-# after a success. It can also misbehave: write in game/, outside, change the manifest,
-# leave a link, write a partial log, crash or hang.
+# environment in the run folder, then follows the plan, in the formats of ReXGlue v0.11.0
+# (docs/J2_B2_COMPATIBILITY.md §6): in each output folder the ten outputs of a module and a
+# codegen.stamp that lists them; in the folder of the entry module codegen.d (the inputs:
+# modules, manifest, configurations included, transitively), codegen.build.stamp and the
+# module registry; the `Codegen summary` line in the log; the rewrite of
+# [project].sdk_version after a success. It can also misbehave: write in game/,
+# project/config/, project/ or outside, change a file at constant size and mtime, change the
+# manifest, leave out or spoil an output, list another input, write a partial, truncated or
+# empty log, crash or hang.
 FAKE_CODEGEN = r'''
-import errno, json, os, resource, signal, sys, time, tomllib
+import errno, hashlib, json, os, resource, signal, sys, time, tomllib
 plan = json.loads(os.environ["B1_FAKE_PLAN_JSON"]) if "B1_FAKE_PLAN_JSON" in os.environ \
     else json.load(open(os.environ["B1_FAKE_PLAN"]))
 args = sys.argv[1:]
@@ -71,8 +76,9 @@ base = os.path.dirname(manifest)
 with open(manifest, "rb") as f:
     table = tomllib.load(f)
 binaries = [table["entrypoint"]] + table.get("modules", [])
+INFO = "[2026-11-27 12:00:00.000] [rexglue] [info] "
 log = open(log_path, "a")
-log.write("[2026-11-27 12:00:00.000] [info] codegen: project wc2010, 1 DLL\n")
+log.write(INFO + "Recompiling wc2010\n")
 for line in plan.get("log_lines", []):
     log.write(line + "\n")
 errors = plan.get("unresolved", 0) + plan.get("millicode", 0)
@@ -102,6 +108,21 @@ if plan.get("modify_module"):
         with open(os.path.join(base, "..", "game", "default.xex"), "a") as f:
             f.write("changed\n")
     attempt("module", action)
+if plan.get("modify_config"):
+    def action():
+        with open(os.path.join(base, "config", "default.toml"), "a") as f:
+            f.write("# changed\n")
+    attempt("config", action)
+for rel in plan.get("same_stat", []):
+    # One byte changed, the size and the modification time kept.
+    def action(path=os.path.normpath(os.path.join(base, rel))):
+        st = os.stat(path)
+        with open(path, "r+b") as f:
+            data = f.read()
+            f.seek(0)
+            f.write(bytes([data[0] ^ 1]) + data[1:])
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    attempt(rel, action)
 save()
 if plan.get("sleep"):
     time.sleep(plan["sleep"])
@@ -109,20 +130,84 @@ if plan.get("signal"):
     os.kill(os.getpid(), getattr(signal, "SIG" + plan["signal"]))
 if errors:
     sys.exit(1)
+def consumed(tbl, folder, chain):
+    found = []
+    for include in tbl.get("includes", []):
+        path = os.path.realpath(os.path.join(folder, include))
+        if path in chain:
+            continue
+        with open(path, "rb") as f:
+            sub = tomllib.load(f)
+        found += [path] + consumed(sub, os.path.dirname(path), chain + [path])
+    return found
+def escape(path):
+    return path.replace("$", "$$").replace(" ", "\\ ").replace("#", "\\#")
+SUFFIXES = ("_pch.h", "_funcs.h", "_init.h", "_init.cpp", "_register.cpp", "_funcs.0.h",
+            "_recomp.0.cpp")
+fingerprints, inputs, listed = [], [], 0
 for index, binary in enumerate(binaries):
+    if plan.get("no_outputs"):
+        break
     out = os.path.normpath(os.path.join(base, binary["out_directory_path"]))
-    prefix = os.path.splitext(os.path.basename(binary["file_path"]))[0]
-    with open(os.path.join(out, f"{prefix}_init.cpp"), "w") as f:
-        f.write("const PPCFuncMapping kPPCFuncMappings[] = {\n"
-                "\t{ 0x82000000, sub_82000000 },\n\t{ 0, nullptr }\n};\n")
-    for name in (f"{prefix}_recomp.0.cpp", f"{prefix}_funcs.h", "codegen.stamp"):
+    # Every binary takes the project name as prefix (src/codegen/manifest.cpp:59).
+    names = [table["project"]["name"] + s for s in SUFFIXES] + [
+        "sources.cmake", "codegen.partition.json", "codegen.mmio.json"]
+    for name in names:
         with open(os.path.join(out, name), "w") as f:
-            f.write("// synthetic output\n")
-    if index == 0:
-        with open(os.path.join(out, "codegen.d"), "w") as f:
-            f.write("synthetic dependency list\n")
-    if plan.get("leave_link") and index == 0:
-        os.symlink("/etc/passwd", os.path.join(out, "link"))
+            if name.endswith("_init.cpp"):
+                f.write("const PPCFuncMapping kPPCFuncMappings[] = {\n"
+                        "\t{ 0x82000000, sub_82000000 },\n\t{ 0, nullptr }\n};\n")
+            else:
+                f.write("// synthetic output\n")
+    module_inputs = [base + "/" + binary["file_path"], manifest] + consumed(binary, base, [])
+    fingerprint = hashlib.sha256(json.dumps([names, module_inputs]).encode()).hexdigest()
+    with open(os.path.join(out, "codegen.stamp"), "w") as f:
+        if plan.get("bad_stamp") == index:
+            f.write("not a stamp\n")
+        elif plan.get("no_stamp") != index:
+            json.dump({"version": 1, "fingerprint": fingerprint, "outputs": sorted(names)},
+                      f, indent=2)
+    if plan.get("no_stamp") == index:
+        os.unlink(os.path.join(out, "codegen.stamp"))
+    if plan.get("missing_output") == index:
+        os.unlink(os.path.join(out, names[6]))
+    fingerprints.append(fingerprint)
+    inputs += module_inputs
+    listed += len(names)
+entry = os.path.normpath(os.path.join(base, binaries[0]["out_directory_path"]))
+if not plan.get("no_outputs"):
+    listing = sorted(set(inputs)) + plan.get("depfile_extra", [])
+    if plan.get("depfile_skip_configs"):
+        listing = [p for p in listing if not p.endswith(".toml") or p == manifest]
+    build_stamp = os.path.join(entry, "codegen.build.stamp")
+    with open(os.path.join(entry, "codegen.d"), "w") as f:
+        f.write(escape(build_stamp) + ":" + "".join(" \\\n  " + escape(p) for p in listing)
+                + "\n")
+    with open(build_stamp, "w") as f:
+        f.write("".join(fp + "\n" for fp in fingerprints[::-1 if plan.get("swap_build")
+                                                         else 1]))
+    for name in ("module_registry.cpp", "dll_targets.cmake"):
+        if plan.get("no_registry") != name:
+            with open(os.path.join(entry, name), "w") as f:
+                f.write("// synthetic registry\n")
+    if plan.get("unlisted"):
+        with open(os.path.join(entry, "stray.txt"), "w") as f:
+            f.write("not listed\n")
+    if plan.get("leave_link"):
+        os.symlink("/etc/passwd", os.path.join(entry, "link"))
+    if plan.get("unreadable_dir"):
+        os.mkdir(os.path.join(entry, "hidden"))
+        os.chmod(os.path.join(entry, "hidden"), 0)
+written = listed + 2 + plan.get("summary_offset", 0)
+with open(log_path, "a") as log:
+    if not plan.get("truncated_log"):
+        log.write(INFO + f"Codegen summary: {written} written, 0 unchanged, 0 deleted, "
+                  "0 module(s) up to date\n")
+if plan.get("empty_log"):
+    open(log_path, "w").close()
+if plan.get("cut_log"):
+    with open(log_path, "rb+") as f:
+        f.truncate(os.path.getsize(log_path) - 1)
 with open(manifest) as f:
     text = f.read()
 text = text.replace('sdk_version = "0.11.0"', 'sdk_version = "0.11.0"  # rewritten', 1)
@@ -132,6 +217,12 @@ tmp = manifest + ".tmp"
 with open(tmp, "w") as f:
     f.write(text)
 os.rename(tmp, manifest)
+if plan.get("extra_project_file"):
+    def action():
+        with open(os.path.join(base, "stray.toml"), "w") as f:
+            f.write("\n")
+    attempt("project", action)
+    save()
 sys.exit(int(plan.get("exit", 0)))
 '''
 
@@ -259,8 +350,10 @@ class PrepareTest(B2Fixture):
         for line in ("game-tree            ok                game_files 4, game_directories 2, "
                      "game_anomalies 0, game_modules_match True",
                      "project              ok                manifest_findings 0, "
-                     "output_folders 2, output_folders_empty True",
+                     "output_folders 2, output_folders_empty True, project_entries_ok True",
                      "test-config          ok                config_files 2, "
+                     "binary_config_files 2, shared_config_files 0, config_tree_files 2, "
+                     "config_unused_files 0, include_depth 1, hook_files 0, template_dirs 0, "
                      "function_entries 3, crt_entries 2",
                      "store-closure        ok"):
             self.assertIn(line, self.output)
@@ -289,6 +382,25 @@ class PrepareTest(B2Fixture):
                 self.write_text(os.path.join(self.game, "default.xex"), original)
         self.assertEqual(self.tool("prepare"), 0, self.output)
 
+    def test_unreadable_entries_are_findings(self):
+        """An entry the survey cannot read is a finding, not an entry left out: in game/ it
+        breaks the PB-1 figures, in project/config/ it makes the inventory incomplete."""
+        for folder, code in ((os.path.join(self.game, "media", "sub"), "game-tree-differs"),
+                             (os.path.join(self.project, "config", "extra"),
+                              "tree-unreadable")):
+            with self.subTest(folder=folder):
+                os.makedirs(folder, exist_ok=True)
+                os.chmod(folder, 0)
+                self.addCleanup(lambda folder=folder: os.path.isdir(folder) and
+                                os.chmod(folder, 0o700))
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn(f"finding {code}", self.output)
+                self.assertIsNone(self.recorded())
+                os.chmod(folder, 0o700)
+                if folder.endswith("extra"):
+                    os.rmdir(folder)
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+
     def test_manifest_outputs_and_test_config(self):
         cases = (("invalid manifest", lambda: self.write_manifest(
                      extra='\n[[modules]]\nguest_path = "x"\nfile_path = "/etc/passwd"\n'
@@ -300,7 +412,10 @@ class PrepareTest(B2Fixture):
                      os.path.join(self.private, "app", "rexglue.toml"), ""),
                   "app-config-present"),
                  ("no test configuration", lambda: self.write_manifest(includes=False),
-                  "test-config-absent"))
+                  "test-config-absent"),
+                 ("another file in project/", lambda: self.write_text(
+                     os.path.join(self.project, "notes.toml"), ""),
+                  "project-unexpected-entry"))
         os.makedirs(os.path.join(self.private, "app"), exist_ok=True)
         for name, change, code in cases:
             with self.subTest(name=name):
@@ -309,7 +424,8 @@ class PrepareTest(B2Fixture):
                 self.assertIn(f"finding {code}", self.output)
                 self.assertIsNone(self.recorded())
                 self.write_manifest()
-                for path in ("generated/default/old.cpp", "app/rexglue.toml"):
+                for path in ("generated/default/old.cpp", "app/rexglue.toml",
+                             "project/notes.toml"):
                     if os.path.exists(os.path.join(self.private, path)):
                         os.unlink(os.path.join(self.private, path))
         self.assertEqual(self.tool("prepare"), 0, self.output)
@@ -325,7 +441,163 @@ class PrepareTest(B2Fixture):
         self.assertTrue(self.step(report, "core-probe")["facts"]["proof_acquired"])
 
 
+class ConfigInputsTest(B2Fixture):
+    """Review 7220519596, point 1: the configuration inputs codegen consumes are
+    inventoried, transitively, must lie in project/config/, and must not change."""
+
+    def config(self, name, text):
+        path = os.path.join(self.project, "config", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_transitive_includes_are_inventoried_and_listed_by_codegen(self):
+        self.config("default.toml", 'includes = ["common/base.toml"]\n' +
+                    TEST_CONFIG["default.toml"])
+        self.config("common/base.toml", 'includes = ["more.toml"]\n'
+                    '[functions]\n0x82000030 = {}\n')
+        self.config("common/more.toml", "[functions]\n0x82000040 = {}\n")
+        self.config("unused.txt", "notes\n")
+        self.assertEqual(self.tool("run"), 0, self.output)
+        report = self.report()
+        facts = self.step(report, "test-config")["facts"]
+        self.assertEqual((facts["config_files"], facts["binary_config_files"],
+                          facts["include_depth"], facts["config_tree_files"],
+                          facts["config_unused_files"], facts["function_entries"]),
+                         (4, 4, 3, 5, 1, 5))
+        inputs = self.step(report, "codegen-inputs")["facts"]
+        self.assertEqual((inputs["depfile_found"], inputs["unexpected_inputs"],
+                          inputs["configs_not_in_depfile"]), (True, 0, 0))
+        self.assertNotIn("0x82", self.summary())
+
+    def test_inputs_must_stay_in_config_and_be_valid(self):
+        outside = os.path.join(self.private, "app", "x.toml")
+        os.makedirs(os.path.dirname(outside), exist_ok=True)
+        self.write_text(outside, "[functions]\n")
+        target = self.config("real.toml", "[functions]\n")
+        cases = (
+            ("include outside", '"../app/x.toml"', None, "config-outside"),
+            ("include through a link", '"config/link.toml"',
+             lambda: os.symlink(target, os.path.join(self.project, "config", "link.toml")),
+             "config-outside"),
+            ("link to outside", '"config/out.toml"',
+             lambda: os.symlink(outside, os.path.join(self.project, "config", "out.toml")),
+             "config-outside"),
+            ("missing", '"config/none.toml"', None, "test-config-invalid"),
+            ("not a path", "1", None, "test-config-invalid"),
+            ("circular", '"config/loop.toml"',
+             lambda: self.config("loop.toml", 'includes = ["loop.toml"]\n'),
+             "test-config-invalid"),
+            ("sets a key of the manifest", '"config/path.toml"',
+             lambda: self.config("path.toml", 'file_path = "../../game/default.xex"\n'),
+             "test-config-invalid"),
+            ("too deep", '"config/d0.toml"', lambda: [
+                self.config(f"d{i}.toml", f'includes = ["d{i + 1}.toml"]\n')
+                for i in range(33)] + [self.config("d33.toml", "\n")],
+             "test-config-invalid"))
+        for name, include, setup, code in cases:
+            with self.subTest(name=name):
+                if setup:
+                    setup()
+                self.write_manifest()
+                with open(self.manifest) as f:
+                    text = f.read()
+                self.write_text(self.manifest, text.replace(
+                    'includes = ["config/default.toml"]',
+                    f'includes = ["config/default.toml", {include}]', 1))
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn(f"finding {code}", self.output)
+                self.assertIsNone(self.recorded())
+                for entry in os.listdir(os.path.join(self.project, "config")):
+                    path = os.path.join(self.project, "config", entry)
+                    if entry not in TEST_CONFIG and entry != "real.toml":
+                        os.unlink(path)
+        for key, value in (("hook_sources", '["../app"]'), ("template_dir", '"../app"')):
+            with self.subTest(key=key):
+                self.write_manifest()
+                with open(self.manifest) as f:
+                    text = f.read()
+                if key == "hook_sources":
+                    text = text.replace('game_root = "../game"',
+                                        f'game_root = "../game"\nhook_sources = {value}', 1)
+                else:
+                    text = f"template_dir = {value}\n" + text
+                self.write_text(self.manifest, text)
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn("finding config-outside", self.output)
+                self.assertIsNone(self.recorded())
+        os.unlink(target)
+        self.write_manifest()
+        self.assertEqual(self.tool("prepare"), 0, self.output)
+
+    def test_an_include_changed_between_prepare_and_the_step_stops_it(self):
+        """Substitution after prepare: the inventory is taken again right before codegen."""
+        path = os.path.join(self.project, "config", "default.toml")
+        self.plan["probe_writes"] = [[path, TEST_CONFIG["default.toml"].replace("10", "14")]]
+        self.assertEqual(self.tool("run"), 1)
+        report = self.report()
+        before = self.step(report, "before-extraction")
+        self.assertIn("config-changed", [f["code"] for f in before["findings"]])
+        self.assertIsNone(self.recorded())
+        self.assertEqual(self.step(report, "codegen")["status"], "skipped")
+
+    def test_changes_during_the_step_are_findings(self):
+        """In the fake sandbox nothing is read-only: an include changed, one changed at
+        constant size and modification time, and another file in project/ are seen."""
+        for plan, code in (({"modify_config": True}, "config-changed"),
+                           ({"same_stat": ["config/fifadllzf.toml"]}, "config-changed"),
+                           ({"extra_project_file": True}, "project-unexpected-entry")):
+            with self.subTest(plan=plan):
+                saved = dict(self.plan)
+                self.plan.update(plan)
+                self.assertEqual(self.tool("run"), 1)
+                report = self.report()
+                self.assertIn(code, self.codes(report))
+                self.assertIn("  configuration inputs unchanged (project/config/, project/): "
+                              "DIFFERS", self.output)
+                self.plan = saved
+                shutil.rmtree(self.run_dir)
+                for name in ("default.toml", "fifadllzf.toml"):
+                    self.write_text(os.path.join(self.project, "config", name),
+                                    TEST_CONFIG[name])
+                for out in ("default", "fifadllzf"):
+                    folder = os.path.join(self.private, "generated", out)
+                    shutil.rmtree(folder)
+                    os.mkdir(folder, 0o700)
+                if os.path.exists(os.path.join(self.project, "stray.toml")):
+                    os.unlink(os.path.join(self.project, "stray.toml"))
+                self.write_manifest()
+
+    def test_codegen_inputs_are_checked_against_the_inventory(self):
+        for plan, code in (({"depfile_extra": ["/etc/hosts"]}, "codegen-input-unexpected"),
+                           ({"depfile_skip_configs": True}, "config-inventory-differs")):
+            with self.subTest(plan=plan):
+                saved = dict(self.plan)
+                self.plan.update(plan)
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn(code, self.codes(self.report()))
+                self.plan = saved
+                shutil.rmtree(self.run_dir)
+                for out in ("default", "fifadllzf"):
+                    folder = os.path.join(self.private, "generated", out)
+                    shutil.rmtree(folder)
+                    os.mkdir(folder, 0o700)
+                self.write_manifest()
+
+
 class RunTest(B2Fixture):
+    def reset_outputs(self):
+        shutil.rmtree(self.run_dir)
+        for out in ("default", "fifadllzf"):
+            folder = os.path.join(self.private, "generated", out)
+            for top, dirs, _ in os.walk(folder):
+                for d in dirs:
+                    os.chmod(os.path.join(top, d), 0o700)
+            shutil.rmtree(folder)
+            os.mkdir(folder, 0o700)
+        self.write_manifest()
+
     def test_run_success(self):
         self.assertEqual(self.tool("run"), 0, self.output)
         record = self.recorded()
@@ -336,17 +608,25 @@ class RunTest(B2Fixture):
         self.assertNotIn("--force", record["argv"])
         self.assertEqual(record["cwd"], self.project)
         self.assertEqual(record["core"], [1, 1])
-        for line in ("  game/ unchanged, PB-1 figures and module hashes: match",
+        for line in ("  game/ unchanged (content, metadata and identity of every entry; "
+                     "PB-1 figures): match",
+                     "  configuration inputs unchanged (project/config/, project/): match",
                      "  manifest changed only by its sdk_version line: match",
                      "  codegen exit status: expected 0, found 0: match",
                      "  unresolved calls: expected 0, found 0: match",
                      "  millicode errors: expected 0, found 0: match",
                      "  configuration errors: expected 0, found 0: match",
                      "  C2.1 met: yes",
-                     "  output folders with a codegen.stamp: 2",
+                     "  output folders with a valid codegen.stamp: expected 2, found 2: match",
+                     "  files listed by no codegen.stamp: expected 0, found 0: match",
+                     "  generation complete (every listed output, every kind, the entry "
+                     "files, the log summary): yes",
+                     "  B2 result for PB-2 (C2.1 met and generation complete): yes",
                      "decision: this tool does not declare PB-2"):
             self.assertIn(line, self.output)
-        self.assertIn("generated_files 9, modules_with_stamp 2, generated_anomalies 0",
+        self.assertIn("generated_files 26, generated_anomalies 0, generated_unreadable 0",
+                      self.output)
+        self.assertIn("game_files 4, game_modules_match True, game_entries_hashed 4",
                       self.output)
         self.assert_shareable(self.output)
         self.assert_shareable(self.summary())
@@ -362,7 +642,8 @@ class RunTest(B2Fixture):
         self.assertEqual(sorted(set(self.codes(report))), ["c21-not-met", "codegen-failed"])
         for line in ("  unresolved calls: expected 0, found 3: DIFFERS",
                      "  millicode errors: expected 0, found 1: DIFFERS",
-                     "  C2.1 met: no"):
+                     "  C2.1 met: no",
+                     "  B2 result for PB-2 (C2.1 met and generation complete): no"):
             self.assertIn(line, self.output)
         self.assertEqual(self.outputs(), [])
         self.assertNotIn("0x82", self.output)
@@ -374,6 +655,49 @@ class RunTest(B2Fixture):
         self.assertIn("finding codegen-log-refused", self.output)
         self.assertIn("  C2.1: the log was refused, not measured", self.output)
 
+    def test_an_empty_or_truncated_log_after_exit_0_is_refused(self):
+        """Review 7220519596, point 2: after an exit status 0, a log without the
+        `Codegen summary` line, cut in its last line, or empty, is refused: C2.1 is not
+        measured, and B2 does not succeed."""
+        for key in ("truncated_log", "cut_log", "empty_log"):
+            with self.subTest(key=key):
+                self.plan[key] = True
+                self.assertEqual(self.tool("run"), 1)
+                report = self.report()
+                self.assertIn("codegen-log-refused", self.codes(report))
+                self.assertIn("  C2.1: the log was refused, not measured", self.output)
+                self.assertIn("  B2 result for PB-2 (C2.1 met and generation complete): no",
+                              self.output)
+                del self.plan[key]
+                self.reset_outputs()
+
+    def test_success_needs_a_complete_generation(self):
+        """Review 7220519596, point 2: an exit status 0 and a clean log are not enough.
+        Each missing or spoiled output is a finding, apart from C2.1."""
+        cases = (({"no_outputs": True}, "generation-incomplete"),
+                 ({"no_stamp": 1}, "generation-incomplete"),
+                 ({"bad_stamp": 0}, "generation-incomplete"),
+                 ({"missing_output": 1}, "generation-incomplete"),
+                 ({"no_registry": "dll_targets.cmake"}, "generation-incomplete"),
+                 ({"swap_build": True}, "generation-incomplete"),
+                 ({"summary_offset": 1}, "generation-incomplete"),
+                 ({"unlisted": True}, "generated-unlisted"),
+                 ({"unreadable_dir": True}, "tree-unreadable"),
+                 ({"leave_link": True}, "generated-anomaly"))
+        for plan, code in cases:
+            with self.subTest(plan=plan):
+                self.plan.update(plan)
+                self.assertEqual(self.tool("run"), 1)
+                report = self.report()
+                self.assertIn(code, self.codes(report), self.output)
+                self.assertTrue(self.step(report, "c21")["facts"]["c21_met"])
+                self.assertIn("  C2.1 met: yes", self.output)
+                self.assertIn("  B2 result for PB-2 (C2.1 met and generation complete): no",
+                              self.output)
+                for key in plan:
+                    del self.plan[key]
+                self.reset_outputs()
+
     def test_changes_to_inputs_and_outputs_are_findings(self):
         """In the fake sandbox nothing is read-only: the controls after the step must see a
         changed module, another change to the manifest, and a link in the outputs."""
@@ -382,8 +706,30 @@ class RunTest(B2Fixture):
         codes = set(self.codes(self.report()))
         self.assertTrue({"game-changed", "manifest-changed", "generated-anomaly"} <= codes,
                         codes)
-        self.assertIn("  game/ unchanged, PB-1 figures and module hashes: DIFFERS",
-                      self.output)
+        self.assertIn("  game/ unchanged (content, metadata and identity of every entry; "
+                      "PB-1 figures): DIFFERS", self.output)
+
+    def test_a_module_changed_at_constant_size_and_mtime_is_seen(self):
+        """Review 7220519596, point 3: the inventory of game/ hashes every file, so a
+        change that keeps the size and the modification time is a finding, for a module
+        and for any other file."""
+        for rel in ("../game/default.xex", "../game/media/sub/b.txt"):
+            with self.subTest(rel=rel):
+                path = os.path.normpath(os.path.join(self.project, rel))
+                with open(path, "rb") as f:
+                    original = f.read()
+                before = os.stat(path)
+                self.plan["same_stat"] = [rel]
+                self.assertEqual(self.tool("run"), 1)
+                self.assertIn("game-changed", self.codes(self.report()))
+                after = os.stat(path)
+                self.assertEqual((after.st_size, after.st_mtime_ns),
+                                 (before.st_size, before.st_mtime_ns))
+                del self.plan["same_stat"]
+                with open(path, "wb") as f:
+                    f.write(original)
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                self.reset_outputs()
 
     def test_crash_and_time_out_are_findings_and_postflight_runs(self):
         for key, value, code in (("signal", "KILL", "codegen-crashed"),
@@ -462,10 +808,11 @@ class RealSandboxTest(B2Fixture):
                         "set B1_PYTHON_CLOSURE to a closureInfo folder of this Python")
 
     def test_real_sandbox_keeps_game_read_only(self):
-        """With the real bubblewrap: the B2 probe passes (game/ write-denied, generated/
-        and project/ writable), and a fake codegen that writes into game/, the home folder
-        and the repository is refused by the sandbox, while its outputs and the rewrite of
-        the manifest succeed."""
+        """With the real bubblewrap: the B2 probe passes (game/ and project/config/
+        write-denied, generated/ and project/ writable), and a fake codegen that writes
+        into game/, project/config/, the home folder and the repository, even at constant
+        size and modification time, is refused by the sandbox, while its outputs and the
+        rewrite of the manifest in project/ succeed."""
         if self.real is None:
             self.fail("bubblewrap is required for this test (B1_REAL_BWRAP or PATH)")
         self.bwrap = self.real
@@ -483,44 +830,113 @@ class RealSandboxTest(B2Fixture):
         self.assertEqual(sandbox["facts"]["probe_failed_checks"], [], sandbox)
         self.assertEqual(sandbox["facts"]["probe_checks_passed"], len(B2.probe_checks()))
         self.assertIn("write-denied-game", B2.probe_checks())
+        self.assertIn("write-denied-project-config", B2.probe_checks())
         shutil.rmtree(self.run_dir)
         self.set_core_pattern(t1.PIPE)
         self.write_proof()
         targets = [os.path.join(self.game, "leak"), os.path.join(self.home, "leak"),
-                   os.path.join(self.repo, "leak")]
+                   os.path.join(self.repo, "leak"),
+                   os.path.join(self.project, "config", "leak.toml")]
         self.plan["write_outside"] = targets
         self.plan["modify_module"] = True
+        self.plan["modify_config"] = True
+        self.plan["same_stat"] = ["config/default.toml", "../game/fifadllzf.xex"]
         self.assertEqual(self.tool("run"), 0, self.output)
         record = self.recorded()
         for target in targets:
             self.assertEqual(record["attempts"][target], "EROFS")
             self.assertFalse(os.path.exists(target))
-        self.assertEqual(record["attempts"]["module"], "EROFS")
+        for name in ("module", "config", "config/default.toml", "../game/fifadllzf.xex"):
+            self.assertEqual(record["attempts"][name], "EROFS", name)
         self.assertEqual(record["core"], [1, 1])
-        self.assertIn("  C2.1 met: yes", self.output)
-        self.assertIn("  game/ unchanged, PB-1 figures and module hashes: match", self.output)
+        for line in ("  C2.1 met: yes",
+                     "  game/ unchanged (content, metadata and identity of every entry; "
+                     "PB-1 figures): match",
+                     "  configuration inputs unchanged (project/config/, project/): match",
+                     "  manifest changed only by its sdk_version line: match",
+                     "  B2 result for PB-2 (C2.1 met and generation complete): yes"):
+            self.assertIn(line, self.output)
 
 
 class UnitTest(unittest.TestCase):
     def test_probe_checks_of_b2(self):
         checks = B2.probe_checks()
         self.assertEqual(len(checks), len(set(checks)))
-        for name in ("write-denied-game", "writable-generated", "writable-project",
-                     "writable-app", "writable-tmp", "store-closure-only", "core-limit-one",
-                     "shm-private"):
+        for name in ("write-denied-game", "write-denied-project-config", "writable-generated",
+                     "writable-project", "writable-app", "writable-tmp",
+                     "store-closure-only", "core-limit-one", "shm-private"):
             self.assertIn(name, checks)
         self.assertNotIn("writable-game", checks)
+        self.assertEqual(len(checks), 30)
         self.assertEqual(b1.B1_PROFILE.probe_checks(), b1.PROBE_CHECKS)
 
-    def test_tree_listing_sees_every_change(self):
+    def test_inventory_sees_content_identity_and_errors(self):
+        """Review 7220519596, point 3: the inventory hashes every file and keeps its
+        identity, so a change at constant size and modification time, or a file replaced
+        by an identical copy, changes it; an unreadable folder is an anomaly."""
         import tempfile
         with tempfile.TemporaryDirectory() as root:
             write_tree(root, GAME_TREE)
-            _, before = b2.tree_listing(root)
-            self.assertEqual(b2.tree_listing(root)[1], before)
-            with open(os.path.join(root, "media", "new"), "w") as f:
-                f.write("x")
-            self.assertNotEqual(b2.tree_listing(root)[1], before)
+            before = b2.inventory(b1, root)
+            self.assertEqual(b2.inventory(b1, root)["digest"], before["digest"])
+            self.assertEqual(sum(1 for e in before["entries"] if e[1] == "file" and e[8]), 4)
+            path = os.path.join(root, "media", "a.txt")
+            st = os.stat(path)
+            with open(path, "w") as f:
+                f.write("b\n")
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+            self.assertEqual(os.stat(path).st_size, st.st_size)
+            changed = b2.inventory(b1, root)
+            self.assertNotEqual(changed["digest"], before["digest"])
+            copy = path + ".new"
+            shutil.copy2(path, copy)
+            os.replace(copy, path)
+            self.assertNotEqual(b2.inventory(b1, root)["digest"], changed["digest"])
+            sub = os.path.join(root, "media", "sub")
+            os.chmod(sub, 0)
+            try:
+                if os.geteuid() != 0:
+                    found = b2.inventory(b1, root)
+                    self.assertEqual([a[0] for a in found["unreadable"]],
+                                     ["unreadable folder"])
+            finally:
+                os.chmod(sub, 0o700)
+
+    def test_survey_tree_is_unchanged_without_listing(self):
+        """B1 calls survey_tree without listing: its figures keep their keys."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            write_tree(root, GAME_TREE)
+            figures = b1.survey_tree(root, {"default.xex": ""})
+            self.assertNotIn("entries", figures)
+            listed = b1.survey_tree(root, {"default.xex": ""}, listing=True, content=True)
+            self.assertEqual(figures["modules"], listed["modules"])
+            self.assertEqual({k: v for k, v in listed.items() if k != "entries"}, figures)
+
+    def test_depfile_and_stamp_formats(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            dep = os.path.join(root, "codegen.d")
+            with open(dep, "w") as f:
+                f.write("/a b/codegen.build.stamp: \\\n  /x/y\\ z.toml \\\n  /p/$$q#.xex\n"
+                        .replace("#", "\\#"))
+            self.assertEqual(b2.read_depfile(dep), ("/a b/codegen.build.stamp",
+                                                    ["/x/y z.toml", "/p/$q#.xex"]))
+            with open(dep, "w") as f:
+                f.write("/a: \\\n  /x")
+            self.assertIsNone(b2.read_depfile(dep))
+            stamp = os.path.join(root, "codegen.stamp")
+            for doc, ok in (({"version": 1, "fingerprint": "f", "outputs": ["a.cpp"]}, True),
+                            ({"version": 2, "fingerprint": "f", "outputs": ["a.cpp"]}, False),
+                            ({"version": 1, "fingerprint": "", "outputs": ["a.cpp"]}, False),
+                            ({"version": 1, "fingerprint": "f", "outputs": []}, False),
+                            ({"version": 1, "fingerprint": "f", "outputs": ["../x"]}, False),
+                            ({"version": 1, "fingerprint": "f", "outputs": ["a", "a"]},
+                             False)):
+                with self.subTest(doc=doc):
+                    with open(stamp, "w") as f:
+                        json.dump(doc, f)
+                    self.assertEqual(b2.read_stamp(stamp) is not None, ok)
 
 
 if __name__ == "__main__":

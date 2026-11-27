@@ -86,6 +86,11 @@ ERRORS = [
                              r"run, off its entries$")),
 ]
 FAILED_RUN = re.compile(r"Validation failed: (\d+) unresolved calls, (\d+) millicode errors")
+# Written once by `rexglue codegen`, at the info level, after the generation of every
+# module and before the manifest is stamped (src/rexglue/command/codegen_command.cpp:83).
+# A run that fails returns before it.
+CODEGEN_SUMMARY = re.compile(r"Codegen summary: (\d+) written, (\d+) unchanged, (\d+) "
+                             r"deleted, (\d+) module\(s\) up to date$")
 INVALID_KEY = re.compile(r"Invalid function address key: (\S+)")
 # A line that talks about an entry but matches none of the patterns above is an unknown
 # format: refused rather than ignored.
@@ -129,12 +134,33 @@ def parse_mappings(path):
     raise Refused(f"{path}: kPPCFuncMappings has no '{{ 0, nullptr }}' terminator")
 
 
-def parse_log(path):
+def codegen_summary(text, path="log"):
+    """The counts of the `Codegen summary` line (written, unchanged, deleted, modules up to
+    date), or None if the log has none. Two such lines are refused."""
+    found = [CODEGEN_SUMMARY.search(line.rstrip()) for line in text.split("\n")]
+    found = [match for match in found if match]
+    if len(found) > 1:
+        raise Refused(f"{path}: two 'Codegen summary' lines")
+    return tuple(int(group) for group in found[0].groups()) if found else None
+
+
+def parse_log(path, completed=False):
     """Diagnostics by address, errors and whether the run failed. An empty log, or a line
-    about an entry in no known format, is refused."""
+    about an entry in no known format, is refused.
+
+    With `completed` (the code generation returned 0), the log must also be whole: end
+    with a new line, and hold the `Codegen summary` line that ReXGlue writes at the info
+    level once the generation is done, and no failure summary. A log cut before that line
+    is refused, even if it holds no error."""
     text = read_text(path)
     if not text.strip():
         raise Refused(f"{path}: the log is empty: no diagnostic to rely on")
+    if completed:
+        if not text.endswith("\n"):
+            raise Refused(f"{path}: the last line is cut: truncated log")
+        if codegen_summary(text, path) is None:
+            raise Refused(f"{path}: no 'Codegen summary' line after an exit status 0: "
+                          "truncated log, or a level above info")
     diagnostics, errors, failed = {}, [], None
     for number, line in enumerate(text.split("\n"), 1):
         line = line.rstrip()
@@ -169,6 +195,8 @@ def parse_log(path):
         if errors:
             raise Refused(f"{path}: errors without the 'Validation failed' summary: partial log")
         return diagnostics, errors, False
+    if completed:
+        raise Refused(f"{path}: a 'Validation failed' summary after an exit status 0")
     found = (sum(1 for k, _, _ in errors if k == "unresolved_call"),
              sum(1 for k, _, _ in errors if k == "millicode"))
     if found != failed:

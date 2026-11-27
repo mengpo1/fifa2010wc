@@ -23,12 +23,13 @@ Le travail est donc partagé ainsi :
 | Refus du root ; masque `077` ; variables `REX_*` retirées | `J2_B1_EXTRACTION.md` §2 |
 | CP-1 par `private_guard` ; composants, parents, sockets et tubes du dossier privé | §2, §4.2 |
 | Fermeture du magasin, construite par Nix, et refus sans elle (D-019) | §3.4 |
-| Bac à sable bubblewrap par liste positive, sans réseau | §3.1 |
+| Bac à sable bubblewrap par liste positive, sans réseau ; les dossiers en lecture seule du profil sont remontés après les dossiers inscriptibles, et peuvent donc être à l'intérieur de l'un d'eux | §3.1 |
 | Sonde de confinement, dans le même bac à sable | §3.2 |
 | *Core dumps* : mode tube seul, limite `1` pour la commande, preuve locale par `rehearse` (D-018) | §6 |
 | Montages par identité et par événements ; CP-3 ; `preflight` et `postflight` (CP-4) | §4, §5, §2 |
 | Commande lancée et surveillée dans le bac à sable : délai, signaux, état (`supervise`) | §2, §10 |
 | État persistant, contrôles d'après isolés, reprise, `diagnose` | §10, §6.4 |
+| Parcours d'une arborescence sans suivre de lien (`survey_tree`) : chiffres, anomalies jamais sautées, et **inventaire** optionnel (contenu haché, métadonnées, identité de chaque entrée) | §5 ; `J2_B2_COMPATIBILITY.md` §5.2 |
 | Résumé par liste fixe : faits validés, codes de constats, jamais de texte libre | §9 |
 
 ## 3. Ce que décrit un profil
@@ -39,13 +40,13 @@ défaut, défini dans le moteur lui-même.
 | Élément | Rôle | B1 | B2 |
 |---|---|---|---|
 | `name`, `title`, `tool` | Dossiers `logs/<name>-run-<date>`, repère `<name>.marker`, titre du résumé | `b1` | `b2` |
-| `writable`, `read_only` | Dossiers que le bac à sable peut écrire, ou doit refuser d'écrire | `game`, `app`, `tmp` | `generated`, `project`, `app`, `tmp` ; `game` refusé |
-| `components`, `required` | Dossiers privés contrôlés, et ceux qui doivent exister | Disposition de CP-1 | Plus `generated`, `project` |
-| `probe_checks()` | Contrôles de la sonde, dérivés des dossiers | 26 | 29, avec `shm-private` |
-| `prepare_inputs`, `prepare_last` | Contrôles des entrées, sans écriture | Image, `game/` vide, rapport J0 | Arborescence de PB-1, manifeste, configuration de test |
-| `before_marker`, `before_run` | Juste avant `preflight`, puis juste avant la commande | Empreinte de l'image ; `game/` vide | Liste de `game/` ; sorties vides, manifeste inchangé |
+| `writable`, `read_only` | Dossiers que le bac à sable peut écrire, ou doit refuser d'écrire | `game`, `app`, `tmp` | `generated`, `project`, `app`, `tmp` ; `game` et `project/config` refusés |
+| `components`, `required` | Dossiers privés contrôlés, et ceux qui doivent exister | Disposition de CP-1 | Plus `generated`, `project`, `project/config` |
+| `probe_checks()` | Contrôles de la sonde, dérivés des dossiers | 26 | 30, avec `write-denied-project-config` et `shm-private` |
+| `prepare_inputs`, `prepare_last` | Contrôles des entrées, sans écriture | Image, `game/` vide, rapport J0 | Arborescence de PB-1, manifeste, entrées de configuration en cascade, inventaire de `project/config/` |
+| `before_marker`, `before_run` | Juste avant `preflight`, puis juste avant la commande | Empreinte de l'image ; `game/` vide | Inventaire de `game/` ; sorties vides, manifeste et inventaire de `project/config/` inchangés |
 | `run` | La commande, par `supervise` | `rexglue vfs dump` | `rexglue codegen` |
-| `after_controls`, `result`, `summary_lines` | Contrôles d'après propres à l'étape, et ses lignes du résumé | Image, chiffres de PB-1 | `game/`, manifeste, sorties, C2.1 |
+| `after_controls`, `result`, `summary_lines` | Contrôles d'après propres à l'étape, et ses lignes du résumé | Image, chiffres de PB-1 | Inventaires de `game/` et de `project/config/`, manifeste, `generated/`, complétude, `codegen.d`, C2.1 |
 | `file` | Fichier du profil, auquel la preuve de l'option B est liée | Le moteur | `tools/b2_codegen.py` |
 
 Un profil ajoute aussi ses noms d'étapes, ses codes de constats et ses faits aux listes
@@ -67,6 +68,12 @@ Sans cela, le résumé les écarte comme invalides.
    le vrai bubblewrap.
 5. **Un contrôle Nix** lance la commande empaquetée, si possible avec le vrai outil sur
    une entrée synthétique, comme `b2-codegen-selftest`.
+6. **Les entrées et les sorties s'inventorient par `survey_tree`**, avec `listing` et, pour
+   une entrée, `content`, et non par un parcours propre à l'étape. Une entrée illisible est
+   un constat, jamais une entrée sautée.
+7. **Un succès de l'outil tiers se prouve par ses sorties**, pas seulement par son code de
+   sortie : ce qu'il écrit, et une ligne de fin de son journal (B2 : `codegen.stamp`,
+   `codegen.d`, « Codegen summary »).
 
 ## 5. Ce qui reste propre à ce projet
 
@@ -81,8 +88,9 @@ Tout le reste est générique : bac à sable, fermeture, preuve, montages, état
 **Hors du périmètre de cette étape, proposé seulement** : déplacer le moteur dans un
 module neutre, et rendre ces éléments paramétrables, pour un autre projet de portage.
 Aujourd'hui, seule la jonction entre moteur et profil est faite. B1 garde son
-comportement : ses 78 tests passent, et sa liste de sonde est inchangée
-(`test_probe_checks_of_b2`).
+comportement : ses 78 tests passent, sa liste de sonde est inchangée
+(`test_probe_checks_of_b2`), et `survey_tree` sans inventaire rend les mêmes chiffres
+(`test_survey_tree_is_unchanged_without_listing`).
 
 ## 6. Limites
 
