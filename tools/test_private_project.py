@@ -11,6 +11,7 @@ import importlib.util
 import io
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -382,6 +383,208 @@ class CheckTests(Folder):
 
     def test_invalid_toml_is_reported(self):
         self.assertFound(self.check("[project\nname = 1\n"), "not valid TOML")
+
+
+# A synthetic clone of "project A" for stage-config (option C-a, D-021): the layout of the
+# audited commit (pc/fifawc10_manifest.toml, pc/config/), made-up addresses, no game data.
+PROJECT_A_FILES = {
+    "pc/fifawc10_manifest.toml": (
+        '[project]\nname = "fifawc10"\nsdk_version = "0.10.0"\ngame_root = "../out/game-files"\n'
+        '\n[entrypoint]\nfile_path = "../out/game-files/default.xex"\n'
+        'out_directory_path = "generated/default"\n'
+        'includes = ["config/codegen_options.toml", "config/default.toml", '
+        '"config/default_pointers.toml"]\n'
+        '\n[[modules]]\nguest_path = "fifadllzf.xex"\n'
+        'file_path = "../out/game-files/fifadllzf.xex"\n'
+        'out_directory_path = "generated/fifadllzf"\n'
+        'includes = ["config/codegen_options.toml", "config/fifadllzf.toml", '
+        '"config/fifadllzf_pointers.toml"]\n'),
+    "pc/config/codegen_options.toml": "generate_exception_handlers = true\n",
+    # As at the audited commit, default.toml sets function_table_base (here a made-up value):
+    # the derogation G-3 removes that line, and only it, from the test copy.
+    "pc/config/default.toml": ("# Synthetic overrides for default.xex.\n"
+                               "function_table_base = 0x8C100000\n\n"
+                               "[functions]\n0x8C010000 = {}\n"),
+    "pc/config/default_pointers.toml": 'includes = ["more/extra.toml"]\n',
+    "pc/config/more/extra.toml": "[functions]\n0x8C010040 = {}\n",
+    "pc/config/fifadllzf.toml": "setjmp_address = 0x8C020000\nlongjmp_address = 0x8C020040\n",
+    "pc/config/fifadllzf_pointers.toml": "[functions]\n0x8C020080 = {}\n",
+    "pc/fixes/boot_fixes.cpp": "// synthetic fix, never staged\n",
+}
+
+
+class StageConfigTests(Folder):
+    def setUp(self):
+        super().setUp()
+        findings, _ = pp.init(self.private, TEMPLATE, GUARD)
+        self.assertEqual(findings, [])
+
+    def project_a(self, changes=None, links=()):
+        source = os.path.join(self.top, "project-a")
+        shutil.rmtree(source, ignore_errors=True)
+        files = dict(PROJECT_A_FILES, **(changes or {}))
+        for rel, text in files.items():
+            if text is None:
+                continue
+            os.makedirs(os.path.dirname(os.path.join(source, rel)), exist_ok=True)
+            write(os.path.join(source, rel), text)
+        for rel, target in links:
+            path = os.path.join(source, rel)
+            if os.path.exists(path):
+                os.unlink(path)
+            os.symlink(target, path)
+        git = ["git", "-C", source, "-c", "user.name=test", "-c",
+               "user.email=test@example.invalid", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "init", "-q", source], check=True)
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "synthetic project A"], check=True)
+        commit = subprocess.run(["git", "-C", source, "rev-parse", "HEAD"], check=True,
+                                capture_output=True, text=True).stdout.strip()
+        return source, commit
+
+    def project_tree(self):
+        found = {}
+        for top, _, names in os.walk(os.path.join(self.private, pp.PROJECT_DIR)):
+            for name in names:
+                path = os.path.join(top, name)
+                found[os.path.relpath(path, self.private)] = read(path)
+        return found
+
+    def test_stage_config_copies_the_pinned_files_and_names_them(self):
+        source, commit = self.project_a()
+        findings, notes = pp.stage_config(self.private, source, GUARD, commit=commit)
+        self.assertEqual(findings, [])
+        config = os.path.join(self.private, pp.PROJECT_DIR, pp.CONFIG_DIR)
+        staged = sorted(os.path.relpath(os.path.join(top, n), config)
+                        for top, _, names in os.walk(config) for n in names)
+        self.assertEqual(staged, ["codegen_options.toml", "default.toml",
+                                  "default_pointers.toml", "fifadllzf.toml",
+                                  "fifadllzf_pointers.toml", "more/extra.toml",
+                                  "original/default.toml"])
+        for rel in staged:
+            pinned = PROJECT_A_FILES["pc/config/" + rel.replace("original/", "")]
+            expected = (pinned.replace("function_table_base = 0x8C100000\n", "")
+                        if rel == "default.toml" else pinned)
+            self.assertEqual(read(os.path.join(config, rel)), expected, rel)
+            self.assertEqual(os.stat(os.path.join(config, rel)).st_mode & 0o777, 0o600)
+        manifest = read(self.manifest_path())
+        self.assertIn('includes = ["config/codegen_options.toml", "config/default.toml", '
+                      '"config/default_pointers.toml"]', manifest)
+        self.assertIn('includes = ["config/codegen_options.toml", "config/fifadllzf.toml", '
+                      '"config/fifadllzf_pointers.toml"]', manifest)
+        self.assertEqual(manifest.count("includes = []"), 0)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.private, pp.PROJECT_DIR))),
+                         [pp.CONFIG_DIR, pp.MANIFEST_NAME])
+        self.assertEqual(pp.check_manifest(self.manifest_path(), self.private)[0], [])
+        self.assertTrue(any(commit in note for note in notes))
+        self.assertTrue(any("G-3: config/default.toml is the pinned file without its line 2"
+                            in note for note in notes), notes)
+        self.assertFalse(any("fixes" in note for note in notes))
+        self.assertNotIn("original", manifest)
+
+    def test_g3_removes_one_line_and_nothing_else(self):
+        # G-3 (D-021), byte for byte: the copy is the original less one whole line; the
+        # check refuses a copy with any other change, and accepts only that copy.
+        original = PROJECT_A_FILES["pc/config/default.toml"].encode()
+        copy, line, problems = pp.g3_derive(original)
+        self.assertEqual(problems, [])
+        self.assertEqual(line, 2)
+        self.assertEqual(copy, original.replace(b"function_table_base = 0x8C100000\n", b""))
+        self.assertEqual(pp.g3_check(original, copy), [])
+        for label, staged in (("unchanged", original),
+                              ("one more byte", copy + b"\n"),
+                              ("another value", copy.replace(b"0x8C010000", b"0x8C010004")),
+                              ("a line removed too", copy.replace(b"\n\n", b"\n", 1))):
+            with self.subTest(label=label):
+                self.assertTrue(pp.g3_check(original, staged))
+
+    def test_g3_refuses_what_it_does_not_cover(self):
+        # G-3 covers one top-level line of default.toml and nothing else; refused, with
+        # nothing written: no such line, the key named twice, the key inside a table, a line
+        # of another form, and the key in another staged file.
+        line = "function_table_base = 0x8C100000\n"
+        functions = "[functions]\n0x8C010000 = {}\n"
+        cases = (
+            ("line absent", {"pc/config/default.toml": functions}, "names no"),
+            ("key named twice", {"pc/config/default.toml": line + "# function_table_base\n" +
+                                 functions}, "2 times: ambiguous"),
+            ("inside a table", {"pc/config/default.toml": functions + "[analysis]\n" + line},
+             "changes more than"),
+            ("another form", {"pc/config/default.toml":
+                              "function_table_base = 0x8C100000 # moved\n" + functions},
+             "not a plain"),
+            ("a string value", {"pc/config/default.toml":
+                                'function_table_base = "0x8C100000"\n' + functions},
+             "not a plain"),
+            ("another inherited value", {"pc/config/codegen_options.toml": line},
+             "another inherited value"),
+        )
+        before = self.project_tree()
+        for name, changes, fragment in cases:
+            with self.subTest(name=name):
+                source, commit = self.project_a(changes)
+                findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
+                self.assertFound(findings, fragment)
+                self.assertFound(findings, "nothing was written")
+                self.assertEqual(self.project_tree(), before)
+
+    def test_stage_config_refusals_write_nothing(self):
+        cases = (
+            ("short commit id", {}, (), lambda commit: commit[:7], "resolves to"),
+            ("unknown commit", {}, (), lambda commit: "0" * 40, "not found"),
+            ("a link in the commit", {}, (("pc/config/default.toml", "codegen_options.toml"),),
+             None, "mode 120000"),
+            ("an include outside pc/config/",
+             {"pc/config/default_pointers.toml": 'includes = ["../fixes/boot.toml"]\n',
+              "pc/fixes/boot.toml": "\n"}, (), None, "outside pc/config/"),
+            ("a circular include",
+             {"pc/config/default_pointers.toml": 'includes = ["default_pointers.toml"]\n'},
+             (), None, "circular include"),
+            ("a missing include", {"pc/config/more/extra.toml": None}, (), None,
+             "is not in commit"),
+            ("an include that is not a path",
+             {"pc/config/default_pointers.toml": "includes = [1]\n"}, (), None,
+             "not a list of relative paths"),
+        )
+        before = self.project_tree()
+        for name, changes, links, pick, fragment in cases:
+            with self.subTest(name=name):
+                source, commit = self.project_a(changes, links)
+                findings, _ = pp.stage_config(self.private, source, GUARD,
+                                              commit=pick(commit) if pick else commit)
+                self.assertFound(findings, fragment)
+                self.assertFound(findings, "nothing was written")
+                self.assertEqual(self.project_tree(), before)
+
+    def test_stage_config_never_overwrites(self):
+        source, commit = self.project_a()
+        config = os.path.join(self.private, pp.PROJECT_DIR, pp.CONFIG_DIR)
+        os.makedirs(os.path.join(config, "original"), 0o700)
+        for rel in ("default.toml", "original/default.toml"):
+            write(os.path.join(config, rel), "the owner's own file\n")
+            before = self.project_tree()
+            findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
+            self.assertFound(findings, f"{rel} exists: never overwritten")
+            self.assertEqual(self.project_tree(), before)
+            os.unlink(os.path.join(config, rel))
+        self.assertEqual(pp.stage_config(self.private, source, GUARD, commit=commit)[0], [])
+        # Staged once: a second run finds the includes set and the files there.
+        before = self.project_tree()
+        findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
+        self.assertFound(findings, "already set")
+        self.assertEqual(self.project_tree(), before)
+
+    def test_stage_config_needs_the_private_copy(self):
+        os.unlink(self.manifest_path())
+        source, commit = self.project_a()
+        findings, _ = pp.stage_config(self.private, source, GUARD, commit=commit)
+        self.assertFound(findings, "run init first")
+        self.assertFalse(os.path.exists(os.path.join(self.private, pp.PROJECT_DIR,
+                                                     pp.CONFIG_DIR)))
+
+    def test_the_pinned_commit_is_the_audited_one(self):
+        self.assertEqual(pp.PROJECT_A_COMMIT[:7], "498d18a")
+        self.assertEqual(len(pp.PROJECT_A_COMMIT), 40)
 
 
 class CommandLineTests(Folder):

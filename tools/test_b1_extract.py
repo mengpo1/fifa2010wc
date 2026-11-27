@@ -243,6 +243,10 @@ def status(doc):
     except OSError:
         pass
 if "_probe" in cmd:
+    # A change made while the probe runs: after prepare, before the step.
+    for path, text in plan.get("probe_writes", []):
+        with open(path, "w") as f:
+            f.write(text)
     status({"child-pid": os.getpid()})
     print(json.dumps(plan["probe_results"]))
     status({"exit-code": 0})
@@ -1540,7 +1544,7 @@ class DiagnoseTest(Fixture):
         self.bwrap = "bwrap"
         self.tool("rehearse")
         out = self.diagnose(os.path.basename(self.report() and self.run_dir))
-        self.assertIn("run folder: rehearse, tool version 6", out)
+        self.assertIn(f"run folder: rehearse, tool version {b1.TOOL_VERSION}", out)
         self.assertIn("crash pids identified    1", out)  # the control's, kept since v5
         self.assertIn("control_launch ok", out)
         self.assertIn("diagnosis: crashes-started", out)
@@ -1942,7 +1946,7 @@ class UnitTest(unittest.TestCase):
         steps.add("repository", "ok", facts={"repository_commit": SENTINEL})
         steps.add("image-before", "ok", facts={"sha256": "a" * 64})
         steps.add("sandbox", "ok", facts={"probe_failed_checks": [SENTINEL]})
-        ctx = mock.Mock(reference=b1.J0_REFERENCE)
+        ctx = mock.Mock(reference=b1.J0_REFERENCE, profile=b1.B1_PROFILE)
         text = b1.summary_text(ctx, steps, "run", 0)
         self.assertNotIn(SENTINEL, text)
         self.assertNotIn("a" * 64, text)
@@ -2066,7 +2070,7 @@ class UnitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as private:
             closure = ["/nix/store/" + "a" * 32 + "-python3", "/nix/store/" + "b" * 32 + "-sdk"]
             ctx = mock.Mock(private=private, home=os.path.dirname(private), store=private,
-                            closure=closure)
+                            closure=closure, profile=b1.B1_PROFILE)
             # bubblewrap is named, as in the packaged command, and started by its path.
             bin_dir = os.path.join(private, "bin")
             os.mkdir(bin_dir)

@@ -207,6 +207,30 @@ class FormatTests(Folder):
                 self.assertRefused(status, out, stdout)
                 self.assertIn("partial log", stdout)
 
+    def test_a_completed_log_must_be_whole(self):
+        """B2 (docs/J2_B2_COMPATIBILITY.md section 6): after an exit status 0, a log with no
+        `Codegen summary` line, cut in its last line, or with a failure summary is refused,
+        even if it holds no error. Without `completed`, nothing changes."""
+        info = "[2026-01-01 00:00:00.000] [rexglue] [info] "
+        summary = (info + "Codegen summary: 12 written, 0 unchanged, 0 deleted, "
+                   "0 module(s) up to date")
+        failed = "Failed: Validation failed: 0 unresolved calls, 0 millicode errors"
+        whole = info + "Recompiling wc2010\n" + summary + "\n"
+        path = self.file("whole.log", whole)
+        self.assertEqual(ac.parse_log(path, completed=True), ({}, [], False))
+        self.assertEqual(ac.codegen_summary(whole), (12, 0, 0, 0))
+        for label, text in (("no summary", info + "Recompiling wc2010\n"),
+                            ("cut last line", whole.rstrip("\n")),
+                            ("two summaries", whole + summary + "\n"),
+                            ("failure summary", whole + failed + "\n"),
+                            ("empty", "")):
+            with self.subTest(label):
+                path = self.file("cut.log", text)
+                with self.assertRaises(ac.Refused):
+                    ac.parse_log(path, completed=True)
+        path = self.file("cut.log", info + "Recompiling wc2010\n")
+        self.assertEqual(ac.parse_log(path), ({}, [], False))
+
     def test_bad_entries_are_refused(self):
         for text in ("[functions]\n82010000x = {}\n", "[functions]\n0x8C010002 = {}\n",
                      "[functions]\n0x8C010000 = 1\n", "setjmp_address = 0x8C010002\n"):

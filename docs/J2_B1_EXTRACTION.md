@@ -1,7 +1,11 @@
 # Étape B1 — extraction contrôlée de l'arborescence du disque
 
 > Étape B1 de `docs/J2_PLAN.md` §4.1, [ticket #32](https://github.com/mengpo1/fifa2010wc/issues/32).
-> Version 6 :
+> **B1 a été exécutée le 2026-11-27 avec la version 6, sans constat : PB-1 est franchi**
+> (D-020, `docs/reports/J2_B1_RESULT.md`). Depuis, l'outil est le moteur d'étapes de B1 et
+> de B2 (version 7, `docs/J2_LOCAL_STEP_ENGINE.md`) ; le comportement de B1 est inchangé.
+>
+> Version 6 de la procédure :
 > - corrections de la revue de l'orchestrateur sur la PR #33 (constats B1-R01 à B1-R07) ;
 > - arbitrages du porteur, D-018 : option B pour les plantages, rapport J0 local
 >   obligatoire ;
@@ -13,8 +17,8 @@
 > - essai local du porteur de la version 5 : les plantages synthétiques de la preuve ne
 >   démarraient pas, faute de trouver bubblewrap par son nom ; corrigé, avec une commande
 >   de diagnostic en lecture seule (§6.4).
-> PB-0 est franchi depuis le 2026-11-24 (D-017). **Ce document et son outil ne valent ni
-> exécution de B1, ni PB-1.**
+> PB-0 est franchi depuis le 2026-11-24 (D-017). Avant le 2026-11-27, ce document et son
+> outil ne valaient ni exécution de B1, ni PB-1 :
 > - Ils ont été préparés sans aucune donnée du jeu : ni ISO, ni XEX, ni journal du jeu.
 > - Les essais n'utilisent que des images et des fichiers synthétiques.
 > - B1 s'exécute à la main, **sur la machine de l'utilisateur seulement**, une fois cette
@@ -452,7 +456,9 @@ La preuve n'est acquise que si :
 répétition, avec :
 - **ce démarrage** (`boot_id`), **ce noyau** (version et compilation), **ce
   `core_pattern`** (son SHA-256) et **ce `suid_dumpable`** ;
-- **la version du protocole** de la preuve (3) et **la version de l'outil** (6) ;
+- **la version du protocole** de la preuve (4) et **la version de l'outil** (7) ;
+- **le profil de l'étape** et le SHA-256 de son fichier (`J2_LOCAL_STEP_ENGINE.md`) : une
+  preuve de B1 n'ouvre pas B2 ;
 - **le SHA-256 du fichier de l'outil** ;
 - **le chemin et le SHA-256 de bubblewrap**, et **le chemin de Python** ;
 - **la fermeture du magasin** que le bac à sable montre (le SHA-256 de `store-paths`,

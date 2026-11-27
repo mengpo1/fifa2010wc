@@ -27,7 +27,9 @@
 | D-016 | Sortie de la phase A de J2 (PA-1) et règle des échecs intermittents des tests Debug | **Acceptée** (2026-11-24) ; PB-0 non franchi à cette date, franchi ensuite (D-017) |
 | D-017 | Entrée en phase B de J2 : PB-0 franchi, B1 seulement | **Acceptée** (2026-11-24) ; PB-1 non franchi |
 | D-018 | Arbitrages de B1 : plantages de l'extraction (option B) et rapport J0 local obligatoire | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
-| D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; ni fusion, ni extraction réelle, ni PB-1 |
+| D-019 | Arbitrage de B1 : le bac à sable ne montre du magasin Nix que la fermeture de la commande empaquetée | **Acceptée** (2026-11-25) ; extraction réelle autorisée ensuite (D-020) |
+| D-020 | Extraction réelle de B1 autorisée et exécutée ; B1 validée, PB-1 franchi | **Acceptée** (2026-11-27) ; B2 soumis à un mandat distinct |
+| D-021 | Arbitrages de la procédure B2 : C-a, F-a, T-a, L-a, et G-3 pour le conflit entre C-a et F-a | **Acceptée** (2026-11-27) ; B2 toujours soumis à un mandat distinct |
 
 ---
 
@@ -540,3 +542,96 @@
   - **PB-1 n'est pas franchi**, et B2 reste interdit ;
   - aucun `sudo`, aucune modification globale de NixOS ;
   - une nouvelle revue indépendante est demandée avant toute approbation.
+
+## D-020 — B1 exécutée et validée : PB-1 franchi
+
+- **Statut** : **Acceptée** (2026-11-27). Sources, dans le ticket #32 :
+  - l'autorisation explicite du porteur d'exécuter l'extraction réelle, et l'avis favorable
+    de l'orchestrateur sur la répétition :
+    [commentaire 7218617373](https://github.com/mengpo1/fifa2010wc/issues/32#issuecomment-7218617373) ;
+  - la validation de l'orchestrateur :
+    [commentaire 7218840297](https://github.com/mengpo1/fifa2010wc/issues/32#issuecomment-7218840297).
+- **Exécution** : par le porteur seul, sur sa machine NixOS, avec B1 v6 (`main` à
+  `773d1a8`), dans le même démarrage que la répétition, avec une preuve de moins de 24 h,
+  sans `sudo` ni modification du système.
+- **Résultats** (`docs/reports/J2_B1_RESULT.md`) : aucun constat ; 49 fichiers, 8 dossiers,
+  58 nœuds racine comprise ; empreintes des deux modules et de l'image concordantes avec
+  J0, avant et après ; sonde 26 sur 26, fermeture de 273 chemins, preuve reconnue ;
+  aucun changement de montage, aucun *core dump*, aucune nouvelle correspondance CP-3.
+- **Décision : B1 est validée, et PB-1 est franchi.**
+- **Limites** : les résultats viennent du résumé transmis par le porteur. Il n'y a ni
+  accès indépendant aux données privées, ni garantie exhaustive d'absence de fuite. La
+  preuve de l'option B est une observation, pas une garantie absolue.
+- **Ce qui ne change pas** :
+  - D-007, D-018 et D-019 restent en vigueur ; R-01 reste ouvert ;
+  - aucun fichier du jeu, aucun rapport brut ni aucune empreinte privée n'est publié ;
+  - **B2 reste soumis à un mandat distinct** : ni analyse des modules, ni génération de
+    code n'est autorisée par cette décision ;
+  - l'orchestrateur demande la consignation de ce résultat et une **proposition de
+    procédure pour B2**, sans données du jeu, dans une PR brouillon distincte
+    (`docs/J2_B2_COMPATIBILITY.md`). Aucune fusion sans revue et accord explicite.
+
+## D-021 — Arbitrages de la procédure B2 : C-a, F-a, T-a, L-a, et G-3
+
+- **Statut** : **Acceptée** (2026-11-27). Le porteur déclare : « Je valide les arbitrages
+  C-a, F-a, T-a et L-a pour B2. » Décision relayée par l'orchestrateur dans la PR #35,
+  [commentaire 7223364424](https://github.com/mengpo1/fifa2010wc/pull/35#issuecomment-7223364424).
+  Options de `docs/J2_B2_COMPATIBILITY.md` §11.
+- **C-a, la configuration de test** : celle du projet A
+  (`CalinGraphics/fifa-world-cup-2010-recompiled`) au commit de l'audit,
+  **`498d18ae09175d4991b24b633a9a5f2e0e1cc73e`** (2026-10-26, abrégé `498d18a`), sans ses
+  correctifs C++ (`pc/fixes/`).
+  - Le SHA complet est celui relevé lors de l'audit du dépôt public. `stage-config` le
+    vérifie sur le clone du porteur.
+  - Fichiers : ceux que le manifeste du projet A (`pc/fifawc10_manifest.toml`) inclut pour
+    chaque binaire, et leurs inclusions en cascade. Au commit épinglé [V, lecture lors de
+    l'audit] : `config/codegen_options.toml`, `config/default.toml`,
+    `config/default_pointers.toml` pour `default.xex` ; `config/codegen_options.toml`,
+    `config/fifadllzf.toml`, `config/fifadllzf_pointers.toml` pour `fifadllzf.xex`.
+  - Récupération **par le porteur seul, sur sa machine**, depuis un clone local, par
+    `private_project.py stage-config`. Aucun contenu du projet A n'entre dans le dépôt
+    (CP-7) ; seuls l'identifiant du commit et les chemins, publics, y figurent.
+- **F-a, `function_table_base`** : aucune valeur imposée, selon
+  `J2_A3_FUNCTION_TABLE.md` §7 (étape 1 : relever d'abord les tailles de code).
+  - Contrôle : B2 refuse de lancer la génération si une configuration consommée fixe la
+    clé, même à `0`, car `0` ne remplace pas une valeur héritée (`table-base-conflict`).
+  - **Conflit constaté avec C-a** [V, lecture lors de l'audit, et
+    `J2_A3_FUNCTION_TABLE.md` §1] : `pc/config/default.toml` du projet A, inclus pour
+    `default.xex`, fixe `function_table_base`. Avec C-a tel qu'épinglé, F-a n'est donc pas
+    tenable.
+  - Conformément à la décision, la configuration épinglée n'a pas été modifiée en
+    silence, et ni F-b ni F-c ne lui a été substitué. Le conflit a été documenté
+    (`J2_B2_COMPATIBILITY.md` §11.5), et soumis à un arbitrage distinct.
+- **G-3, l'arbitrage du conflit** (2026-11-27) : le porteur déclare « Je valide
+  l'arbitrage G-3. » Décision relayée par l'orchestrateur dans la PR #35,
+  [commentaire 7223839067](https://github.com/mengpo1/fifa2010wc/pull/35#issuecomment-7223839067).
+  - **Unique dérogation documentée à C-a**, pour respecter F-a : dans la copie privée de
+    `default.toml` destinée au test, seule la ligne du paramètre `function_table_base` est
+    retirée.
+  - **Original conservé, intact** : `project/config/original/default.toml`, copie octet pour
+    octet du fichier au commit `498d18ae09175d4991b24b633a9a5f2e0e1cc73e`. Aucune
+    inclusion ne l'atteint : il reste hors des entrées consommées.
+  - **Vérifiée automatiquement**, par `stage-config` à la copie et par chaque `prepare` de
+    B2 : la copie de test est l'original moins **une seule ligne entière**, de la forme
+    `function_table_base = <entier>`, au premier niveau, et rien d'autre ; la table lue
+    est celle de l'original moins cette seule clé.
+  - **Refusés** : ligne absente, clé nommée plusieurs fois, ligne d'une autre forme ou
+    dans une table, tout autre écart, une autre valeur héritée dans un autre fichier, un
+    original absent ou consommé. Rien n'est jamais écrasé.
+  - Aucun contenu ni aucune empreinte de ces fichiers n'est publié.
+- **T-a, délai et ressources** : deux heures au plus. `--timeout` au-delà, ou nul, bloque
+  `run` (`timeout-above-t-a`). `prepare` relève la mémoire, l'espace d'échange et le
+  disque libre du dossier privé, en Mio, sans prétendre connaître les besoins d'une vraie
+  génération, qui ne sont pas mesurés.
+- **L-a, journal** : niveau `info`, strictement local, qui permet le contrôle de
+  complétude (`J2_B2_COMPATIBILITY.md` §6.2). Ni `debug` ni `trace`.
+- **Avant toute demande de mandat réel** : préparation des entrées par `stage-config`, qui
+  applique G-3 ; répétition de B2 propre au profil (`rehearse`) ; puis un `prepare` final
+  sans constat (`J2_B2_COMPATIBILITY.md` §9).
+- **Ce qui ne change pas** :
+  - D-007, D-018, D-019 et D-020 restent en vigueur ; R-01 reste ouvert ;
+  - **B2 reste soumis à un mandat distinct** ; aucune génération réelle n'est autorisée
+    par cette décision ;
+  - la revue de l'orchestrateur sur `2a683e8` est favorable sur les corrections
+    examinées, mais ciblée : ce n'est pas un avis final de fusion. Aucune fusion sans la
+    revue finale et l'accord explicite du porteur.

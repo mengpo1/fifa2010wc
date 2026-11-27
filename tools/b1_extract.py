@@ -53,7 +53,7 @@ import subprocess
 import sys
 import time
 
-TOOL_VERSION = 6
+TOOL_VERSION = 7
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GUARD = os.path.join(HERE, "private_guard.py")
 ISO_NAME = "fifa2010wc.iso"
@@ -107,7 +107,7 @@ SUPERVISOR_CORE_LIMIT = (0, 1)
 CONTROL_CORE_LIMIT = (0, 0)
 PROOF_MIN_WAIT = 5
 # Version of the protocol of the proof of option B (review v3, R03-B), and its lifetime.
-PROOF_PROTOCOL = 3
+PROOF_PROTOCOL = 4
 PROOF_MAX_AGE = 24 * 3600
 BOOT_ID_FILE = "/proc/sys/kernel/random/boot_id"
 # The store entry already found by CP-3 before PB-0: never opened, never deleted.
@@ -118,7 +118,9 @@ MOUNT_COLUMNS = ("ID,UNIQ-ID,PARENT,MAJ:MIN,FSROOT,TARGET,FSTYPE,SOURCE,VFS-OPTI
                  "FS-OPTIONS,PROPAGATION")
 MOUNT_KEYS = ("id", "uniq-id", "parent", "maj:min", "fsroot", "target", "fstype", "source",
               "vfs-options", "fs-options", "propagation")
-RUN_DIR_RE = re.compile(r"b1-(run|rehearse)-[0-9]{8}T[0-9]{6}Z")
+# Run folders of every step of the engine: b1-run-…, b2-rehearse-…
+# (docs/J2_LOCAL_STEP_ENGINE.md).
+RUN_DIR_RE = re.compile(r"b[1-9]-(run|rehearse)-[0-9]{8}T[0-9]{6}Z")
 STATE_FILE = "state.json"
 # The summary block that `rexglue vfs dump` writes on stderr
 # (src/rexglue/command/vfs_command.cpp). Nodes counts the root of the container too. The
@@ -231,6 +233,8 @@ PROBE_CHECKS = (
     "net-abstract-unix-isolated", "userns-disabled", "core-limit-one", "no-capabilities",
     "pid-isolated",
 )
+# Every probe check name of every profile (Profile.probe_checks()).
+PROBE_CHECK_NAMES = set(PROBE_CHECKS)
 STEP_NAMES = (
     "check-dir", "incomplete-runs", "image", "folders", "private-tree", "sdk",
     "repository", "mounts", "watched-places", "core-settings", "j0-report", "sandbox",
@@ -259,6 +263,7 @@ def _enum(*values):
 
 
 def _names(allowed):
+    """`allowed` can be a set that grows: a profile registers its own names."""
     return lambda value: isinstance(value, list) and all(v in allowed for v in value)
 
 
@@ -285,7 +290,8 @@ SUMMARY_FACTS = {
                       "suid_dumpable": _enum("0", "1", "2"), "proof_found": _bool},
     "j0-report": {"report_present": _bool, "report_matches_j0": _bool},
     "sandbox": {"bwrap_version_ok": _bool, "probe_checks": _int,
-                "probe_checks_passed": _int, "probe_failed_checks": _names(PROBE_CHECKS)},
+                "probe_checks_passed": _int,
+                "probe_failed_checks": _names(PROBE_CHECK_NAMES)},
     "core-probe": {"control_signal": SIGNAL_NUMBER, "control_launch": _enum(*CRASH_LAUNCH),
                    "control_stderr": _enum(*OUTPUT_KINDS), "control_identified": _bool,
                    "control_entry_found": _bool, "control_corefile": COREFILE,
@@ -481,8 +487,9 @@ class Steps:
 
 
 class Context:
-    def __init__(self, args):
+    def __init__(self, args, profile=None):
         self.args = args
+        self.profile = profile or B1_PROFILE
         if not args.private_dir:
             raise UsageError("WC2010_PRIVATE_DIR is not set (or give --private-dir)")
         if not os.path.isabs(args.private_dir):
@@ -530,6 +537,155 @@ class Context:
         if self.repo:
             tops.append(self.repo)
         return tops
+
+
+# --- step profiles -----------------------------------------------------------------------
+
+def probe_name(prefix, folder):
+    """The name of a probe check on a folder of the private folder: `project/config`
+    gives `write-denied-project-config`."""
+    return f"{prefix}-{folder.replace(os.sep, '-')}"
+
+
+class Profile:
+    """What one controlled step adds to the generic engine (docs/J2_LOCAL_STEP_ENGINE.md).
+    The engine runs the checks, the sandbox, the proof of option B, preflight and
+    postflight, the state and the summary; a profile names its folders and gives its own
+    checks, its sandboxed command and its figures. This class is the profile of B1, the
+    extraction; B2 (tools/b2_codegen.py) derives from it."""
+
+    name = "b1"
+    title = "B1"
+    tool = "b1_extract"
+    run_step = "vfs-dump"
+    # Folders the sandbox may write, besides the run folder; folders it must not write,
+    # bound read-only after the writable ones (one may lie inside a writable folder).
+    writable = SANDBOX_WRITABLE
+    read_only = ()
+    components = PRIVATE_COMPONENTS
+    required = ("iso", "game", "logs")
+    decision = "this tool does not declare PB-1; the orchestrator decides."
+    file = None  # the profile's own source file, bound to the proof; None: the engine
+
+    def probe_checks(self):
+        """The probe checks of this profile, in a fixed order."""
+        checks = list(PROBE_CHECKS)
+        at = checks.index("write-denied-repo") + 1
+        checks[at:at] = [probe_name("write-denied", name) for name in self.read_only]
+        at = checks.index("writable-game")
+        checks[at:at + 3] = [f"writable-{name}" for name in self.writable]
+        return tuple(checks)
+
+    def prepare_inputs(self, ctx, steps):
+        """Checks of the inputs, after incomplete-runs: the image and an empty game/."""
+        findings, notes, facts = [], [], {}
+        check_image(ctx, findings, notes, facts)
+        steps.add("image", "ok", facts=facts, findings=findings, notes=notes)
+        findings, facts = [], {}
+        for rel in self.components:
+            check_component(ctx, rel, findings, required=rel in self.required)
+        if not any(code in ("folder-missing", "folder-invalid") for code, _ in findings):
+            check_game_empty(ctx, findings, facts)
+        steps.add("folders", "ok", facts=facts, findings=findings)
+
+    def prepare_last(self, ctx, steps):
+        """The last check of prepare: the local J0 report. Returns what the state keeps."""
+        findings, facts, notes = [], {}, []
+        j0_sha256 = check_j0_report(ctx, findings, facts, notes)
+        steps.add("j0-report", "ok", facts=facts, findings=findings, notes=notes)
+        return {"j0_sha256": j0_sha256}
+
+    def before_marker(self, ctx, steps, state, extract):
+        """Before preflight: the hash of the image, compared with the local J0 report."""
+        if not extract:
+            return
+        t = time.monotonic()
+        j0_sha256 = state.get("j0_sha256")
+        try:
+            before = image_state(ctx.iso)
+            state["image_before"] = before
+            facts, findings = {}, []
+            if j0_sha256:
+                facts["image_matches_j0_report"] = before["sha256"] == j0_sha256
+                if before["sha256"] != j0_sha256:
+                    findings.append(("j0-image-mismatch", "before the step"))
+            else:
+                findings.append(("j0-report-absent", "no image hash to compare with"))
+            steps.add("image-before", "ok", facts=facts, findings=findings,
+                      duration=time.monotonic() - t)
+        except OSError as exc:
+            steps.add("image-before", "finding",
+                      findings=[("image-unreadable", f"before the step ({exc.strerror})")])
+
+    def before_run(self, ctx, findings, state):
+        """Right before the sandboxed command: game/ is still empty."""
+        check_game_empty(ctx, findings, {})
+
+    def run(self, ctx, steps, run_dir, env, state):
+        run_dump(ctx, steps, run_dir, env, state)
+
+    def after_controls(self, ctx, steps, run_dir, state, results):
+        """The controls of this step after the generic ones: (name, control) pairs."""
+        def image_after():
+            before, j0_sha256 = state["image_before"], state.get("j0_sha256")
+            started = time.monotonic()
+            try:
+                after = image_state(ctx.iso)
+            except OSError as exc:
+                steps.add("image-after", "finding",
+                          findings=[("image-unreadable", f"after the step ({exc.strerror})")])
+                return False
+            results["image_after"] = after
+            facts = {"image_unchanged": after == before}
+            findings = [] if after == before else [("image-changed", "the disc image changed "
+                                                    "during the step")]
+            if j0_sha256:
+                facts["image_matches_j0_report"] = after["sha256"] == j0_sha256
+                if after["sha256"] != j0_sha256:
+                    findings.append(("j0-image-mismatch", "after the step"))
+            steps.add("image-after", "ok", facts=facts, findings=findings,
+                      duration=time.monotonic() - started)
+            return True
+
+        def figures():
+            results["figures"] = pb1_figures(ctx, steps, before=state["image_before"],
+                                             after=results.get("image_after"),
+                                             block=dump_block(run_dir),
+                                             j0_sha256=state.get("j0_sha256"))
+            return True
+
+        controls = []
+        if state.get("command") == "run" and state.get("image_before"):
+            controls.append(("image-after", image_after))
+            if state.get("phase_reached_extraction"):
+                controls.append(("pb1-figures", figures))
+        return controls
+
+    def result(self, results):
+        """What the controls after the step give to the summary: the PB-1 figures."""
+        return results.get("figures")
+
+    def summary_lines(self, ctx, figures):
+        """The figures of the step in the summary: the PB-1 rows."""
+        if figures is None:
+            return []
+        source = "J0 report" if ctx.reference is J0_REFERENCE else "--reference test file"
+        lines = [f"PB-1 figures (reference: {source}):"]
+        for row in figures["criteria"]:
+            mark = "match" if row["met"] else "DIFFERS"
+            if row["show"] and _int(row["expected"]) and isinstance(row["found"], int):
+                found = "not found" if row["found"] == -1 else row["found"]
+                lines.append(f"  {row['name']}: expected {row['expected']}, found "
+                             f"{found}: {mark}")
+            else:
+                lines.append(f"  {row['name']}: {mark}")
+        hidden = figures["facts"].get("hidden_names", 0)
+        lines.append(f"  names starting with a dot: {hidden if _int(hidden) else 'invalid'} "
+                     "(counted)")
+        return lines
+
+
+B1_PROFILE = Profile()
 
 
 # --- interruptions -----------------------------------------------------------------------
@@ -628,7 +784,7 @@ def check_ancestors(ctx, findings):
 def private_identities(ctx, run_dir=None):
     """(device, inode) of the private folder, its components and the run folder."""
     found = {}
-    for rel in ("",) + PRIVATE_COMPONENTS:
+    for rel in ("",) + tuple(ctx.profile.components):
         try:
             st = os.lstat(os.path.join(ctx.private, rel) if rel else ctx.private)
             found[rel or "."] = [st.st_dev, st.st_ino]
@@ -1054,7 +1210,8 @@ def find_core_proof(ctx, identity):
     except OSError:
         return None
     for name in names:
-        if not (RUN_DIR_RE.fullmatch(name) and name.startswith("b1-rehearse-")):
+        if not (RUN_DIR_RE.fullmatch(name) and
+                name.startswith(f"{ctx.profile.name}-rehearse-")):
             continue
         state = read_state(os.path.join(ctx.logs, name))
         if not state or state.get("phase") != "complete" or state.get("resumed") or \
@@ -1253,8 +1410,9 @@ def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     network: only a loopback of its own), no further user namespace, killed with this
     process; an empty root holding only the paths of the store closure (read-only, D-019),
     /dev and /proc of the sandbox, an empty /tmp, the tool, the private folder (read-only)
-    and the run folder, game/, app/ and tmp/ (writable); then the root is remounted
-    read-only. Without a validated closure there is no sandbox, and no fallback."""
+    and the run folder, game/, app/ and tmp/ (writable), the read-only folders of the
+    profile bound again read-only; then the root is remounted read-only. Without a
+    validated closure there is no sandbox, and no fallback."""
     if not ctx.closure:
         raise RuntimeError("no validated store closure")
     exe = bwrap_executable(ctx)
@@ -1269,9 +1427,14 @@ def sandbox_argv(ctx, run_dir, command, status_fd, chdir=None):
     if not closure_covers(ctx, tool):
         argv += ["--ro-bind", tool, tool]
     argv += ["--ro-bind", ctx.private, ctx.private, "--bind", run_dir, run_dir]
-    for name in SANDBOX_WRITABLE:
+    for name in ctx.profile.writable:
         path = os.path.join(ctx.private, name)
         argv += ["--bind", path, path]
+    # Read-only folders last: one inside a writable folder (B2: project/config/ inside
+    # project/) stays read-only.
+    for name in ctx.profile.read_only:
+        path = os.path.join(ctx.private, name)
+        argv += ["--ro-bind", path, path]
     argv += ["--remount-ro", "/"]
     argv += ["--chdir", chdir or ctx.private, "--json-status-fd", str(status_fd), "--"]
     return argv + list(command)
@@ -1394,10 +1557,12 @@ def probe_spec(ctx, run_dir, tcp_port, abstract):
         closure.setdefault(os.path.dirname(path), []).append(os.path.basename(path))
     return {"home": ctx.home, "private": ctx.private, "iso_dir": os.path.dirname(ctx.iso),
             "store": ctx.store, "repo": ctx.repo, "run_dir": run_dir,
-            "game": ctx.game, "app": os.path.join(ctx.private, "app"),
-            "tmp": os.path.join(ctx.private, "tmp"), "image": ctx.iso,
+            "writable": {n: os.path.join(ctx.private, n) for n in ctx.profile.writable},
+            "read_only": {n: os.path.join(ctx.private, n) for n in ctx.profile.read_only},
+            "image": ctx.iso,
             "tcp_port": tcp_port, "abstract": abstract,
             "root_names": sandbox_root_names(ctx, run_dir),
+            "checks": list(ctx.profile.probe_checks()),
             "closure": closure, "outside": outside_store_entries(ctx)}
 
 
@@ -1453,9 +1618,10 @@ def run_probe(ctx, steps, run_dir, env):
         return steps.add("sandbox", "ok", exit_code=code, facts=facts, findings=findings,
                          output="probe.json, probe.stderr",
                          duration=time.monotonic() - started)
-    failed = [name for name in PROBE_CHECKS if not checks.get(name, False)]
-    facts.update({"probe_checks": len(PROBE_CHECKS),
-                  "probe_checks_passed": len(PROBE_CHECKS) - len(failed),
+    expected = ctx.profile.probe_checks()
+    failed = [name for name in expected if not checks.get(name, False)]
+    facts.update({"probe_checks": len(expected),
+                  "probe_checks_passed": len(expected) - len(failed),
                   "probe_failed_checks": failed})
     if code != 0 or failed:
         findings.append(("sandbox-probe-failed", f"confinement checks that failed: "
@@ -1515,11 +1681,23 @@ def probe_main(argv):
         check("write-allowed-run-folder", True)
     except OSError as exc:
         check("write-allowed-run-folder", False, errno.errorcode.get(exc.errno, ""))
-    for name in ("game", "app", "tmp"):
-        check(f"writable-{name}", os.access(spec[name], os.W_OK))
+    for name, folder in spec["writable"].items():
+        check(f"writable-{name}", os.access(folder, os.W_OK))
+    for name, folder in spec["read_only"].items():
+        write_denied(probe_name("write-denied", name), folder)
     check("image-read-only", os.access(spec["image"], os.R_OK)
           and not os.access(spec["image"], os.W_OK))
     check("tmp-private-empty", os.listdir("/tmp") == [])
+    if "shm-private" in spec.get("checks", []):
+        # B2: the guest memory, which holds the decoded image (docs/J2_A1_SDK_INVENTORY.md
+        # section 4.3), goes to /dev/shm. It must be the sandbox's own: empty, writable,
+        # on the tmpfs of its /dev, not the host's /dev/shm bound in.
+        try:
+            same = os.stat("/dev/shm").st_dev == os.stat("/dev").st_dev
+            check("shm-private", same and os.listdir("/dev/shm") == [] and
+                  os.access("/dev/shm", os.W_OK))
+        except OSError as exc:
+            check("shm-private", False, errno.errorcode.get(exc.errno, ""))
     check("run-hidden", not os.path.lexists("/run"))
     check("nix-daemon-socket-hidden",
           not os.path.lexists("/nix/var/nix/daemon-socket/socket"))
@@ -1690,6 +1868,10 @@ def proof_identity(ctx):
                         python=os.path.realpath(sys.executable),
                         store_closure_sha256=file_sha256(os.path.join(closure,
                                                                       "store-paths")))
+        profile = getattr(ctx, "profile", None) or B1_PROFILE
+        identity.update(profile=profile.name,
+                        profile_sha256=file_sha256(os.path.realpath(profile.file))
+                        if profile.file else None)
     except OSError:
         return None
     return identity
@@ -1856,16 +2038,31 @@ def image_state(path):
     return {"sha256": digest.hexdigest(), "identity": identity}
 
 
-def survey_tree(root, modules):
+def survey_tree(root, modules, listing=False, content=False):
     """The PB-1 figures of an extracted tree. Every entry below `root` is counted, the root
     itself is not, as the J0 tool counts the disc. Names that start with a dot are counted
     too, and reported. Folders are opened with O_NOFOLLOW from the descriptor of their
     parent, so a link is never followed. A link, a special file, a hard link, an entry on
     another file system or an unreadable entry is an anomaly, and is not counted. The
     modules named in `modules` are looked for at the root, by name in any case, and
-    hashed."""
+    hashed.
+
+    With `listing`, figures["entries"] lists the root and every entry counted, sorted by
+    path: [path, kind, mode, size, mtime_ns, ctime_ns, device, inode, sha256]. With
+    `content`, the sha256 of each file is that of its content, read through hash_module
+    (a descriptor opened without following links, checked against the listed identity);
+    a module is then not read twice. Without it, sha256 is None. This is an observation
+    at one time: it does not see a change made and fully undone between two
+    observations."""
     figures = {"files": 0, "directories": 0, "bytes": 0, "hidden_names": 0,
                "anomalies": [], "modules": {}}
+    inventory = [] if listing else None
+    hashed = {}
+
+    def listed(path, kind, st, digest=None):
+        if listing:
+            inventory.append([path, kind, st.st_mode, st.st_size if kind == "file" else 0,
+                              st.st_mtime_ns, st.st_ctime_ns, st.st_dev, st.st_ino, digest])
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     anomalies = figures["anomalies"]
     try:
@@ -1874,6 +2071,7 @@ def survey_tree(root, modules):
         anomalies.append(["unreadable folder", f". ({exc.strerror})"])
         return figures
     root_st = os.fstat(root_fd)
+    listed(".", "dir", root_st)
     at_root = {}
     stack = [(root_fd, "")]
     try:
@@ -1910,13 +2108,24 @@ def survey_tree(root, modules):
                         anomalies.append(["changed while counted", path])
                         continue
                     figures["directories"] += 1
+                    listed(path, "dir", child_st)
                     stack.append((child, path))
                 elif stat.S_ISREG(st.st_mode):
                     if st.st_nlink != 1:
                         anomalies.append(["hard link", path])
                         continue
+                    digest = None
+                    if content:
+                        found = hash_module(fd, name, st)
+                        if found["status"] != "hashed":
+                            anomalies.append(["unreadable entry",
+                                              f"{path} ({found['status']})"])
+                            continue
+                        hashed[path] = found
+                        digest = found["sha256"]
                     figures["files"] += 1
                     figures["bytes"] += st.st_size
+                    listed(path, "file", st, digest)
                     if not rel:
                         at_root.setdefault(name.lower(), []).append((name, st))
                 else:
@@ -1932,12 +2141,15 @@ def survey_tree(root, modules):
                 anomalies.append(["several names for one module", key])
             else:
                 name, st = found[0]
-                figures["modules"][key] = hash_module(root_fd, name, st)
+                figures["modules"][key] = hashed.get(name) or hash_module(root_fd, name, st)
     finally:
         for fd, _ in stack:
             if fd != root_fd:
                 os.close(fd)
         os.close(root_fd)
+    if listing:
+        inventory.sort(key=lambda entry: entry[0])
+        figures["entries"] = inventory
     return figures
 
 
@@ -2004,27 +2216,25 @@ def guard_step(ctx, steps, name, argv, run_dir=None, env=None, cwd=None, output=
                      duration=time.monotonic() - started)
 
 
-def run_dump(ctx, steps, run_dir, env, state):
-    """`rexglue vfs dump <image> <game folder>` in the sandbox, with its stdout and stderr
-    in the run folder. A non-zero status, a signal, a time-out or an interruption is a
-    finding. Nothing is deleted after a failure. ReXGlue removes the entries it wrote itself
-    when the extraction fails, and keeps the game folder (src/filesystem/container.cpp)."""
-    rexglue = os.path.join(ctx.sdk, "bin", "rexglue")
-    command = [rexglue, "vfs", "dump", ctx.iso, ctx.game]
+def supervise(ctx, run_dir, command, env, state, name, code_prefix, chdir=None,
+              phase="extracting"):
+    """One sandboxed command of a step (`rexglue vfs dump` for B1, `rexglue codegen` for
+    B2), with its stdout and stderr in the run folder as <name>.stdout and <name>.stderr. A
+    non-zero status, a signal, a time-out or an interruption is a finding. The state keeps
+    the phase and the bubblewrap process, for resume. Returns (status, facts, findings)."""
     findings, facts = [], {}
-    started = time.monotonic()
     code = None
-    with open(os.path.join(run_dir, "vfs-dump.stdout"), "xb") as out, \
-            open(os.path.join(run_dir, "vfs-dump.stderr"), "xb") as err:
+    with open(os.path.join(run_dir, f"{name}.stdout"), "xb") as out, \
+            open(os.path.join(run_dir, f"{name}.stderr"), "xb") as err:
         try:
-            box = Sandbox(ctx, run_dir, command, env, out, err)
+            box = Sandbox(ctx, run_dir, command, env, out, err, chdir=chdir)
         except OSError as exc:
-            findings.append(("dump-not-started", f"bubblewrap did not start "
-                                                 f"({exc.strerror})"))
-            return steps.add("vfs-dump", "ok", facts=facts, findings=findings)
+            findings.append((f"{code_prefix}-not-started", f"bubblewrap did not start "
+                                                          f"({exc.strerror})"))
+            return None, facts, findings
         deadline = time.monotonic() + ctx.args.timeout
         try:
-            state.update(phase="extracting", bwrap_pid=box.proc.pid,
+            state.update(phase=phase, bwrap_pid=box.proc.pid,
                          bwrap_start=process_start(box.proc.pid))
             write_state(run_dir, state)
             while code is None:
@@ -2034,18 +2244,18 @@ def run_dump(ctx, steps, run_dir, env, state):
                     if time.monotonic() > deadline:
                         SIGNALS.defer = True
                         code = box.stop()
-                        findings.append(("dump-timeout", f"stopped after "
-                                                         f"{ctx.args.timeout} s"))
+                        findings.append((f"{code_prefix}-timeout", f"stopped after "
+                                                                  f"{ctx.args.timeout} s"))
         except Interrupted:
             SIGNALS.defer = True
             code = box.stop()
-            findings.append(("interrupted", "the extraction was interrupted and stopped"))
+            findings.append(("interrupted", "the step was interrupted and stopped"))
         finally:
             SIGNALS.defer = True
             if box.proc.poll() is None:
                 code = box.stop()
-                findings.append(("interrupted", "the extraction was stopped by an error of "
-                                                "the tool"))
+                findings.append(("interrupted", "the step was stopped by an error of the "
+                                                "tool"))
             state["sandbox_child"] = box.child_pid()
             box.close()
     statuses = [d.get("exit-code") for d in box.documents() if isinstance(d, dict)]
@@ -2054,10 +2264,24 @@ def run_dump(ctx, steps, run_dir, env, state):
     if isinstance(final, int) and final < 0:
         final = 128 - final
     if isinstance(final, int) and final > 128 and not findings:
-        findings.append(("dump-crashed", f"killed by signal {final - 128}"))
+        findings.append((f"{code_prefix}-crashed", f"killed by signal {final - 128}"))
         facts["signal"] = final - 128
     elif final not in (None, 0) and not findings:
-        findings.append(("dump-failed", f"exited with status {final}"))
+        findings.append((f"{code_prefix}-failed", f"exited with status {final}"))
+    return final, facts, findings
+
+
+def run_dump(ctx, steps, run_dir, env, state):
+    """`rexglue vfs dump <image> <game folder>` in the sandbox (supervise()). Nothing is
+    deleted after a failure. ReXGlue removes the entries it wrote itself when the
+    extraction fails, and keeps the game folder (src/filesystem/container.cpp)."""
+    rexglue = os.path.join(ctx.sdk, "bin", "rexglue")
+    command = [rexglue, "vfs", "dump", ctx.iso, ctx.game]
+    started = time.monotonic()
+    final, facts, findings = supervise(ctx, run_dir, command, env, state, "vfs-dump",
+                                       "dump")
+    if final is None and findings and findings[0][0] == "dump-not-started":
+        return steps.add("vfs-dump", "ok", facts=facts, findings=findings)
     block = dump_block(run_dir)
     if block.get("type") in ("GDFX", "STFS", "SVOD"):
         facts["type"] = block["type"]
@@ -2133,14 +2357,17 @@ def pb1_figures(ctx, steps, before=None, after=None, block=None, j0_sha256=None)
 
 # --- reports (R04) ------------------------------------------------------------------------
 
-def summary_text(ctx, steps, command, started, pb1=None):
+def summary_text(ctx, steps, command, started, figures=None):
     """Only allowlisted fields: step names, statuses and exit codes, the facts of
     SUMMARY_FACTS that pass their validator, finding codes and their counts, and the PB-1
     rows. No path, no free text from a command, an argument or an exception, and no hash of
     the image: report.json keeps them."""
-    lines = ["fifa2010wc B1 summary: allowlisted metadata only. Review it before sharing it "
-             "(CP-5).",
-             f"tool: b1_extract version {TOOL_VERSION}, command {command}",
+    profile = ctx.profile
+    engine = "" if profile.tool == "b1_extract" else f" (engine b1_extract {TOOL_VERSION})"
+    version = TOOL_VERSION if profile.tool == "b1_extract" else profile.version
+    lines = [f"fifa2010wc {profile.title} summary: allowlisted metadata only. Review it "
+             "before sharing it (CP-5).",
+             f"tool: {profile.tool} version {version}{engine}, command {command}",
              f"started: {utc_stamp(started)}"]
     codes = steps.codes()
     lines.append(f"outcome: {'FINDINGS (' + str(len(codes)) + ')' if codes else 'no finding'}")
@@ -2171,31 +2398,20 @@ def summary_text(ctx, steps, command, started, pb1=None):
                 lines.append(f"      finding {finding_code} (x{count})")
         if item["notes"]:
             lines.append(f"      notes: {len(item['notes'])}")
-    if pb1 is not None:
-        source = "J0 report" if ctx.reference is J0_REFERENCE else "--reference test file"
-        lines.append(f"PB-1 figures (reference: {source}):")
-        for row in pb1["criteria"]:
-            mark = "match" if row["met"] else "DIFFERS"
-            if row["show"] and _int(row["expected"]) and isinstance(row["found"], int):
-                found = "not found" if row["found"] == -1 else row["found"]
-                lines.append(f"  {row['name']}: expected {row['expected']}, found "
-                             f"{found}: {mark}")
-            else:
-                lines.append(f"  {row['name']}: {mark}")
-        hidden = pb1["facts"].get("hidden_names", 0)
-        lines.append(f"  names starting with a dot: {hidden if _int(hidden) else 'invalid'} "
-                     "(counted)")
-    lines.append("decision: this tool does not declare PB-1; the orchestrator decides.")
+    lines += profile.summary_lines(ctx, figures)
+    lines.append(f"decision: {profile.decision}")
     if codes:
-        lines.append("STOP: a finding stops B1. Delete nothing; keep the local evidence; "
-                     "report the summary.")
+        lines.append(f"STOP: a finding stops {profile.title}. Delete nothing; keep the local "
+                     "evidence; report the summary.")
     return "\n".join(lines) + "\n"
 
 
 def finish(ctx, steps, command, started, run_dir=None, pb1=None, state=None, suffix=""):
     summary = summary_text(ctx, steps, command, started, pb1)
     if run_dir:
-        report = {"tool": {"name": "b1_extract", "version": TOOL_VERSION},
+        report = {"tool": {"name": ctx.profile.tool, "version": TOOL_VERSION
+                           if ctx.profile.tool == "b1_extract" else ctx.profile.version,
+                           "engine": TOOL_VERSION},
                   "command": command, "started": utc_stamp(started),
                   "finished": utc_stamp(), "steps": steps.items}
         write_new(os.path.join(run_dir, f"report{suffix}.json"),
@@ -2218,7 +2434,8 @@ def finish(ctx, steps, command, started, run_dir=None, pb1=None, state=None, suf
 
 
 def new_run_dir(ctx, command):
-    name = f"b1-{command}-{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}"
+    stamp = f"{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}"
+    name = f"{ctx.profile.name}-{command}-{stamp}"
     path = os.path.join(ctx.logs, name)
     try:
         os.mkdir(path, 0o700)
@@ -2231,7 +2448,7 @@ def new_run_dir(ctx, command):
 
 def prepare_checks(ctx, steps):
     """The checks that write nothing and do not read the image. Returns (watch list,
-    relevant mounts, local J0 image hash)."""
+    relevant mounts, what the profile keeps for the state)."""
     guard_step(ctx, steps, "check-dir", ctx.guard_cmd("check-dir"))
 
     found = incomplete_runs(ctx)
@@ -2239,21 +2456,13 @@ def prepare_checks(ctx, steps):
               findings=[("incomplete-run", f"incomplete: {name} (resume --run-folder "
                                            f"{name})") for name in found])
 
-    findings, notes, facts = [], [], {}
-    check_image(ctx, findings, notes, facts)
-    steps.add("image", "ok", facts=facts, findings=findings, notes=notes)
-
-    findings, facts = [], {}
-    for rel in PRIVATE_COMPONENTS:
-        check_component(ctx, rel, findings, required=rel in ("iso", "game", "logs"))
-    if not any(code in ("folder-missing", "folder-invalid") for code, _ in findings):
-        check_game_empty(ctx, findings, facts)
-    steps.add("folders", "ok", facts=facts, findings=findings)
+    ctx.profile.prepare_inputs(ctx, steps)
 
     findings = []
     ancestors = check_ancestors(ctx, findings)
     steps.add("private-tree", "ok", facts={"ancestors_checked": ancestors,
-                                           "components_checked": len(PRIVATE_COMPONENTS)},
+                                           "components_checked":
+                                           len(ctx.profile.components)},
               findings=findings)
 
     sockets, fifos, unreadable = private_ipc(ctx)
@@ -2289,10 +2498,8 @@ def prepare_checks(ctx, steps):
     facts = core_settings(ctx, findings)
     steps.add("core-settings", "ok", facts=facts, findings=findings)
 
-    findings, facts, notes = [], {}, []
-    j0_sha256 = check_j0_report(ctx, findings, facts, notes)
-    steps.add("j0-report", "ok", facts=facts, findings=findings, notes=notes)
-    return watch, relevant, j0_sha256
+    kept = ctx.profile.prepare_last(ctx, steps)
+    return watch, relevant, kept
 
 
 def cmd_prepare(ctx):
@@ -2339,7 +2546,7 @@ def after_checks(ctx, steps, run_dir, state, events=None):
             incomplete.append(name)
 
     def postflight():
-        marker = os.path.join(run_dir, "b1.marker")
+        marker = os.path.join(run_dir, f"{ctx.profile.name}.marker")
         if not os.path.lexists(marker):
             steps.add("postflight", "skipped", notes=["no marker: nothing was started"])
             return True
@@ -2420,34 +2627,6 @@ def after_checks(ctx, steps, run_dir, state, events=None):
                   findings=findings)
         return True
 
-    def image_after():
-        before, j0_sha256 = state["image_before"], state.get("j0_sha256")
-        started = time.monotonic()
-        try:
-            after = image_state(ctx.iso)
-        except OSError as exc:
-            steps.add("image-after", "finding",
-                      findings=[("image-unreadable", f"after the step ({exc.strerror})")])
-            return False
-        results["image_after"] = after
-        facts = {"image_unchanged": after == before}
-        findings = [] if after == before else [("image-changed", "the disc image changed "
-                                                "during the step")]
-        if j0_sha256:
-            facts["image_matches_j0_report"] = after["sha256"] == j0_sha256
-            if after["sha256"] != j0_sha256:
-                findings.append(("j0-image-mismatch", "after the step"))
-        steps.add("image-after", "ok", facts=facts, findings=findings,
-                  duration=time.monotonic() - started)
-        return True
-
-    def figures():
-        results["pb1"] = pb1_figures(ctx, steps, before=state["image_before"],
-                                     after=results.get("image_after"),
-                                     block=dump_block(run_dir),
-                                     j0_sha256=state.get("j0_sha256"))
-        return True
-
     attempt("postflight", postflight)
     state["phase"] = "postflight"
     write_state(run_dir, state)
@@ -2455,15 +2634,13 @@ def after_checks(ctx, steps, run_dir, state, events=None):
     attempt("core-dumps", core_dumps)
     attempt("cp3-after", cp3_after)
     attempt("private-tree-after", private_tree_after)
-    if state.get("command") == "run" and state.get("image_before"):
-        attempt("image-after", image_after)
-        if state.get("phase_reached_extraction"):
-            attempt("pb1-figures", figures)
+    for name, control in ctx.profile.after_controls(ctx, steps, run_dir, state, results):
+        attempt(name, control)
     state["evidence_incomplete"] = incomplete
     if incomplete:
         steps.add("evidence", "finding", findings=[("evidence-incomplete",
                                                     f"not complete: {', '.join(incomplete)}")])
-    return results.get("pb1")
+    return ctx.profile.result(results)
 
 
 def cmd_step(ctx, extract):
@@ -2473,7 +2650,7 @@ def cmd_step(ctx, extract):
     started = time.time()
     SIGNALS.install()
     try:
-        watch, _, j0_sha256 = prepare_checks(ctx, steps)
+        watch, _, kept = prepare_checks(ctx, steps)
     except Interrupted:
         steps.add("interrupted", "finding", findings=[("interrupted", "during prepare")])
         return finish(ctx, steps, command, started)
@@ -2485,9 +2662,10 @@ def cmd_step(ctx, extract):
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, SUPERVISOR_CORE_LIMIT)
     run_dir = new_run_dir(ctx, command)
-    state = {"tool_version": TOOL_VERSION, "command": command, "started": started,
-             "phase": "started", "core": steps.get("core-settings")["facts"],
-             "j0_sha256": j0_sha256, "evidence_incomplete": []}
+    state = {"tool_version": TOOL_VERSION, "profile": ctx.profile.name, "command": command,
+             "started": started, "phase": "started",
+             "core": steps.get("core-settings")["facts"], "evidence_incomplete": []}
+    state.update(kept or {})
     write_state(run_dir, state)
     pb1 = None
     try:
@@ -2497,7 +2675,7 @@ def cmd_step(ctx, extract):
         started_ns = time.time_ns()
 
         findings = []
-        for rel in PRIVATE_COMPONENTS:
+        for rel in ctx.profile.components:
             check_component(ctx, rel, findings)
         if findings:
             steps.add("private-tree", "finding", findings=findings)
@@ -2524,23 +2702,7 @@ def cmd_step(ctx, extract):
         if steps.blocking(extract):
             return finish(ctx, steps, command, started, run_dir, state=state)
 
-        if extract:
-            t = time.monotonic()
-            try:
-                before = image_state(ctx.iso)
-                state["image_before"] = before
-                facts, findings = {}, []
-                if j0_sha256:
-                    facts["image_matches_j0_report"] = before["sha256"] == j0_sha256
-                    if before["sha256"] != j0_sha256:
-                        findings.append(("j0-image-mismatch", "before the step"))
-                else:
-                    findings.append(("j0-report-absent", "no image hash to compare with"))
-                steps.add("image-before", "ok", facts=facts, findings=findings,
-                          duration=time.monotonic() - t)
-            except OSError as exc:
-                steps.add("image-before", "finding",
-                          findings=[("image-unreadable", f"before the step ({exc.strerror})")])
+        ctx.profile.before_marker(ctx, steps, state, extract)
 
         store_before, code, findings, facts, seconds = store_survey(ctx, run_dir,
                                                                     "cp3-before")
@@ -2552,9 +2714,9 @@ def cmd_step(ctx, extract):
         if steps.blocking(extract):
             return finish(ctx, steps, command, started, run_dir, state=state)
 
-        marker = os.path.join(run_dir, "b1.marker")
+        marker = os.path.join(run_dir, f"{ctx.profile.name}.marker")
         dests = []
-        for path in [run_dir] + [os.path.join(ctx.private, n) for n in SANDBOX_WRITABLE]:
+        for path in [run_dir] + [os.path.join(ctx.private, n) for n in ctx.profile.writable]:
             dests += ["--dest", path]
         pre = ctx.guard_cmd("preflight", *dests, "--game-root", ctx.game,
                             "--sdk-bin", os.path.join(ctx.sdk, "bin"), "--marker", marker,
@@ -2582,19 +2744,20 @@ def cmd_step(ctx, extract):
     try:
         findings = []
         check_sdk_before(ctx, started_ns, findings)
-        check_game_empty(ctx, findings, {})
+        ctx.profile.before_run(ctx, findings, state)
         if extract and not find_core_proof(ctx, proof_identity(ctx)):
             findings.append(("core-changed", "the proof no longer holds for this boot, "
                                              "kernel and setting"))
         findings += compare_identities(state["identities"], private_identities(ctx, run_dir))
         steps.add("before-extraction", "ok", findings=findings)
         if not extract:
-            steps.add("vfs-dump", "skipped", notes=["rehearsal: no extraction"])
+            steps.add(ctx.profile.run_step, "skipped", notes=["rehearsal: not started"])
         elif steps.blocking(extract):
-            steps.add("vfs-dump", "skipped", notes=["not started: a check found something"])
+            steps.add(ctx.profile.run_step, "skipped",
+                      notes=["not started: a check found something"])
         else:
             state["phase_reached_extraction"] = True
-            run_dump(ctx, steps, run_dir, env, state)
+            ctx.profile.run(ctx, steps, run_dir, env, state)
     except Interrupted:
         steps.add("interrupted", "finding", findings=[("interrupted", "before the "
                                                                       "extraction")])
@@ -2621,8 +2784,9 @@ def cmd_resume(ctx):
     steps = Steps(ctx.redact)
     started = time.time()
     name = ctx.args.run_folder or ""
-    if not RUN_DIR_RE.fullmatch(name):
-        raise UsageError("--run-folder takes the name of a run folder, b1-run-<UTC time>")
+    if not RUN_DIR_RE.fullmatch(name) or not name.startswith(f"{ctx.profile.name}-"):
+        raise UsageError(f"--run-folder takes the name of a run folder, "
+                         f"{ctx.profile.name}-run-<UTC time>")
     run_dir = os.path.join(ctx.logs, name)
     state = read_state(run_dir)
     if not state or state.get("phase") == "complete" or \
@@ -2641,7 +2805,7 @@ def cmd_resume(ctx):
     state["resumes"] = state.get("resumes", 0) + 1
     suffix = resume_suffix(state)
     if state.get("phase") == "started" and not os.path.lexists(
-            os.path.join(run_dir, "b1.marker")):
+            os.path.join(run_dir, f"{ctx.profile.name}.marker")):
         steps.add("resume", "finding", findings=[("interrupted", "stopped before the "
                                                                   "marker: nothing was "
                                                                   "started")])
@@ -2649,8 +2813,8 @@ def cmd_resume(ctx):
         return finish(ctx, steps, "resume", started, run_dir, state=state, suffix=suffix)
     steps.add("resume", "ok", notes=[f"phase reached: {state.get('phase')}"])
     if state.get("phase") in ("extracting",):
-        steps.add("vfs-dump", "finding", findings=[("interrupted", "the extraction did not "
-                                                                   "finish")])
+        steps.add(ctx.profile.run_step, "finding",
+                  findings=[("interrupted", "the step did not finish")])
     state["evidence_incomplete"] = []
     try:
         pb1 = after_checks(ctx, steps, run_dir, state)
@@ -2732,15 +2896,19 @@ def cmd_diagnose(ctx):
     return 0
 
 
-def main(argv):
+def main(argv, profile=None, add_arguments=None):
+    """The command line of a step: B1 by default; another profile (tools/b2_codegen.py)
+    gives its own name, description and arguments, and leaves out `verify`."""
     if argv[:1] == ["_probe"]:
         return probe_main(argv[1:])
     if argv[:1] == ["_crash"]:
         return crash_main(argv[1:])
+    profile = profile or B1_PROFILE
     parser = argparse.ArgumentParser(
-        prog="b1_extract",
-        description="J2 step B1: controlled extraction of the disc tree with rexglue vfs "
-                    "dump, on the user's machine (docs/J2_B1_EXTRACTION.md).")
+        prog=profile.tool,
+        description=getattr(profile, "description",
+                            "J2 step B1: controlled extraction of the disc tree with rexglue "
+                            "vfs dump, on the user's machine (docs/J2_B1_EXTRACTION.md)."))
     parser.add_argument("--private-dir", default=os.environ.get("WC2010_PRIVATE_DIR"),
                         help="private folder (default: $WC2010_PRIVATE_DIR)")
     parser.add_argument("--repo", help="the project repository, which must stay unchanged")
@@ -2763,8 +2931,12 @@ def main(argv):
                           ("--core-pattern-file", "/proc/sys/kernel/core_pattern"),
                           ("--suid-dumpable-file", "/proc/sys/fs/suid_dumpable")):
         parser.add_argument(name, default=default, help=argparse.SUPPRESS)
-    parser.add_argument("command", choices=("prepare", "rehearse", "run", "verify", "resume",
-                                            "diagnose"))
+    if add_arguments:
+        add_arguments(parser)
+    commands = ("prepare", "rehearse", "run", "resume", "diagnose")
+    if profile is B1_PROFILE:
+        commands += ("verify",)
+    parser.add_argument("command", choices=commands)
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -2774,7 +2946,7 @@ def main(argv):
               "/nix/store, docs/J2_A1_SDK_INVENTORY.md section 2)")
         return 1
     try:
-        ctx = Context(args)
+        ctx = Context(args, profile)
         if args.command == "prepare":
             return cmd_prepare(ctx)
         if args.command == "verify":

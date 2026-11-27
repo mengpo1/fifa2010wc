@@ -123,6 +123,29 @@
             --store-closure ${b1-closure} "$@"
         '';
       };
+
+      # J2, step B2 (docs/J2_B2_COMPATIBILITY.md): the compatibility check, a first
+      # `rexglue codegen` of the two modules extracted at B1. A profile of the same engine
+      # (docs/J2_LOCAL_STEP_ENGINE.md): what runs in the sandbox is the same, Python, the
+      # SDK and the engine, so the sandbox shows the same store closure (D-019). The B2
+      # profile, private_project.py and address_compare.py run outside it.
+      b2-codegen = pkgs.writeShellApplication {
+        name = "fifa2010wc-b2-codegen";
+        runtimeInputs = [
+          pkgs.python3
+          pkgs.git
+          pkgs.findutils
+          pkgs.util-linux
+          pkgs.bubblewrap
+        ];
+        text = ''
+          exec python3 -I ${./tools/b2_codegen.py} --engine ${b1-tool} \
+            --address-compare ${./tools/address_compare.py} \
+            --private-project ${./tools/private_project.py} \
+            --guard ${./tools/private_guard.py} --sdk ${rexglue-sdk} \
+            --store-closure ${b1-closure} "$@"
+        '';
+      };
     in
     {
       packages.${system} = {
@@ -134,6 +157,7 @@
           private-project
           address-compare
           b1-extract
+          b2-codegen
           ;
         default = rexglue-sdk;
       };
@@ -169,6 +193,11 @@
           program = "${b1-extract}/bin/fifa2010wc-b1-extract";
           meta.description = "Controlled extraction of the disc tree, step B1 (J2)";
         };
+        b2-codegen = {
+          type = "app";
+          program = "${b2-codegen}/bin/fifa2010wc-b2-codegen";
+          meta.description = "Compatibility check, a first rexglue codegen, step B2 (J2)";
+        };
       };
 
       checks.${system} = import ./nix/checks.nix {
@@ -184,6 +213,7 @@
           address-compare
           b1-extract
           b1-closure
+          b2-codegen
           ;
       };
 
